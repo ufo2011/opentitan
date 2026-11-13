@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,8 @@ class SourceSink {
   const std::string &Sink() { return sink_; }
 
   ujson_t UJson() {
-    return ujson_init((void *)this, &SourceSink::getc, &SourceSink::putbuf);
+    return ujson_init((void *)this, &SourceSink::getc, &SourceSink::putbuf,
+                      nullptr);
   }
 
   void Reset() {

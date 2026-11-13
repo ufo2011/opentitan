@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -106,12 +106,29 @@ py_library(
 )
 
 py_library(
+    name = "isr",
+    srcs = ["isr.py"],
+    deps = [
+        "//util/serialize:parse_helpers",
+    ],
+)
+
+py_library(
     name = "insn_yaml",
     srcs = ["insn_yaml.py"],
+    data = [
+        "//hw/ip/otbn/data:base-insns.yml",
+        "//hw/ip/otbn/data:bignum-insns.yml",
+        "//hw/ip/otbn/data:csr.yml",
+        "//hw/ip/otbn/data:enc-schemes.yml",
+        "//hw/ip/otbn/data:insns.yml",
+        "//hw/ip/otbn/data:wsr.yml",
+    ],
     deps = [
         ":encoding",
         ":encoding_scheme",
         ":information_flow",
+        ":isr",
         ":lsu_desc",
         ":operand",
         ":syntax",
@@ -151,6 +168,7 @@ py_library(
     deps = [
         ":encoding",
         ":encoding_scheme",
+        ":isr",
         "//util/serialize:parse_helpers",
     ],
 )
@@ -185,6 +203,11 @@ py_library(
     deps = [
         ":operand",
     ],
+)
+
+py_library(
+    name = "testgen",
+    srcs = ["testgen.py"],
 )
 
 py_library(

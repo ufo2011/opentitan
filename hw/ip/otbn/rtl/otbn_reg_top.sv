@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -21,10 +21,7 @@ module otbn_reg_top (
   input  otbn_reg_pkg::otbn_hw2reg_t hw2reg, // Read
 
   // Integrity check errors
-  output logic intg_err_o,
-
-  // Config
-  input devmode_i // If 1, explicit error return for unmapped register access
+  output logic intg_err_o
 );
 
   import otbn_reg_pkg::* ;
@@ -60,9 +57,9 @@ module otbn_reg_top (
 
   // also check for spurious write enables
   logic reg_we_err;
-  logic [10:0] reg_we_check;
+  logic [14:0] reg_we_check;
   prim_reg_we_check #(
-    .OneHotWidth(11)
+    .OneHotWidth(15)
   ) u_prim_reg_we_check (
     .clk_i(clk_i),
     .rst_ni(rst_ni),
@@ -133,8 +130,8 @@ module otbn_reg_top (
   // Create steering logic
   always_comb begin
     reg_steer =
-        tl_i.a_address[AW-1:0] inside {[16384:20479]} ? 2'd0 :
-        tl_i.a_address[AW-1:0] inside {[32768:35839]} ? 2'd1 :
+        tl_i.a_address[AW-1:0] inside {[16384:32767]} ? 2'd0 :
+        tl_i.a_address[AW-1:0] inside {[32768:49151]} ? 2'd1 :
         // Default set to register
         2'd2;
 
@@ -171,7 +168,7 @@ module otbn_reg_top (
   // cdc oversampling signals
 
   assign reg_rdata = reg_rdata_next ;
-  assign reg_error = (devmode_i & addrmiss) | wr_err | intg_err;
+  assign reg_error = addrmiss | wr_err | intg_err;
 
   // Define SW related signals
   // Format: <reg>_<field>_{wd|we|qs}
@@ -187,12 +184,18 @@ module otbn_reg_top (
   logic alert_test_we;
   logic alert_test_fatal_wd;
   logic alert_test_recov_wd;
+  logic alert_test_regwen_qs;
+  logic alert_test_regwen_wd;
   logic cmd_we;
   logic [7:0] cmd_wd;
   logic ctrl_re;
   logic ctrl_we;
-  logic ctrl_qs;
-  logic ctrl_wd;
+  logic ctrl_software_errs_fatal_qs;
+  logic ctrl_software_errs_fatal_wd;
+  logic ctrl_wfi_enabled_qs;
+  logic ctrl_wfi_enabled_wd;
+  logic ctrl_urnd_ctrl_enabled_qs;
+  logic ctrl_urnd_ctrl_enabled_wd;
   logic [7:0] status_qs;
   logic err_bits_re;
   logic err_bits_we;
@@ -212,6 +215,8 @@ module otbn_reg_top (
   logic err_bits_rnd_rep_chk_fail_wd;
   logic err_bits_rnd_fips_chk_fail_qs;
   logic err_bits_rnd_fips_chk_fail_wd;
+  logic err_bits_mai_software_error_qs;
+  logic err_bits_mai_software_error_wd;
   logic err_bits_imem_intg_violation_qs;
   logic err_bits_imem_intg_violation_wd;
   logic err_bits_dmem_intg_violation_qs;
@@ -244,16 +249,30 @@ module otbn_reg_top (
   logic load_checksum_we;
   logic [31:0] load_checksum_qs;
   logic [31:0] load_checksum_wd;
+  logic scratch_0_we;
+  logic [31:0] scratch_0_qs;
+  logic [31:0] scratch_0_wd;
+  logic scratch_1_we;
+  logic [31:0] scratch_1_qs;
+  logic [31:0] scratch_1_wd;
+  logic scratch_2_we;
+  logic [31:0] scratch_2_qs;
+  logic [31:0] scratch_2_wd;
+  logic scratch_3_we;
+  logic [31:0] scratch_3_qs;
+  logic [31:0] scratch_3_wd;
 
   // Register instances
   // R[intr_state]: V(False)
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state_we),
@@ -277,10 +296,12 @@ module otbn_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -322,14 +343,17 @@ module otbn_reg_top (
 
   // R[alert_test]: V(True)
   logic alert_test_qe;
-  logic [1:0] alert_test_flds_we;
+  logic [2:0] alert_test_flds_we;
   assign alert_test_qe = &alert_test_flds_we;
+  // Create REGWEN-gated WE signal
+  logic alert_test_gated_we;
+  assign alert_test_gated_we = alert_test_we && alert_test_regwen_qs;
   //   F[fatal]: 0:0
   prim_subreg_ext #(
     .DW    (1)
   ) u_alert_test_fatal (
     .re     (1'b0),
-    .we     (alert_test_we),
+    .we     (alert_test_gated_we),
     .wd     (alert_test_fatal_wd),
     .d      ('0),
     .qre    (),
@@ -345,7 +369,7 @@ module otbn_reg_top (
     .DW    (1)
   ) u_alert_test_recov (
     .re     (1'b0),
-    .we     (alert_test_we),
+    .we     (alert_test_gated_we),
     .wd     (alert_test_recov_wd),
     .d      ('0),
     .qre    (),
@@ -355,6 +379,34 @@ module otbn_reg_top (
     .qs     ()
   );
   assign reg2hw.alert_test.recov.qe = alert_test_qe;
+
+  //   F[regwen]: 31:31
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW0C),
+    .RESVAL  (1'h1),
+    .Mubi    (1'b0)
+  ) u_alert_test_regwen (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (alert_test_we),
+    .wd     (alert_test_regwen_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (alert_test_flds_we[2]),
+    .q      (),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (alert_test_regwen_qs)
+  );
 
 
   // R[cmd]: V(True)
@@ -379,32 +431,67 @@ module otbn_reg_top (
 
   // R[ctrl]: V(True)
   logic ctrl_qe;
-  logic [0:0] ctrl_flds_we;
+  logic [2:0] ctrl_flds_we;
   assign ctrl_qe = &ctrl_flds_we;
+  //   F[software_errs_fatal]: 0:0
   prim_subreg_ext #(
     .DW    (1)
-  ) u_ctrl (
+  ) u_ctrl_software_errs_fatal (
     .re     (ctrl_re),
     .we     (ctrl_we),
-    .wd     (ctrl_wd),
-    .d      (hw2reg.ctrl.d),
+    .wd     (ctrl_software_errs_fatal_wd),
+    .d      (hw2reg.ctrl.software_errs_fatal.d),
     .qre    (),
     .qe     (ctrl_flds_we[0]),
-    .q      (reg2hw.ctrl.q),
+    .q      (reg2hw.ctrl.software_errs_fatal.q),
     .ds     (),
-    .qs     (ctrl_qs)
+    .qs     (ctrl_software_errs_fatal_qs)
   );
-  assign reg2hw.ctrl.qe = ctrl_qe;
+  assign reg2hw.ctrl.software_errs_fatal.qe = ctrl_qe;
+
+  //   F[wfi_enabled]: 1:1
+  prim_subreg_ext #(
+    .DW    (1)
+  ) u_ctrl_wfi_enabled (
+    .re     (ctrl_re),
+    .we     (ctrl_we),
+    .wd     (ctrl_wfi_enabled_wd),
+    .d      (hw2reg.ctrl.wfi_enabled.d),
+    .qre    (),
+    .qe     (ctrl_flds_we[1]),
+    .q      (reg2hw.ctrl.wfi_enabled.q),
+    .ds     (),
+    .qs     (ctrl_wfi_enabled_qs)
+  );
+  assign reg2hw.ctrl.wfi_enabled.qe = ctrl_qe;
+
+  //   F[urnd_ctrl_enabled]: 2:2
+  prim_subreg_ext #(
+    .DW    (1)
+  ) u_ctrl_urnd_ctrl_enabled (
+    .re     (ctrl_re),
+    .we     (ctrl_we),
+    .wd     (ctrl_urnd_ctrl_enabled_wd),
+    .d      (hw2reg.ctrl.urnd_ctrl_enabled.d),
+    .qre    (),
+    .qe     (ctrl_flds_we[2]),
+    .q      (reg2hw.ctrl.urnd_ctrl_enabled.q),
+    .ds     (),
+    .qs     (ctrl_urnd_ctrl_enabled_qs)
+  );
+  assign reg2hw.ctrl.urnd_ctrl_enabled.qe = ctrl_qe;
 
 
   // R[status]: V(False)
   prim_subreg #(
     .DW      (8),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (8'h4)
+    .RESVAL  (8'h4),
+    .Mubi    (1'b0)
   ) u_status (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -426,7 +513,7 @@ module otbn_reg_top (
 
   // R[err_bits]: V(True)
   logic err_bits_qe;
-  logic [15:0] err_bits_flds_we;
+  logic [16:0] err_bits_flds_we;
   assign err_bits_qe = &err_bits_flds_we;
   //   F[bad_data_addr]: 0:0
   prim_subreg_ext #(
@@ -556,6 +643,22 @@ module otbn_reg_top (
   );
   assign reg2hw.err_bits.rnd_fips_chk_fail.qe = err_bits_qe;
 
+  //   F[mai_software_error]: 8:8
+  prim_subreg_ext #(
+    .DW    (1)
+  ) u_err_bits_mai_software_error (
+    .re     (err_bits_re),
+    .we     (err_bits_we),
+    .wd     (err_bits_mai_software_error_wd),
+    .d      (hw2reg.err_bits.mai_software_error.d),
+    .qre    (),
+    .qe     (err_bits_flds_we[8]),
+    .q      (reg2hw.err_bits.mai_software_error.q),
+    .ds     (),
+    .qs     (err_bits_mai_software_error_qs)
+  );
+  assign reg2hw.err_bits.mai_software_error.qe = err_bits_qe;
+
   //   F[imem_intg_violation]: 16:16
   prim_subreg_ext #(
     .DW    (1)
@@ -565,7 +668,7 @@ module otbn_reg_top (
     .wd     (err_bits_imem_intg_violation_wd),
     .d      (hw2reg.err_bits.imem_intg_violation.d),
     .qre    (),
-    .qe     (err_bits_flds_we[8]),
+    .qe     (err_bits_flds_we[9]),
     .q      (reg2hw.err_bits.imem_intg_violation.q),
     .ds     (),
     .qs     (err_bits_imem_intg_violation_qs)
@@ -581,7 +684,7 @@ module otbn_reg_top (
     .wd     (err_bits_dmem_intg_violation_wd),
     .d      (hw2reg.err_bits.dmem_intg_violation.d),
     .qre    (),
-    .qe     (err_bits_flds_we[9]),
+    .qe     (err_bits_flds_we[10]),
     .q      (reg2hw.err_bits.dmem_intg_violation.q),
     .ds     (),
     .qs     (err_bits_dmem_intg_violation_qs)
@@ -597,7 +700,7 @@ module otbn_reg_top (
     .wd     (err_bits_reg_intg_violation_wd),
     .d      (hw2reg.err_bits.reg_intg_violation.d),
     .qre    (),
-    .qe     (err_bits_flds_we[10]),
+    .qe     (err_bits_flds_we[11]),
     .q      (reg2hw.err_bits.reg_intg_violation.q),
     .ds     (),
     .qs     (err_bits_reg_intg_violation_qs)
@@ -613,7 +716,7 @@ module otbn_reg_top (
     .wd     (err_bits_bus_intg_violation_wd),
     .d      (hw2reg.err_bits.bus_intg_violation.d),
     .qre    (),
-    .qe     (err_bits_flds_we[11]),
+    .qe     (err_bits_flds_we[12]),
     .q      (reg2hw.err_bits.bus_intg_violation.q),
     .ds     (),
     .qs     (err_bits_bus_intg_violation_qs)
@@ -629,7 +732,7 @@ module otbn_reg_top (
     .wd     (err_bits_bad_internal_state_wd),
     .d      (hw2reg.err_bits.bad_internal_state.d),
     .qre    (),
-    .qe     (err_bits_flds_we[12]),
+    .qe     (err_bits_flds_we[13]),
     .q      (reg2hw.err_bits.bad_internal_state.q),
     .ds     (),
     .qs     (err_bits_bad_internal_state_qs)
@@ -645,7 +748,7 @@ module otbn_reg_top (
     .wd     (err_bits_illegal_bus_access_wd),
     .d      (hw2reg.err_bits.illegal_bus_access.d),
     .qre    (),
-    .qe     (err_bits_flds_we[13]),
+    .qe     (err_bits_flds_we[14]),
     .q      (reg2hw.err_bits.illegal_bus_access.q),
     .ds     (),
     .qs     (err_bits_illegal_bus_access_qs)
@@ -661,7 +764,7 @@ module otbn_reg_top (
     .wd     (err_bits_lifecycle_escalation_wd),
     .d      (hw2reg.err_bits.lifecycle_escalation.d),
     .qre    (),
-    .qe     (err_bits_flds_we[14]),
+    .qe     (err_bits_flds_we[15]),
     .q      (reg2hw.err_bits.lifecycle_escalation.q),
     .ds     (),
     .qs     (err_bits_lifecycle_escalation_qs)
@@ -677,7 +780,7 @@ module otbn_reg_top (
     .wd     (err_bits_fatal_software_wd),
     .d      (hw2reg.err_bits.fatal_software.d),
     .qre    (),
-    .qe     (err_bits_flds_we[15]),
+    .qe     (err_bits_flds_we[16]),
     .q      (reg2hw.err_bits.fatal_software.q),
     .ds     (),
     .qs     (err_bits_fatal_software_qs)
@@ -690,10 +793,12 @@ module otbn_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fatal_alert_cause_imem_intg_violation (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -716,10 +821,12 @@ module otbn_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fatal_alert_cause_dmem_intg_violation (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -742,10 +849,12 @@ module otbn_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fatal_alert_cause_reg_intg_violation (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -768,10 +877,12 @@ module otbn_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fatal_alert_cause_bus_intg_violation (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -794,10 +905,12 @@ module otbn_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fatal_alert_cause_bad_internal_state (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -820,10 +933,12 @@ module otbn_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fatal_alert_cause_illegal_bus_access (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -846,10 +961,12 @@ module otbn_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fatal_alert_cause_lifecycle_escalation (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -872,10 +989,12 @@ module otbn_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fatal_alert_cause_fatal_software (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -935,10 +1054,129 @@ module otbn_reg_top (
   assign reg2hw.load_checksum.qe = load_checksum_qe;
 
 
+  // Subregister 0 of Multireg scratch
+  // R[scratch_0]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
+  ) u_scratch_0 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
-  logic [10:0] addr_hit;
+    // from register interface
+    .we     (scratch_0_we),
+    .wd     (scratch_0_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (scratch_0_qs)
+  );
+
+
+  // Subregister 1 of Multireg scratch
+  // R[scratch_1]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
+  ) u_scratch_1 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (scratch_1_we),
+    .wd     (scratch_1_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (scratch_1_qs)
+  );
+
+
+  // Subregister 2 of Multireg scratch
+  // R[scratch_2]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
+  ) u_scratch_2 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (scratch_2_we),
+    .wd     (scratch_2_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (scratch_2_qs)
+  );
+
+
+  // Subregister 3 of Multireg scratch
+  // R[scratch_3]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
+  ) u_scratch_3 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (scratch_3_we),
+    .wd     (scratch_3_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (scratch_3_qs)
+  );
+
+
+
+  logic [14:0] addr_hit;
   always_comb begin
-    addr_hit = '0;
     addr_hit[ 0] = (reg_addr == OTBN_INTR_STATE_OFFSET);
     addr_hit[ 1] = (reg_addr == OTBN_INTR_ENABLE_OFFSET);
     addr_hit[ 2] = (reg_addr == OTBN_INTR_TEST_OFFSET);
@@ -950,6 +1188,10 @@ module otbn_reg_top (
     addr_hit[ 8] = (reg_addr == OTBN_FATAL_ALERT_CAUSE_OFFSET);
     addr_hit[ 9] = (reg_addr == OTBN_INSN_CNT_OFFSET);
     addr_hit[10] = (reg_addr == OTBN_LOAD_CHECKSUM_OFFSET);
+    addr_hit[11] = (reg_addr == OTBN_SCRATCH_0_OFFSET);
+    addr_hit[12] = (reg_addr == OTBN_SCRATCH_1_OFFSET);
+    addr_hit[13] = (reg_addr == OTBN_SCRATCH_2_OFFSET);
+    addr_hit[14] = (reg_addr == OTBN_SCRATCH_3_OFFSET);
   end
 
   assign addrmiss = (reg_re || reg_we) ? ~|addr_hit : 1'b0 ;
@@ -967,7 +1209,11 @@ module otbn_reg_top (
                (addr_hit[ 7] & (|(OTBN_PERMIT[ 7] & ~reg_be))) |
                (addr_hit[ 8] & (|(OTBN_PERMIT[ 8] & ~reg_be))) |
                (addr_hit[ 9] & (|(OTBN_PERMIT[ 9] & ~reg_be))) |
-               (addr_hit[10] & (|(OTBN_PERMIT[10] & ~reg_be)))));
+               (addr_hit[10] & (|(OTBN_PERMIT[10] & ~reg_be))) |
+               (addr_hit[11] & (|(OTBN_PERMIT[11] & ~reg_be))) |
+               (addr_hit[12] & (|(OTBN_PERMIT[12] & ~reg_be))) |
+               (addr_hit[13] & (|(OTBN_PERMIT[13] & ~reg_be))) |
+               (addr_hit[14] & (|(OTBN_PERMIT[14] & ~reg_be)))));
   end
 
   // Generate write-enables
@@ -985,13 +1231,19 @@ module otbn_reg_top (
   assign alert_test_fatal_wd = reg_wdata[0];
 
   assign alert_test_recov_wd = reg_wdata[1];
+
+  assign alert_test_regwen_wd = reg_wdata[31];
   assign cmd_we = addr_hit[4] & reg_we & !reg_error;
 
   assign cmd_wd = reg_wdata[7:0];
   assign ctrl_re = addr_hit[5] & reg_re & !reg_error;
   assign ctrl_we = addr_hit[5] & reg_we & !reg_error;
 
-  assign ctrl_wd = reg_wdata[0];
+  assign ctrl_software_errs_fatal_wd = reg_wdata[0];
+
+  assign ctrl_wfi_enabled_wd = reg_wdata[1];
+
+  assign ctrl_urnd_ctrl_enabled_wd = reg_wdata[2];
   assign err_bits_re = addr_hit[7] & reg_re & !reg_error;
   assign err_bits_we = addr_hit[7] & reg_we & !reg_error;
 
@@ -1010,6 +1262,8 @@ module otbn_reg_top (
   assign err_bits_rnd_rep_chk_fail_wd = reg_wdata[6];
 
   assign err_bits_rnd_fips_chk_fail_wd = reg_wdata[7];
+
+  assign err_bits_mai_software_error_wd = reg_wdata[8];
 
   assign err_bits_imem_intg_violation_wd = reg_wdata[16];
 
@@ -1034,10 +1288,21 @@ module otbn_reg_top (
   assign load_checksum_we = addr_hit[10] & reg_we & !reg_error;
 
   assign load_checksum_wd = reg_wdata[31:0];
+  assign scratch_0_we = addr_hit[11] & reg_we & !reg_error;
+
+  assign scratch_0_wd = reg_wdata[31:0];
+  assign scratch_1_we = addr_hit[12] & reg_we & !reg_error;
+
+  assign scratch_1_wd = reg_wdata[31:0];
+  assign scratch_2_we = addr_hit[13] & reg_we & !reg_error;
+
+  assign scratch_2_wd = reg_wdata[31:0];
+  assign scratch_3_we = addr_hit[14] & reg_we & !reg_error;
+
+  assign scratch_3_wd = reg_wdata[31:0];
 
   // Assign write-enables to checker logic vector.
   always_comb begin
-    reg_we_check = '0;
     reg_we_check[0] = intr_state_we;
     reg_we_check[1] = intr_enable_we;
     reg_we_check[2] = intr_test_we;
@@ -1049,6 +1314,10 @@ module otbn_reg_top (
     reg_we_check[8] = 1'b0;
     reg_we_check[9] = insn_cnt_we;
     reg_we_check[10] = load_checksum_we;
+    reg_we_check[11] = scratch_0_we;
+    reg_we_check[12] = scratch_1_we;
+    reg_we_check[13] = scratch_2_we;
+    reg_we_check[14] = scratch_3_we;
   end
 
   // Read data return
@@ -1070,6 +1339,7 @@ module otbn_reg_top (
       addr_hit[3]: begin
         reg_rdata_next[0] = '0;
         reg_rdata_next[1] = '0;
+        reg_rdata_next[31] = alert_test_regwen_qs;
       end
 
       addr_hit[4]: begin
@@ -1077,7 +1347,9 @@ module otbn_reg_top (
       end
 
       addr_hit[5]: begin
-        reg_rdata_next[0] = ctrl_qs;
+        reg_rdata_next[0] = ctrl_software_errs_fatal_qs;
+        reg_rdata_next[1] = ctrl_wfi_enabled_qs;
+        reg_rdata_next[2] = ctrl_urnd_ctrl_enabled_qs;
       end
 
       addr_hit[6]: begin
@@ -1093,6 +1365,7 @@ module otbn_reg_top (
         reg_rdata_next[5] = err_bits_key_invalid_qs;
         reg_rdata_next[6] = err_bits_rnd_rep_chk_fail_qs;
         reg_rdata_next[7] = err_bits_rnd_fips_chk_fail_qs;
+        reg_rdata_next[8] = err_bits_mai_software_error_qs;
         reg_rdata_next[16] = err_bits_imem_intg_violation_qs;
         reg_rdata_next[17] = err_bits_dmem_intg_violation_qs;
         reg_rdata_next[18] = err_bits_reg_intg_violation_qs;
@@ -1120,6 +1393,22 @@ module otbn_reg_top (
 
       addr_hit[10]: begin
         reg_rdata_next[31:0] = load_checksum_qs;
+      end
+
+      addr_hit[11]: begin
+        reg_rdata_next[31:0] = scratch_0_qs;
+      end
+
+      addr_hit[12]: begin
+        reg_rdata_next[31:0] = scratch_1_qs;
+      end
+
+      addr_hit[13]: begin
+        reg_rdata_next[31:0] = scratch_2_qs;
+      end
+
+      addr_hit[14]: begin
+        reg_rdata_next[31:0] = scratch_3_qs;
       end
 
       default: begin

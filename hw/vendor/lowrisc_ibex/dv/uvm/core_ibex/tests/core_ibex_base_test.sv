@@ -17,17 +17,18 @@ class core_ibex_base_test extends uvm_test;
   virtual core_ibex_csr_if                        csr_vif;
   mem_model_pkg::mem_model                        mem;
   core_ibex_vseq                                  vseq;
-  string                                          binary;
+  bit                                             discrete_debug_module = 1'b0;
+  string                                          binary, bin_main, bin_dm, vmem_main, vmem_dm;
   bit                                             enable_irq_seq;
   longint                                         timeout_seconds = 1800; // wall-clock seconds
   int unsigned                                    timeout_in_cycles = 100000000;
   int unsigned                                    max_quit_count  = 1;
   // If no signature_addr handshake functionality is desired between the testbench and the generated
-  // code, the test will wait for the specifield number of cycles before starting stimulus
+  // code, the test will wait for the specified number of cycles before starting stimulus
   // sequences (irq and debug)
   int unsigned                                    stimulus_delay = 800;
-  bit[ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0]    signature_data_q[$];
-  bit[ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0]    signature_data;
+  bit[ibex_mem_intf_pkg::DATA_WIDTH-1:0]    signature_data_q[$];
+  bit[ibex_mem_intf_pkg::DATA_WIDTH-1:0]    signature_data;
   uvm_tlm_analysis_fifo #(ibex_mem_intf_seq_item) item_collected_port;
   uvm_tlm_analysis_fifo #(ibex_mem_intf_seq_item) test_done_port;
   uvm_tlm_analysis_fifo #(irq_seq_item)           irq_collected_port;
@@ -73,11 +74,9 @@ class core_ibex_base_test extends uvm_test;
       RV32BNone:
         ;
       RV32BBalanced:
-        isa = {isa, "_Zba_Zbb_Zbs_XZbf_XZbt"};
-      RV32BOTEarlGrey:
-        isa = {isa, "_Zba_Zbb_Zbc_Zbs_XZbf_XZbp_XZbr_XZbt"};
+        isa = {isa, "_Zba_Zbb_Zbs"};
       RV32BFull:
-        isa = {isa, "_Zba_Zbb_Zbc_Zbs_XZbe_XZbf_XZbp_XZbr_XZbt"};
+        isa = {isa, "_Zba_Zbb_Zbc_Zbs_Zbkb_Zbkx"};
     endcase
 
     return isa;
@@ -90,8 +89,33 @@ class core_ibex_base_test extends uvm_test;
     bit [31:0] mhpm_counter_num;
     bit        secure_ibex;
     bit        icache;
+    bit        disable_spurious_dside_responses;
 
     super.build_phase(phase);
+
+    // Check the test binary/binaries have been passed correctly
+    void'($value$plusargs("bin=%0s", binary));
+    void'($value$plusargs("bin_main=%0s", bin_main));
+    void'($value$plusargs("bin_dm=%0s", bin_dm));
+    void'($value$plusargs("vmem_main=%0s", vmem_main));
+    void'($value$plusargs("vmem_dm=%0s", vmem_dm));
+    // If the 'discrete_debug_module' plusarg is set, we will have two binaries per test, one for
+    // the main memory region, and one for the debug module.
+    void'($value$plusargs("discrete_debug_module=%b", discrete_debug_module));
+    if (!discrete_debug_module) begin
+      // Single binary mode, passed via +bin=<binary_path>
+      if (binary == "")
+        `uvm_fatal(`gfn, "Please specify test binary by +bin=binary_name")
+    end else begin
+      // Discrete debug module mode, expecting two binaries passed via +bin_main and +bin_dm.
+      string binaries[4] = '{bin_main, bin_dm, vmem_main, vmem_dm};
+      foreach (binaries[bin]) begin
+        if (binaries[bin] == "")
+          `uvm_fatal(`gfn,
+            "Specify all test binaries via plusargs +bin_main, +bin_dm, +vmem_main, +vmem_dm")
+      end
+    end
+
     $value$plusargs("timeout_in_cycles=%0d", timeout_in_cycles);
     if (!uvm_config_db#(virtual clk_rst_if)::get(null, "", "clk_if", clk_vif)) begin
       `uvm_fatal(`gfn, "Cannot get clk_if")
@@ -146,6 +170,8 @@ class core_ibex_base_test extends uvm_test;
     cosim_cfg.relax_cosim_check = cfg.disable_cosim;
     cosim_cfg.secure_ibex = secure_ibex;
     cosim_cfg.icache = icache;
+    cosim_cfg.dm_start_addr = 32'h`DM_ADDR;
+    cosim_cfg.dm_end_addr = 32'h`DM_ADDR + (32'h`DM_ADDR_MASK + 1);
 
     uvm_config_db#(core_ibex_cosim_cfg)::set(null, "*cosim_agent*", "cosim_cfg", cosim_cfg);
 
@@ -165,6 +191,16 @@ class core_ibex_base_test extends uvm_test;
 
     uvm_config_db#(core_ibex_env_cfg)::set(this, "*", "cfg", cfg);
     mem = mem_model_pkg::mem_model#()::type_id::create("mem");
+
+    disable_spurious_dside_responses = 0;
+    void'($value$plusargs("disable_spurious_dside_responses=%0d",
+      disable_spurious_dside_responses));
+
+    // Disable spurious responses for non secure configs or when disabled through plusarg
+    if ((secure_ibex == 0) || disable_spurious_dside_responses) begin
+      cfg.enable_spurious_dside_responses = 0;
+    end
+
     // Create virtual sequence and assign memory handle
     vseq = core_ibex_vseq::type_id::create("vseq");
     vseq.mem = mem;
@@ -188,16 +224,12 @@ class core_ibex_base_test extends uvm_test;
     enable_irq_seq = cfg.enable_irq_single_seq || cfg.enable_irq_multiple_seq;
     phase.raise_objection(this);
     cur_run_phase = phase;
+
     dut_vif.dut_cb.fetch_enable <= ibex_pkg::IbexMuBiOff;
     clk_vif.wait_clks(100);
-
-    void'($value$plusargs("bin=%0s", binary));
-    if (binary == "")
-      `uvm_fatal(get_full_name(), "Please specify test binary by +bin=binary_name")
     load_binary_to_mems();
-    `uvm_info(get_full_name(), $sformatf("Running test binary : %0s", binary), UVM_LOW)
-
     dut_vif.dut_cb.fetch_enable <= ibex_pkg::IbexMuBiOn;
+
     fork
       send_stimulus();
       handle_reset();
@@ -226,9 +258,30 @@ class core_ibex_base_test extends uvm_test;
 
   // Backdoor-load the test binary file into the memory models of both the DUT and the cosimulated ISS
   function void load_binary_to_mems();
-    bit [31:0]  addr = 32'h`BOOT_ADDR;
-    load_binary_to_dut_mem(addr, binary);             // Populate RTL memory model
-    env.cosim_agent.load_binary_to_mem(addr, binary); // Populate ISS memory model
+    if (!discrete_debug_module) begin
+      // Load a single binary into memory, at the `BOOT_ADDR offset
+      `uvm_info(`gfn, "Loading single test binary into memory now.", UVM_LOW)
+
+      // Initialize the RTL memory model via byte-writes
+      load_binary_to_dut_mem(32'h`BOOT_ADDR, binary);
+      // Initialize the cosim memory model
+      env.cosim_agent.load_binary_to_mem(32'h`BOOT_ADDR, binary);
+    end else begin
+      // Load discrete binaries for 'main' and 'dm' memories.
+      `uvm_info(`gfn, "Loading multiple test binaries (main/dm) into memory now.", UVM_LOW)
+
+      // Initialize the RTL memory model using $readmemh
+      load_vmem_to_dut_mem(vmem_main);
+      load_vmem_to_dut_mem(vmem_dm);
+      // Initialize the cosim memory model
+      env.cosim_agent.load_binary_to_mem(32'h`BOOT_ADDR, bin_main);
+      env.cosim_agent.load_binary_to_mem(32'h`DM_ADDR, bin_dm);
+    end
+  endfunction
+
+  // Backdoor-load a test binary (in .vmem format) into the DUT memory model
+  function void load_vmem_to_dut_mem(string vmem_file);
+    $readmemh(vmem_file, mem.system_memory);
   endfunction
 
   // Backdoor-load the test binary file into the DUT memory model
@@ -266,7 +319,7 @@ class core_ibex_base_test extends uvm_test;
     end
   endtask : handle_reset
 
-  // Watch for all of the different critera for test pass/failure here
+  // Watch for all of the different criteria for test pass/failure here
   virtual task wait_for_test_done();
     longint timeout_timestamp, ts;
     bit result;
@@ -347,7 +400,7 @@ class core_ibex_base_test extends uvm_test;
 
 
   virtual task wait_for_mem_txn(
-    input bit [ibex_mem_intf_agent_pkg::ADDR_WIDTH-1:0] ref_addr,
+    input bit [ibex_mem_intf_pkg::ADDR_WIDTH-1:0] ref_addr,
     input signature_type_t ref_type,
     input uvm_tlm_analysis_fifo #(ibex_mem_intf_seq_item) txn_port = item_collected_port
     );

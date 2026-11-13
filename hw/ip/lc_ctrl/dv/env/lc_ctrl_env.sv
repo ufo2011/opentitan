@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 class lc_ctrl_env extends cip_base_env #(
@@ -13,15 +13,19 @@ class lc_ctrl_env extends cip_base_env #(
     .HostDataWidth  (OTP_PROG_HDATA_WIDTH),
     .DeviceDataWidth(OTP_PROG_DDATA_WIDTH)
   ) m_otp_prog_pull_agent;
-  alert_esc_agent m_esc_scrap_state1_agent;
-  alert_esc_agent m_esc_scrap_state0_agent;
+  esc_agent m_esc_scrap_state1_agent;
+  esc_agent m_esc_scrap_state0_agent;
   jtag_riscv_agent m_jtag_riscv_agent;
   jtag_riscv_reg_adapter m_jtag_riscv_reg_adapter;
-  kmac_app_agent m_kmac_app_agent;
+  kmac_app_device_agent m_kmac_app_agent;
+
+  int jtag_to_coreclk_ratio;
+  int unsigned tck_period_ps;
 
   `uvm_component_new
 
   function void build_phase(uvm_phase phase);
+
     super.build_phase(phase);
 
     m_jtag_riscv_reg_adapter = jtag_riscv_reg_adapter::type_id::create("m_jtag_riscv_reg_adapter",
@@ -36,21 +40,22 @@ class lc_ctrl_env extends cip_base_env #(
       `uvm_fatal(`gfn, "failed to get lc_ctrl_vif from uvm_config_db")
     end
 
-    m_esc_scrap_state1_agent = alert_esc_agent::type_id::create("m_esc_scrap_state1_agent", this);
-    uvm_config_db#(alert_esc_agent_cfg)::set(this, "m_esc_scrap_state1_agent", "cfg",
-                                             cfg.m_esc_scrap_state1_agent_cfg);
+    m_esc_scrap_state1_agent = esc_agent::type_id::create("m_esc_scrap_state1_agent", this);
+    uvm_config_db#(esc_agent_cfg)::set(this, "m_esc_scrap_state1_agent", "cfg",
+                                       cfg.m_esc_scrap_state1_agent_cfg);
     cfg.m_esc_scrap_state1_agent_cfg.en_cov = cfg.en_cov;
 
-    m_esc_scrap_state0_agent = alert_esc_agent::type_id::create("m_esc_scrap_state0_agent", this);
-    uvm_config_db#(alert_esc_agent_cfg)::set(this, "m_esc_scrap_state0_agent", "cfg",
-                                             cfg.m_esc_scrap_state0_agent_cfg);
+    m_esc_scrap_state0_agent = esc_agent::type_id::create("m_esc_scrap_state0_agent", this);
+    uvm_config_db#(esc_agent_cfg)::set(this, "m_esc_scrap_state0_agent", "cfg",
+                                       cfg.m_esc_scrap_state0_agent_cfg);
     cfg.m_esc_scrap_state0_agent_cfg.en_cov = cfg.en_cov;
+
     m_jtag_riscv_agent = jtag_riscv_agent::type_id::create("m_jtag_riscv_agent", this);
     uvm_config_db#(jtag_riscv_agent_cfg)::set(this, "m_jtag_riscv_agent", "cfg",
                                               cfg.m_jtag_riscv_agent_cfg);
     cfg.m_jtag_riscv_agent_cfg.en_cov = cfg.en_cov;
 
-    m_kmac_app_agent = kmac_app_agent::type_id::create("m_kmac_app_agent", this);
+    m_kmac_app_agent = kmac_app_device_agent::type_id::create("m_kmac_app_agent", this);
     uvm_config_db#(kmac_app_agent_cfg)::set(this, "m_kmac_app_agent", "cfg",
                                             cfg.m_kmac_app_agent_cfg);
     cfg.m_kmac_app_agent_cfg.en_cov = cfg.en_cov;
@@ -81,15 +86,15 @@ class lc_ctrl_env extends cip_base_env #(
     virtual_sequencer.jtag_riscv_sequencer_h = m_jtag_riscv_agent.sequencer;
     if (cfg.en_scb) begin
       m_otp_prog_pull_agent.monitor.analysis_port.connect(scoreboard.otp_prog_fifo.analysis_export);
-      m_kmac_app_agent.monitor.req_analysis_port.connect(
-          scoreboard.kmac_app_req_fifo.analysis_export);
-      m_kmac_app_agent.monitor.analysis_port.connect(scoreboard.kmac_app_rsp_fifo.analysis_export);
-      m_esc_scrap_state1_agent.monitor.analysis_port.connect(
+      m_kmac_app_agent.monitor.m_req_packet_analysis_port.connect(scoreboard.m_kmac_req_imp);
+      m_esc_scrap_state1_agent.monitor.m_esc_port.connect(
           scoreboard.esc_wipe_secrets_fifo.analysis_export);
-      m_esc_scrap_state0_agent.monitor.analysis_port.connect(
+      m_esc_scrap_state0_agent.monitor.m_esc_port.connect(
           scoreboard.esc_scrap_state_fifo.analysis_export);
       m_jtag_riscv_agent.monitor.analysis_port.connect(scoreboard.jtag_riscv_fifo.analysis_export);
     end
+
+    m_jtag_riscv_agent.set_dtm_reg_map(cfg.m_jtag_dtm_ral.get_default_map());
   endfunction
 
   virtual function void end_of_elaboration_phase(uvm_phase phase);
@@ -111,6 +116,16 @@ class lc_ctrl_env extends cip_base_env #(
       `uvm_info(`gfn, cfg.ral_models[i].sprint(), UVM_HIGH)
     end
 
+    // Set jtag to coreclk ration between 0.5 to 2
+    jtag_to_coreclk_ratio = $urandom_range(500, 2000);
+
+    tck_period_ps = cfg.clk_rst_vif.clk_period_ps / jtag_to_coreclk_ratio * 1000;
+
+    `uvm_info(`gfn, $sformatf("clk:%0d jtag:%0d ratio:%0d",
+             cfg.clk_rst_vif.clk_period_ps, tck_period_ps, jtag_to_coreclk_ratio),
+              UVM_LOW)
+
+    cfg.m_jtag_riscv_agent_cfg.m_jtag_agent_cfg.vif.set_tck_period_ps(tck_period_ps);
   endfunction
 
 endclass

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,15 +11,15 @@
 #include "sw/device/lib/base/multibits.h"
 #include "sw/device/lib/dif/dif_base.h"
 
-#include "sensor_ctrl_regs.h"  // Generated
+#include "hw/top/sensor_ctrl_regs.h"  // Generated
 
 /**
  * Helper function to determine if a higher than supported event was supplied
  * as an argument.  This check is used in multiple places so use a helper
  * function.
  */
-static inline bool is_ast_event_invalid(dif_sensor_ctrl_event_idx_t event_idx) {
-  return event_idx > SENSOR_CTRL_PARAM_NUM_ALERT_EVENTS;
+static inline bool is_ast_event_valid(dif_sensor_ctrl_event_idx_t event_idx) {
+  return event_idx < SENSOR_CTRL_PARAM_NUM_ALERT_EVENTS;
 }
 
 /**
@@ -43,10 +43,25 @@ dif_result_t dif_sensor_ctrl_lock_cfg(const dif_sensor_ctrl_t *sensor_ctrl) {
 }
 
 OT_WARN_UNUSED_RESULT
+dif_result_t dif_sensor_ctrl_get_ast_event_trigger(
+    const dif_sensor_ctrl_t *sensor_ctrl, dif_sensor_ctrl_event_idx_t event_idx,
+    dif_toggle_t *enable) {
+  if (sensor_ctrl == NULL || !is_ast_event_valid(event_idx) || enable == NULL) {
+    return kDifBadArg;
+  };
+
+  uint32_t reg = mmio_region_read32(sensor_ctrl->base_addr,
+                                    SENSOR_CTRL_ALERT_TRIG_REG_OFFSET);
+  *enable = dif_bool_to_toggle(bitfield_bit32_read(reg, event_idx));
+
+  return kDifOk;
+}
+
+OT_WARN_UNUSED_RESULT
 dif_result_t dif_sensor_ctrl_set_ast_event_trigger(
     const dif_sensor_ctrl_t *sensor_ctrl, dif_sensor_ctrl_event_idx_t event_idx,
     dif_toggle_t enable) {
-  if (sensor_ctrl == NULL || is_ast_event_invalid(event_idx)) {
+  if (sensor_ctrl == NULL || !is_ast_event_valid(event_idx)) {
     return kDifBadArg;
   };
 
@@ -60,10 +75,30 @@ dif_result_t dif_sensor_ctrl_set_ast_event_trigger(
 }
 
 OT_WARN_UNUSED_RESULT
+dif_result_t dif_sensor_ctrl_set_alert_en(const dif_sensor_ctrl_t *sensor_ctrl,
+                                          dif_sensor_ctrl_event_idx_t event_idx,
+                                          dif_toggle_t en) {
+  if (sensor_ctrl == NULL || !is_ast_event_valid(event_idx)) {
+    return kDifBadArg;
+  };
+
+  if (is_locked(sensor_ctrl)) {
+    return kDifLocked;
+  }
+
+  mmio_region_write32(
+      sensor_ctrl->base_addr,
+      SENSOR_CTRL_ALERT_EN_0_REG_OFFSET + ((ptrdiff_t)event_idx << 2),
+      dif_toggle_to_multi_bit_bool4(en));
+
+  return kDifOk;
+}
+
+OT_WARN_UNUSED_RESULT
 dif_result_t dif_sensor_ctrl_set_alert_fatal(
     const dif_sensor_ctrl_t *sensor_ctrl, dif_sensor_ctrl_event_idx_t event_idx,
     dif_toggle_t en_fatal) {
-  if (sensor_ctrl == NULL || is_ast_event_invalid(event_idx)) {
+  if (sensor_ctrl == NULL || !is_ast_event_valid(event_idx)) {
     return kDifBadArg;
   };
 
@@ -97,7 +132,7 @@ OT_WARN_UNUSED_RESULT
 dif_result_t dif_sensor_ctrl_clear_recov_event(
     const dif_sensor_ctrl_t *sensor_ctrl,
     dif_sensor_ctrl_event_idx_t event_idx) {
-  if (sensor_ctrl == NULL || is_ast_event_invalid(event_idx)) {
+  if (sensor_ctrl == NULL || !is_ast_event_valid(event_idx)) {
     return kDifBadArg;
   };
 

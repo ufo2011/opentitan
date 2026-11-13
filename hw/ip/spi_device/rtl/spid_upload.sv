@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -57,10 +57,8 @@ module spid_upload
 
   input clk_csb_i, // CSb as a clock source
 
-  input sck_csb_asserted_pulse_i,
-  input sys_csb_deasserted_pulse_i,
-
   input sel_datapath_e sel_dp_i,
+  input sel_datapath_e cmd_only_sel_dp_i,
 
   // Sram access: (CMDFIFO/ ADDRFIFO/ PAYLOADBUFFER)
   output sram_l2m_t sck_sram_o,
@@ -76,9 +74,9 @@ module spid_upload
   input             sys_addrfifo_gnt_i, // from arbiter
 
   // FIFO access in sys_clk (CMDFIFO/ ADDRFIFO)
-  output logic       sys_cmdfifo_rvalid_o,
-  input              sys_cmdfifo_rready_i,
-  output logic [7:0] sys_cmdfifo_rdata_o,
+  output logic        sys_cmdfifo_rvalid_o,
+  input               sys_cmdfifo_rready_i,
+  output logic [15:0] sys_cmdfifo_rdata_o,
 
   output logic        sys_addrfifo_rvalid_o,
   input               sys_addrfifo_rready_i,
@@ -97,10 +95,13 @@ module spid_upload
   // Configurations:
   input spi_mode_e spi_mode_i,
 
-  input logic cfg_addr_4b_en_i,
+  // Early (next value to be committed at 8th posedge) view of addr mode
+  input logic cmd_sync_cfg_addr_4b_en_i,
+  input logic cmd_sync_status_wel_i,
+  input logic cmd_sync_status_busy_i,
 
-  input cmd_info_t              cmd_info_i,
-  input logic [CmdInfoIdxW-1:0] cmd_info_idx_i,
+  input cmd_info_t              cmd_only_info_i,
+  input logic [CmdInfoIdxW-1:0] cmd_only_info_idx_i,
 
   output io_mode_e io_mode_o,
 
@@ -123,7 +124,7 @@ module spid_upload
   output logic [PayloadIdxW-1:0] sys_payload_start_idx_o
 );
 
-  localparam int unsigned CmdFifoWidth  =  8;
+  localparam int unsigned CmdFifoWidth  =  16;
   localparam int unsigned AddrFifoWidth = 32;
 
   assign io_mode_o = SingleIO; // Only single input mode is supported in upload
@@ -131,6 +132,9 @@ module spid_upload
   // Upload works in Flash and Passthrough both.
   spi_mode_e unused_spi_mode;
   assign unused_spi_mode = spi_mode_i;
+
+  sel_datapath_e unused_sel_dp;
+  assign unused_sel_dp = sel_dp_i;
 
   assign p2s_valid_o = 1'b 0;
   assign p2s_data_o  = '0;
@@ -182,7 +186,7 @@ module spid_upload
 
   logic               cmdfifo_wvalid;
   logic               cmdfifo_wready; // Assume always ready
-  logic [7:0]         cmdfifo_wdata ;
+  logic [15:0]        cmdfifo_wdata ;
   logic [CmdPtrW-1:0] cmdfifo_depth; // Write side depth to check if FIFO empty
 
   // cmdfifo_depth is used in assertion not in the logic.
@@ -207,39 +211,43 @@ module spid_upload
 
   logic unused_cmdinfo;
   assign unused_cmdinfo = ^{
-    cmd_info_i.valid,         // cmdparse checks the valid bit
-    cmd_info_i.addr_swap_en,
-    cmd_info_i.dummy_en,
-    cmd_info_i.dummy_size,
-    cmd_info_i.mbyte_en,
-    cmd_info_i.opcode,
-    cmd_info_i.payload_dir,
-    cmd_info_i.payload_en,
-    cmd_info_i.payload_swap_en,
-    cmd_info_i.upload
+    cmd_only_info_i.valid,         // cmdparse checks the valid bit
+    cmd_only_info_i.addr_swap_en,
+    cmd_only_info_i.dummy_en,
+    cmd_only_info_i.dummy_size,
+    cmd_only_info_i.mbyte_en,
+    cmd_only_info_i.opcode,
+    cmd_only_info_i.payload_dir,
+    cmd_only_info_i.payload_en,
+    cmd_only_info_i.payload_swap_en,
+    cmd_only_info_i.read_pipeline_mode,
+    cmd_only_info_i.upload
   };
 
   // Address latch
   logic addr_update, addr_shift;
   logic [31:0] address_q, address_d;
-  logic [4:0]  addrcnt;
-
+  logic [AddrCntW-1:0]  addrcnt;
 
   // unused
   logic unused_cmdinfo_idx;
-  assign unused_cmdinfo_idx = ^cmd_info_idx_i;
+  assign unused_cmdinfo_idx = ^cmd_only_info_idx_i;
 
   //////////////
   // Datapath //
   //////////////
 
   // Command info process
-  assign cmdinfo_addr_mode = get_addr_mode(cmd_info_i, cfg_addr_4b_en_i);
+  assign cmdinfo_addr_mode = get_addr_mode(cmd_only_info_i.addr_mode, cmd_sync_cfg_addr_4b_en_i);
   assign cmdinfo_addr_en   = cmdinfo_addr_mode != AddrDisabled;
 
   assign cmdinfo_addr_4b_en = cmdinfo_addr_mode == Addr4B;
 
-  assign cmdfifo_wdata  = s2p_byte_i; // written to FIFO at first
+  assign cmdfifo_wdata  = { cmdinfo_addr_4b_en,
+                            cmd_sync_status_wel_i,
+                            cmd_sync_status_busy_i,
+                            5'h00,
+                            s2p_byte_i};
   assign addrfifo_wdata = address_d;
   assign payload_wdata  = s2p_byte_i;
 
@@ -273,9 +281,9 @@ module spid_upload
   //
   // cmdfifo_depth (SCK) is a registered signal. So, it becomes notempty after
   // 8th beat of the SCK. The CSb as a clock latches the signal to be != 0,
-  // then sys_csb_deasserted_pulse_i signal let SYS_CLK latch the notemtpy
-  // signal. as CSb as a clock is synced clock to the SCK, there is no CDC
-  // issue here. Please check the chip Synopsys Design Constraints (SDC) file.
+  // then sys_cmdfifo_set signal let SYS_CLK latch the notempty signal.
+  // Because CSb as a clock is synchronous with SCK, there is no CDC issue
+  // here. Please check the chip Synopsys Design Constraints (SDC) file.
   //
   // The case to be considered: If two commands are back-to-back and uploaded
   // into the CMDFIFO. Then, if SW pops the first one, the notempty keeps
@@ -291,36 +299,32 @@ module spid_upload
   // a pulse to set the interrupt (along with the status). So that the SW can
   // get the event.
 
-  logic sck_cmdfifo_set;
-  always_ff @(posedge clk_i or negedge sys_rst_ni) begin
-    // Can't use rst_ni, as it is basically CSb. conflict to @posedge CSb
-    if (!sys_rst_ni)                           sck_cmdfifo_set <= 1'b 0;
-    // Can't use cmdfifo_depth != '0 as cmdfifo_depth is latched by SCK
-    // CmdOnly SPI transaction cannot catch
-    else if (cmdfifo_wvalid && cmdfifo_wready) sck_cmdfifo_set <= 1'b 1;
-    else if (sck_csb_asserted_pulse_i)         sck_cmdfifo_set <= 1'b 0;
-  end
+  logic sck_cmdfifo_set, sys_cmdfifo_set;
   `ASSERT(CmdFifoPush_A,
           cmdfifo_wvalid && cmdfifo_wready |=> cmdfifo_depth != 0,
           clk_i, !sys_rst_ni)
 
-  logic csb_cmdfifo_set;
-  always_ff @(posedge clk_csb_i or negedge sys_rst_ni) begin
-    if (!sys_rst_ni) csb_cmdfifo_set <= 1'b 0;
-    else             csb_cmdfifo_set <= sck_cmdfifo_set;
-  end
+  assign sck_cmdfifo_set = cmdfifo_wvalid && cmdfifo_wready;
 
-  logic sys_cmdfifo_set;
+  spid_csb_sync u_sys_cmdfifo_set (
+    .clk_i                     (sys_clk_i),
+    .rst_ni                    (sys_rst_ni),
+    .sck_i                     (clk_i),
+    .sck_pulse_en_i            (sck_cmdfifo_set),
+    .csb_i                     (clk_csb_i),
+    .csb_deasserted_pulse_o    (sys_cmdfifo_set)
+  );
+
+  // This block is merely to align INTR_STATE updates with the payload FIFO
+  // depth updates, so the interrupt doesn't appear a cycle before the related
+  // upload data.
   always_ff @(posedge sys_clk_i or negedge sys_rst_ni) begin
-    if (!sys_rst_ni) sys_cmdfifo_set <= 1'b 0;
-    else if (sys_csb_deasserted_pulse_i && csb_cmdfifo_set) begin
-      sys_cmdfifo_set <= 1'b 1;
+    if (!sys_rst_ni) begin
+      sys_cmdfifo_set_o <= 1'b0;
     end else begin
-      sys_cmdfifo_set <= 1'b 0;
+      sys_cmdfifo_set_o <= sys_cmdfifo_set;
     end
   end
-
-  assign sys_cmdfifo_set_o = sys_cmdfifo_set;
 
   // payloadptr manage: spid_fifo2sram_adapter's fifoptr (wdepth) is reset by
   // CSb everytime. the written payload size should be visible to SW even CSb
@@ -362,9 +366,9 @@ module spid_upload
   always_ff @(posedge sys_clk_i or negedge sys_rst_ni) begin
     if (!sys_rst_ni) sys_payload_depth_o <= '0;
     else if (sys_payloadptr_clr_posedge) sys_payload_depth_o <= '0;
-    else if (sys_csb_deasserted_pulse_i && payload_max) begin
+    else if (sys_cmdfifo_set && payload_max) begin
       sys_payload_depth_o <= PayloadPtrW'(PayloadByte);
-    end else if (sys_csb_deasserted_pulse_i && !payload_max) begin
+    end else if (sys_cmdfifo_set && !payload_max) begin
       sys_payload_depth_o <= PayloadPtrW'(payloadptr);
     end
   end
@@ -385,11 +389,11 @@ module spid_upload
   always_ff @(posedge sys_clk_i or negedge sys_rst_ni) begin
     if (!sys_rst_ni)                     sys_payload_start_idx_o <= '0;
     else if (sys_payloadptr_clr_posedge) sys_payload_start_idx_o <= '0;
-    else if (sys_csb_deasserted_pulse_i && payload_max) begin
-      // Payload reached the max, need to tell SW the exact location SW shoul
+    else if (sys_cmdfifo_set && payload_max) begin
+      // Payload reached the max, need to tell SW the exact location SW should
       // read
       sys_payload_start_idx_o <= payloadptr;
-    end else if (sys_csb_deasserted_pulse_i && !payload_max) begin
+    end else if (sys_cmdfifo_set && !payload_max) begin
       // Payload buffer has not been reached to the max, the start index
       // should be 0 for SW to read from the first of the buffer.
       sys_payload_start_idx_o <= '0;
@@ -413,7 +417,7 @@ module spid_upload
   always_ff @(posedge sys_clk_i or negedge sys_rst_ni) begin
     if (!sys_rst_ni)                     sys_event_payload_overflow <= 1'b 0;
     else if (sys_payloadptr_clr_posedge) sys_event_payload_overflow <= 1'b 0;
-    else if (sys_csb_deasserted_pulse_i) begin
+    else if (sys_cmdfifo_set) begin
       sys_event_payload_overflow <= event_payload_overflow;
     end
   end
@@ -447,7 +451,7 @@ module spid_upload
 
     unique case (st_q)
       StIdle: begin
-        if (s2p_valid_i && sel_dp_i == DpUpload) begin
+        if (s2p_valid_i && cmd_only_sel_dp_i == DpUpload) begin
           if (cmdinfo_addr_en) begin
             st_d = StAddress;
 
@@ -462,7 +466,7 @@ module spid_upload
 
           // Assume cmdfifo_wready is 1 always (need to add assumption)
 
-          if (cmd_info_i.busy) begin
+          if (cmd_only_info_i.busy) begin
             // Set BUSY
             set_busy_o = 1'b 1;
           end
@@ -502,11 +506,6 @@ module spid_upload
   //////////////
   // Instance //
   //////////////
-
-  // TODO: Merge two FIFOs into one.
-  // Design a module that has one SRAM Read port / one SRAM write port
-  // and compile-time configurable # of FIFO ports + N of SramBase Address
-  // (Preferrably variable width)
 
   // FIFO reset:
   // To maintain the pointer on read/ write side same, the FIFO uses
@@ -654,6 +653,7 @@ module spid_upload
   ) u_payload_buffer (
     .clk_i,
     .rst_ni,
+    .clr_i    (1'b0),
 
     .wvalid_i (payload_wvalid),
     .wready_o (payload_wready),

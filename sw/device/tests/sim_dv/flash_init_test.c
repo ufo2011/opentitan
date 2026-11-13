@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 #include "sw/device/lib/dif/dif_uart.h"
 #include "sw/device/lib/runtime/hart.h"
 #include "sw/device/lib/runtime/log.h"
-#include "sw/device/lib/runtime/print.h"
+#include "sw/device/lib/runtime/print_uart.h"
 #include "sw/device/lib/testing/flash_ctrl_testutils.h"
 #include "sw/device/lib/testing/pinmux_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
@@ -83,62 +83,56 @@ static uint32_t kBank1Page0Data[kNumTestWords];
 static uint32_t region_addresses[kNumRegions];
 
 static void setup_unscrambled_regions(void) {
-  region_addresses[kAddressBank0Page0Data] =
-      flash_ctrl_testutils_data_region_setup(&flash_state,
-                                             kRegionBaseBank0Page0Index,
-                                             kFlashDataRegionZero, kRegionSize);
-  region_addresses[kAddressBank1Page0Data] =
-      flash_ctrl_testutils_data_region_setup(&flash_state,
-                                             kRegionBaseBank1Page0Index,
-                                             kFlashDataRegionOne, kRegionSize);
-  region_addresses[kAddressCreatorSecret] =
-      flash_ctrl_testutils_info_region_setup(&flash_state,
-                                             kFlashInfoPageIdCreatorSecret,
-                                             kFlashInfoBank, kPartitionId);
-  region_addresses[kAddressOwnerSecret] =
-      flash_ctrl_testutils_info_region_setup(&flash_state,
-                                             kFlashInfoPageIdOwnerSecret,
-                                             kFlashInfoBank, kPartitionId);
-  region_addresses[kAddressIsoPart] = flash_ctrl_testutils_info_region_setup(
-      &flash_state, kFlashInfoPageIdIsoPart, kFlashInfoBank, kPartitionId);
+  CHECK_STATUS_OK(flash_ctrl_testutils_data_region_setup(
+      &flash_state, kRegionBaseBank0Page0Index, kFlashDataRegionZero,
+      kRegionSize, &region_addresses[kAddressBank0Page0Data]));
+  CHECK_STATUS_OK(flash_ctrl_testutils_data_region_setup(
+      &flash_state, kRegionBaseBank1Page0Index, kFlashDataRegionOne,
+      kRegionSize, &region_addresses[kAddressBank1Page0Data]));
+  CHECK_STATUS_OK(flash_ctrl_testutils_info_region_setup(
+      &flash_state, kFlashInfoPageIdCreatorSecret, kFlashInfoBank, kPartitionId,
+      &region_addresses[kAddressCreatorSecret]));
+  CHECK_STATUS_OK(flash_ctrl_testutils_info_region_setup(
+      &flash_state, kFlashInfoPageIdOwnerSecret, kFlashInfoBank, kPartitionId,
+      &region_addresses[kAddressOwnerSecret]));
+
+  CHECK_STATUS_OK(flash_ctrl_testutils_info_region_setup(
+      &flash_state, kFlashInfoPageIdIsoPart, kFlashInfoBank, kPartitionId,
+      &region_addresses[kAddressIsoPart]));
 }
 
 static void setup_scrambled_regions(void) {
-  region_addresses[kAddressBank0Page0Data] =
-      flash_ctrl_testutils_data_region_scrambled_setup(
-          &flash_state, kRegionBaseBank0Page0Index, kFlashDataRegionZero,
-          kRegionSize);
-  region_addresses[kAddressBank1Page0Data] =
-      flash_ctrl_testutils_data_region_scrambled_setup(
-          &flash_state, kRegionBaseBank1Page0Index, kFlashDataRegionOne,
-          kRegionSize);
-  region_addresses[kAddressCreatorSecret] =
-      flash_ctrl_testutils_info_region_scrambled_setup(
-          &flash_state, kFlashInfoPageIdCreatorSecret, kFlashInfoBank,
-          kPartitionId);
-  region_addresses[kAddressOwnerSecret] =
-      flash_ctrl_testutils_info_region_scrambled_setup(
-          &flash_state, kFlashInfoPageIdOwnerSecret, kFlashInfoBank,
-          kPartitionId);
-  region_addresses[kAddressIsoPart] =
-      flash_ctrl_testutils_info_region_scrambled_setup(
-          &flash_state, kFlashInfoPageIdIsoPart, kFlashInfoBank, kPartitionId);
+  CHECK_STATUS_OK(flash_ctrl_testutils_data_region_scrambled_setup(
+      &flash_state, kRegionBaseBank0Page0Index, kFlashDataRegionZero,
+      kRegionSize, &region_addresses[kAddressBank0Page0Data]));
+  CHECK_STATUS_OK(flash_ctrl_testutils_data_region_scrambled_setup(
+      &flash_state, kRegionBaseBank1Page0Index, kFlashDataRegionOne,
+      kRegionSize, &region_addresses[kAddressBank1Page0Data]));
+  CHECK_STATUS_OK(flash_ctrl_testutils_info_region_scrambled_setup(
+      &flash_state, kFlashInfoPageIdCreatorSecret, kFlashInfoBank, kPartitionId,
+      &region_addresses[kAddressCreatorSecret]));
+  CHECK_STATUS_OK(flash_ctrl_testutils_info_region_scrambled_setup(
+      &flash_state, kFlashInfoPageIdOwnerSecret, kFlashInfoBank, kPartitionId,
+      &region_addresses[kAddressOwnerSecret]));
+  CHECK_STATUS_OK(flash_ctrl_testutils_info_region_scrambled_setup(
+      &flash_state, kFlashInfoPageIdIsoPart, kFlashInfoBank, kPartitionId,
+      &region_addresses[kAddressIsoPart]));
 }
 
 static void erase_and_write_regions(void) {
-  CHECK(flash_ctrl_testutils_erase_and_write_page(
+  CHECK_STATUS_OK(flash_ctrl_testutils_erase_and_write_page(
       &flash_state, region_addresses[kAddressBank0Page0Data], kPartitionId,
       kBank0Page0Data, kDifFlashCtrlPartitionTypeData, kNumTestWords));
-  CHECK(flash_ctrl_testutils_erase_and_write_page(
+  CHECK_STATUS_OK(flash_ctrl_testutils_erase_and_write_page(
       &flash_state, region_addresses[kAddressBank1Page0Data], kPartitionId,
       kBank1Page0Data, kDifFlashCtrlPartitionTypeData, kNumTestWords));
-  CHECK(flash_ctrl_testutils_erase_and_write_page(
+  CHECK_STATUS_OK(flash_ctrl_testutils_erase_and_write_page(
       &flash_state, region_addresses[kAddressCreatorSecret], kPartitionId,
       kCreatorSecretData, kDifFlashCtrlPartitionTypeInfo, kNumTestWords));
-  CHECK(flash_ctrl_testutils_erase_and_write_page(
+  CHECK_STATUS_OK(flash_ctrl_testutils_erase_and_write_page(
       &flash_state, region_addresses[kAddressOwnerSecret], kPartitionId,
       kOwnerSecretData, kDifFlashCtrlPartitionTypeInfo, kNumTestWords));
-  CHECK(flash_ctrl_testutils_erase_and_write_page(
+  CHECK_STATUS_OK(flash_ctrl_testutils_erase_and_write_page(
       &flash_state, region_addresses[kAddressIsoPart], kPartitionId,
       kIsoPartData, kDifFlashCtrlPartitionTypeInfo, kNumTestWords));
 }
@@ -146,30 +140,30 @@ static void erase_and_write_regions(void) {
 static void read_and_check_host_if(uint32_t addr, const uint32_t *check_data) {
   uint32_t host_data[kNumTestWords];
   mmio_region_memcpy_from_mmio32(
-      mmio_region_from_addr(TOP_EARLGREY_EFLASH_BASE_ADDR), addr, &host_data,
-      kNumTestBytes);
+      mmio_region_from_addr(TOP_EARLGREY_FLASH_CTRL_MEM_BASE_ADDR), addr,
+      &host_data, kNumTestBytes);
   CHECK_ARRAYS_EQ(host_data, check_data, kNumTestWords);
 }
 
 static void check_readback_data_match(void) {
   uint32_t readback_data[kNumTestWords];
-  CHECK(flash_ctrl_testutils_read(
+  CHECK_STATUS_OK(flash_ctrl_testutils_read(
       &flash_state, region_addresses[kAddressBank0Page0Data], kPartitionId,
       readback_data, kDifFlashCtrlPartitionTypeData, kNumTestWords, 0));
   CHECK_ARRAYS_EQ(readback_data, kBank0Page0Data, kNumTestWords);
-  CHECK(flash_ctrl_testutils_read(
+  CHECK_STATUS_OK(flash_ctrl_testutils_read(
       &flash_state, region_addresses[kAddressBank1Page0Data], kPartitionId,
       readback_data, kDifFlashCtrlPartitionTypeData, kNumTestWords, 0));
   CHECK_ARRAYS_EQ(readback_data, kBank1Page0Data, kNumTestWords);
-  CHECK(flash_ctrl_testutils_read(
+  CHECK_STATUS_OK(flash_ctrl_testutils_read(
       &flash_state, region_addresses[kAddressCreatorSecret], kPartitionId,
       readback_data, kDifFlashCtrlPartitionTypeInfo, kNumTestWords, 0));
   CHECK_ARRAYS_EQ(readback_data, kCreatorSecretData, kNumTestWords);
-  CHECK(flash_ctrl_testutils_read(
+  CHECK_STATUS_OK(flash_ctrl_testutils_read(
       &flash_state, region_addresses[kAddressOwnerSecret], kPartitionId,
       readback_data, kDifFlashCtrlPartitionTypeInfo, kNumTestWords, 0));
   CHECK_ARRAYS_EQ(readback_data, kOwnerSecretData, kNumTestWords);
-  CHECK(flash_ctrl_testutils_read(
+  CHECK_STATUS_OK(flash_ctrl_testutils_read(
       &flash_state, region_addresses[kAddressIsoPart], kPartitionId,
       readback_data, kDifFlashCtrlPartitionTypeInfo, kNumTestWords, 0));
   CHECK_ARRAYS_EQ(readback_data, kIsoPartData, kNumTestWords);
@@ -283,7 +277,7 @@ bool rom_test_main(void) {
   test_status_set(kTestStatusInTest);
   dif_pinmux_t pinmux;
   CHECK_DIF_OK(dif_pinmux_init(
-      mmio_region_from_addr(TOP_EARLGREY_PINMUX_AON_BASE_ADDR), &pinmux));
+      mmio_region_from_addr(TOP_EARLGREY_PINMUX_BASE_ADDR), &pinmux));
   pinmux_testutils_init(&pinmux);
 
   // We need to initialize the UART regardless if we LOG any messages, since
@@ -291,21 +285,24 @@ bool rom_test_main(void) {
   if (kDeviceType != kDeviceSimDV) {
     CHECK_DIF_OK(dif_uart_init(
         mmio_region_from_addr(TOP_EARLGREY_UART0_BASE_ADDR), &uart0));
-    CHECK_DIF_OK(
-        dif_uart_configure(&uart0, (dif_uart_config_t){
-                                       .baudrate = kUartBaudrate,
-                                       .clk_freq_hz = kClockFreqPeripheralHz,
-                                       .parity_enable = kDifToggleDisabled,
-                                       .parity = kDifUartParityEven,
-                                       .tx_enable = kDifToggleEnabled,
-                                       .rx_enable = kDifToggleEnabled,
-                                   }));
+    CHECK(kUartBaudrate <= UINT32_MAX, "kUartBaudrate must fit in uint32_t");
+    CHECK(kClockFreqPeripheralHz <= UINT32_MAX,
+          "kClockFreqPeripheralHz must fit in uint32_t");
+    CHECK_DIF_OK(dif_uart_configure(
+        &uart0, (dif_uart_config_t){
+                    .baudrate = (uint32_t)kUartBaudrate,
+                    .clk_freq_hz = (uint32_t)kClockFreqPeripheralHz,
+                    .parity_enable = kDifToggleDisabled,
+                    .parity = kDifUartParityEven,
+                    .tx_enable = kDifToggleEnabled,
+                    .rx_enable = kDifToggleEnabled,
+                }));
     base_uart_stdout(&uart0);
   }
 
   // Test code.
   mmio_region_t sram_region_ret_base_addr =
-      mmio_region_from_addr(TOP_EARLGREY_SRAM_CTRL_RET_AON_RAM_BASE_ADDR);
+      mmio_region_from_addr(TOP_EARLGREY_SRAM_CTRL_RET_RAM_BASE_ADDR);
 
   mmio_region_memcpy_from_mmio32(sram_region_ret_base_addr,
                                  kCreatorSecretDataRetSramAddress,

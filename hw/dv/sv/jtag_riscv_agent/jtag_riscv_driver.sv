@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 // Pseudo driver to access CSR via JTAG TAP
@@ -6,25 +6,34 @@ class jtag_riscv_driver extends dv_base_driver #(jtag_riscv_item, jtag_riscv_age
 
   protected bit do_hard_reset;
 
-  `uvm_object_utils(jtag_riscv_driver)
+  `uvm_component_utils(jtag_riscv_driver)
 
-  `uvm_object_new
+  function new (string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
 
-  virtual task reset_signals();
-    forever begin
-      wait (cfg.in_reset == 1);
-      `uvm_info(`gfn, "reset_signals: cfg.in_reset=1'b1", UVM_MEDIUM)
-
-      do_hard_reset = 1;
-      // Assert JTAG TRST
-      // This clears the DMI Request and Response FIFOs.
-      cfg.m_jtag_agent_cfg.vif.do_trst_n(2);
-      cfg.rv_dm_activated = 0;
-
-      wait (cfg.in_reset == 0);
-      `uvm_info(`gfn, "reset_signals: cfg.in_reset=1'b0", UVM_MEDIUM)
-    end
+  task reset_signals();
+    fork
+      super.reset_signals();
+      forever begin
+        wait(cfg.in_reset);
+        // Assert JTAG TRST
+        // This clears the DMI Request and Response FIFOs.
+        cfg.m_jtag_agent_cfg.vif.do_trst_n(2);
+        wait(!cfg.in_reset);
+      end
+    join
   endtask
+
+  task on_enter_reset();
+    `uvm_info(`gfn, "on_enter_reset: cfg.in_reset=1'b1", UVM_MEDIUM)
+    do_hard_reset = 1;
+    cfg.rv_dm_activated = 0;
+  endtask
+
+  function void on_leave_reset();
+    `uvm_info(`gfn, "on_leave_reset: cfg.in_reset=1'b0", UVM_MEDIUM)
+  endfunction
 
   // drive trans received from sequencer
   virtual task get_and_drive();

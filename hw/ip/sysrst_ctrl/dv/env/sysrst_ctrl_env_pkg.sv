@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,9 +19,8 @@ package sysrst_ctrl_env_pkg;
   `include "dv_macros.svh"
 
   // parameters
-  // TODO: add the names of alerts in order
-  parameter string LIST_OF_ALERTS[] = {"fatal_fault"};
   parameter uint   NUM_ALERTS = 1;
+  parameter string LIST_OF_ALERTS[NUM_ALERTS] = {"fatal_fault"};
 
   parameter uint NumInputs = 7;
 
@@ -30,13 +29,14 @@ package sysrst_ctrl_env_pkg;
   } sysrst_ctrl_intr_e;
 
   typedef enum {
-    PwrbIdx,
-    Key0Idx,
-    Key1Idx,
-    Key2Idx,
-    AcPresentIdx,
-    EcRstIdx,
-    FlashWpIdx
+    PwrbIdx = 0,
+    Key0Idx = 1,
+    Key1Idx = 2,
+    Key2Idx = 3,
+    AcPresentIdx = 4,
+    EcRstIdx = 5,
+    FlashWpIdx = 6,
+    LidOpenIdx = 7
   } sysrst_input_idx_e;
 
 

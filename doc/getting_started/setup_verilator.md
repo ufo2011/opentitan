@@ -1,10 +1,6 @@
----
-title: Verilator Setup
-aliases:
-    - /doc/ug/getting_started_verilator
----
+# Verilator Setup
 
-_Before following this guide, make sure you've followed the [dependency installation instructions]({{< relref "getting_started" >}})._
+_Before following this guide, make sure you've followed the [dependency installation instructions](README.md)._
 
 ## About Verilator
 
@@ -13,24 +9,22 @@ It translates synthesizable Verilog code into a simulation program in C++, which
 
 ### Install Verilator
 
-Even though Verilator is packaged for most Linux distributions these versions tend to be too old to be usable.
+Even though Verilator is packaged for most Linux distributions, these versions tend to be too old to be usable.
 We recommend compiling Verilator from source, as outlined here.
 
 Fetch, build and install Verilator itself (this should be done outside the `$REPO_TOP` directory).
-Note that Verilator 4.210 will not build with GCC 12.0 or later, so it will need to be built with an older toolchain.
-The example below assumes gcc-11 and g++-11 are installed on the system.
 
 ```console
-export VERILATOR_VERSION={{< tool_version "verilator" >}}
+export VERILATOR_VERSION={{#tool-version verilator }}
 
 git clone https://github.com/verilator/verilator.git
 cd verilator
 git checkout v$VERILATOR_VERSION
 
 autoconf
-CC=gcc-11 CXX=g++-11 ./configure --prefix=/tools/verilator/$VERILATOR_VERSION
-CC=gcc-11 CXX=g++-11 make
-sudo CC=gcc-11 CXX=g++-11 make install
+./configure --prefix=/tools/verilator/$VERILATOR_VERSION
+make
+sudo make install
 ```
 The `make` step can take several minutes.
 
@@ -43,14 +37,14 @@ export PATH=/tools/verilator/$VERILATOR_VERSION/bin:$PATH
 Check your installation by running:
 ```console
 $ verilator --version
-Verilator 4.210 2021-07-07 rev v4.210 (mod)
+Verilator 5.048 2026-04-26 rev v5.048
 ```
 
 #### Troubleshooting
 
 If you need to install to a different location than `/tools/verilator/...`, you can pass a different directory to `./configure --prefix` above and add `your/install/location/bin` to `PATH` instead.
 
-## Running Software on a Verilator Simulation with Bazel
+## Use Bazel to run software on a verilator simulation
 
 First the RTL must be built into a simulator binary.
 This is done by running fusesoc, which collects up RTL code and passes it to Verilator to generate and then compile a C++ model.
@@ -78,8 +72,8 @@ bazel test --test_tag_filters=verilator --test_output=streamed //sw/device/tests
 
 You should expect to see something like:
 ```console
-Invoking: sw/host/opentitantool/opentitantool --rcfile= --logging=info --interface=verilator --verilator-bin=hw/build.verilator_real/sim-verilator/Vchip_sim_tb --verilator-rom=sw/device/lib/testing/test_rom/test_rom_sim_verilator.scr.39.vmem --verilator-flash=sw/device/tests/uart_smoketest_prog_sim_verilator.64.scr.vmem --verilator-otp=hw/ip/otp_ctrl/data/img_rma.vmem console --exit-failure=(FAIL|FAULT).*\n --exit-success=PASS.*\n --timeout=3600s
-[2022-06-09T08:08:16Z INFO  opentitanlib::transport::verilator::subprocess] Spawning verilator: "hw/build.verilator_real/sim-verilator/Vchip_sim_tb" ["--meminit=rom,sw/device/lib/testing/test_rom/test_rom_sim_verilator.scr.39.vmem", "--meminit=flash,sw/device/tests/uart_smoketest_prog_sim_verilator.64.scr.vmem", "--meminit=otp,hw/ip/otp_ctrl/data/img_rma.vmem"]
+Invoking: sw/host/opentitantool/opentitantool --rcfile= --logging=info --interface=verilator --verilator-bin=hw/build.verilator_real/sim-verilator/Vchip_sim_tb --verilator-rom=sw/device/lib/testing/test_rom/test_rom_sim_verilator.scr.39.vmem --verilator-flash=sw/device/tests/uart_smoketest_prog_sim_verilator.64.scr.vmem --verilator-otp=hw/top_earlgrey/data/otp/img_rma.vmem console --exit-failure=(FAIL|FAULT).*\n --exit-success=PASS.*\n --timeout=3600s
+[2022-06-09T08:08:16Z INFO  opentitanlib::transport::verilator::subprocess] Spawning verilator: "hw/build.verilator_real/sim-verilator/Vchip_sim_tb" ["--meminit=rom,sw/device/lib/testing/test_rom/test_rom_sim_verilator.scr.39.vmem", "--meminit=flash,sw/device/tests/uart_smoketest_prog_sim_verilator.64.scr.vmem", "--meminit=otp,hw/top_earlgrey/data/otp/img_rma.vmem"]
 [2022-06-09T08:08:16Z INFO  opentitanlib::transport::verilator::stdout] Simulation of OpenTitan Earl Grey
 [2022-06-09T08:08:16Z INFO  opentitanlib::transport::verilator::stdout] =================================
 [2022-06-09T08:08:16Z INFO  opentitanlib::transport::verilator::stdout]
@@ -140,7 +134,8 @@ However, if you want to interact with the simulation in additional ways, there a
 ## Execution Log
 
 All executed instructions in the loaded software into Verilator simulations are logged to the file `trace_core_00000000.log`.
-By default this file is stored somewhere in `~/.cache/bazel`, you can find it using the following command:
+By default this file is stored in a subdirectory of `~/.cache/bazel`.
+You can find it using the following command:
 
 ```console
 find ~/.cache/bazel -name "trace_core_00000000.log"
@@ -170,27 +165,28 @@ echo 'h09 l31' > gpio0-write  # Pull the pin 9 high, and pin 31 low.
 The simulation includes a "virtual JTAG" port to which OpenOCD can connect using its `remote_bitbang` driver.
 All necessary configuration files are included in this repository.
 
-See the [OpenOCD install instructions]({{< relref "install_openocd.md" >}}) for guidance on installing OpenOCD.
+For more guidance on using OpenOCD, see [Using OpenOCD](./using_openocd.md).
 
 Run the simulation with Bazel, making sure to build the device software with debug symbols using
 ```console
 cd $REPO_TOP
-bazel test --copt=-g --test_output=streamed //sw/device/tests:uart_smoketest_sim_verilator
+bazel run --copt=-g --test_output=streamed //sw/device/tests:uart_smoketest_sim_verilator
 ```
 
 Then, connect with OpenOCD using the following command.
 
 ```console
 cd $REPO_TOP
-/tools/openocd/bin/openocd -s util/openocd -f board/lowrisc-earlgrey-verilator.cfg
+bazel run //third_party/openocd -- -s util/openocd -f board/lowrisc-earlgrey-verilator.cfg
 ```
 
 Lastly, connect GDB using the following command (noting it needs to be altered to point to the sw binary in use).
 
 ```console
 cd $REPO_TOP
-riscv32-unknown-elf-gdb -ex "target extended-remote :3333" -ex "info reg" \
-  "$(./bazelisk.sh outquery --config=riscv32 //sw/device/tests:uart_smoketest_prog_sim_verilator.elf)"
+bazel run @lowrisc_rv32imcb_toolchain//:/bin/riscv32-unknown-elf-gdb -- \
+  -ex "target extended-remote :3333" -ex "info reg" \
+  "$(bazel outquery --config=riscv32 //sw/device/tests:uart_smoketest_prog_sim_verilator.elf)"
 ```
 
 ## SPI device test interface (optional)
@@ -229,17 +225,23 @@ The output consists of a textual "waveform" representing the SPI signals.
 
 ## Generating waveforms (optional)
 
-TODO(lowRISC/opentitan[#13042](https://github.com/lowRISC/opentitan/issues/13042)): the below does not work with the Bazel test running flow.
+With the `--trace` argument the simulation generates a FST signal trace which can be viewed with GTKWave (only).
+An argument may be provided to `--trace` to specify where the trace file will be saved.
+Note that for automated tests, `opentitantool` interfaces with the simulator, and verilator arguments must be passed via `--verilator-args=<arg>`.
 
-With the `--trace` argument the simulation generates a FST signal trace which can be viewed with Gtkwave (only).
+In addition, it may be necessary to adjust the test timeout values when using `bazel test` with waveforms.
 Tracing slows down the simulation by roughly factor of 1000.
+The timeout adjustment may be done via bazel's `--test_timeout` option.
+Putting these all together for the UART smoke test yields the following command line:
 
 ```console
 cd $REPO_TOP
-build/lowrisc_dv_chip_verilator_sim_0.1/sim-verilator/Vchip_sim_tb \
-  --meminit=rom,build-bin/sw/device/lib/testing/test_rom/test_rom_sim_verilator.scr.39.vmem \
-  --meminit=flash,build-bin/sw/device/examples/hello_world/hello_world_sim_verilator.64.scr.vmem \
-  --meminit=otp,build-bin/sw/device/otp_img/otp_img_sim_verilator.vmem \
-  --trace
-gtkwave sim.fst
+bazel test //sw/device/tests:uart_smoketest_sim_verilator \
+  --test_output=streamed \
+  --test_timeout=1000 \
+  --test_arg=--verilator-args=--trace=/tmp/sim.fst
+gtkwave /tmp/sim.fst
 ```
+
+Without an argument to `--trace`, the waveform file would be named `sim.fst` and be placed in the test's [runfiles](https://bazel.build/reference/test-encyclopedia#runfiles) tree.
+It would appear alongside the simulator's other outputs in the test's working directory.

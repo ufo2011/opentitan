@@ -1,4 +1,4 @@
-/* Copyright lowRISC contributors. */
+/* Copyright lowRISC contributors (OpenTitan project). */
 /* Licensed under the Apache License, Version 2.0, see LICENSE for details. */
 /* SPDX-License-Identifier: Apache-2.0 */
 
@@ -15,7 +15,7 @@ OUTPUT_ARCH(riscv);
  */
 __DYNAMIC = 0;
 
-INCLUDE hw/top_earlgrey/sw/autogen/top_earlgrey_memory.ld
+INCLUDE OPENTITAN_TOP_MEMORY_LD
 
 _stack_end = ORIGIN(ram_main) + LENGTH(ram_main);
 
@@ -26,7 +26,7 @@ _stack_end = ORIGIN(ram_main) + LENGTH(ram_main);
  */
 _dv_log_offset = 0x10000;
 
-ENTRY(sram_main);
+ENTRY(test_main);
 
 SECTIONS {
   /**
@@ -47,8 +47,8 @@ SECTIONS {
     /* Place the entry point of the SRAM program to the start of the main SRAM
      * so that we don't have to maintain a separate offset from the start of
      * the RAM to the entry point. */
-    ASSERT(DEFINED(sram_main), "SRAM programs must define `sram_main()`");
-    KEEP(*(.text.sram_main))
+    ASSERT(DEFINED(test_main), "SRAM programs must define `test_main()`");
+    KEEP(*(.text.test_main))
     . = ALIGN(4);
 
     /* Place all input `.rodata`, `.data`, `.text`, and `.bss` sections in the
@@ -59,23 +59,23 @@ SECTIONS {
      * hopefully only take one instruction. Other data will likely need
      * multiple instructions to load, so we're less concerned about address
      * materialisation taking more than one instruction. */
-    KEEP(*(.srodata))
-    KEEP(*(.srodata.*))
-    KEEP(*(.rodata))
-    KEEP(*(.rodata.*))
+    *(.srodata)
+    *(.srodata.*)
+    *(.rodata)
+    *(.rodata.*)
     . = ALIGN(4);
-    KEEP(*(.sdata))
-    KEEP(*(.sdata.*))
-    KEEP(*(.data))
-    KEEP(*(.data.*))
+    *(.sdata)
+    *(.sdata.*)
+    *(.data)
+    *(.data.*)
     . = ALIGN(4);
-    KEEP(*(.text))
-    KEEP(*(.text.*))
+    *(.text)
+    *(.text.*)
     . = ALIGN(4);
-    KEEP(*(.sbss))
-    KEEP(*(.sbss.*))
-    KEEP(*(.bss))
-    KEEP(*(.bss.*))
+    *(.sbss)
+    *(.sbss.*)
+    *(.bss)
+    *(.bss.*)
     . = ALIGN(4);
   } > ram_main
 

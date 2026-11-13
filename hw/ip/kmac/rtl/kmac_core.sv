@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -40,9 +40,11 @@ module kmac_core
   // Key input from CSR
   input [MaxKeyLen-1:0] key_data_i [Share],
   input key_len_e       key_len_i,
+  input logic           key_valid_i,
 
   // Controls : same to SHA3 core
   input start_i,
+  input continue_i,
   input process_i,
   input prim_mubi_pkg::mubi4_t done_i,
 
@@ -147,8 +149,9 @@ module kmac_core
   // Encoded key has wider bits. `key_sliced` is the data to send to sha3
   logic [MsgWidth-1:0] key_sliced [Share];
 
-  sha3_pkg::sha3_mode_e unused_mode;
-  assign unused_mode = mode_i;
+  // The following signals are only used in assertions.
+  logic unused_signals;
+  assign unused_signals = ^{mode_i, key_valid_i};
 
   /////////
   // FSM //
@@ -177,6 +180,10 @@ module kmac_core
       StKmacIdle: begin
         if (kmac_en_i && start_i) begin
           st_d = StKey;
+        end else if (kmac_en_i && continue_i) begin
+          // Resume a saved context. No need to again process the key
+          // as this already was done previously.
+          st_d = StKmacMsg;
         end else begin
           st_d = StKmacIdle;
         end
@@ -235,7 +242,7 @@ module kmac_core
     // SEC_CM: FSM.GLOBAL_ESC, FSM.LOCAL_ESC
     // Unconditionally jump into the terminal error state
     // if the life cycle controller triggers an escalation.
-    if (lc_escalate_en_i != lc_ctrl_pkg::Off) begin
+    if (lc_ctrl_pkg::lc_tx_test_true_loose(lc_escalate_en_i)) begin
       st_d = StTerminalError;
     end
   end
@@ -277,7 +284,7 @@ module kmac_core
   // 1. Prepare left_encode(w)
   // 2. Prepare left_encode(len(secret_key))
   // 3. Concatenate left_encode(len(secret_key)) || secret_key
-  // 4. Concaatenate left_encode(w) || encode_string(secret_key)
+  // 4. Concatenate left_encode(w) || encode_string(secret_key)
   // 5. Based on the address, slice out the data into MsgWidth bits
 
   // left_encode(w): Same as used in sha3pad logic.
@@ -404,8 +411,9 @@ module kmac_core
     .incr_en_i(inc_keyidx),
     .decr_en_i(1'b0),
     .step_i(sha3_pkg::KeccakMsgAddrW'(1)),
+    .commit_i(1'b1),
     .cnt_o(key_index),
-    .cnt_next_o(),
+    .cnt_after_commit_o(),
     .err_o(key_index_error_o)
   );
 
@@ -457,14 +465,8 @@ module kmac_core
           $changed(strength_i) |->
           (st inside {StKmacIdle, StTerminalError}) ||
           ($past(st) == StKmacIdle))
-  `ASSUME(KeyLengthStable_M,
-          $changed(key_len_i) |->
-          (st inside {StKmacIdle, StTerminalError}) ||
-          ($past(st) == StKmacIdle))
-  `ASSUME(KeyDataStable_M,
-          $changed(key_data_i) |->
-          (st inside {StKmacIdle, StTerminalError}) ||
-          ($past(st) == StKmacIdle))
+  `ASSUME(KeyLengthStableWhenValid_M, key_valid_i && !$rose(key_valid_i) |-> $stable(key_len_i))
+  `ASSUME(KeyDataStableWhenValid_M, key_valid_i && !$rose(key_valid_i) |-> $stable(key_data_i))
 
   // no acked to MsgFIFO in StKmacMsg
   `ASSERT(AckOnlyInMessageState_A,

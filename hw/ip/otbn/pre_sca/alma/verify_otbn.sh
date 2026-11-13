@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -36,9 +36,12 @@ python3 verify.py --json tmp/circuit.json \
   --top-module otbn_top_coco \
   --label tmp/labels_updated.txt \
   --vcd tmp/circuit.vcd \
+  --checking-mode per-location \
   --rst-name rst_sys_n \
   --rst-phase 0 \
   --rst-cycles 2 \
   --init-delay 139 \
+  --excluded-signals u_otbn_core.u_otbn_controller.rf_bignum_intg_err_i[0] \
+  --dbg-signals otbn_cycle_cnt_o \
   --cycles 25 \
   --mode stable

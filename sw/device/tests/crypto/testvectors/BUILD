@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,12 +17,36 @@ filegroup(
 )
 
 filegroup(
-    name = "kmac_verify_testvectors_hardcoded",
-    srcs = ["kmac_verify_hardcoded.hjson"],
+    name = "kmac_testvectors_hardcoded",
+    srcs = ["kmac_hardcoded.hjson"],
+)
+
+filegroup(
+    name = "sphincsplus_shake_128s_simple_testvectors_hardcoded",
+    srcs = ["sphincsplus_shake_128s_simple_hardcoded.hjson"],
+)
+
+filegroup(
+    name = "sphincsplus_sha2_128s_simple_testvectors_hardcoded",
+    srcs = ["sphincsplus_sha2_128s_simple_hardcoded.hjson"],
+)
+
+filegroup(
+    name = "hmac_testvectors_random",
+    srcs = ["hmac_testvectors_random.hjson"],
+)
+
+filegroup(
+    name = "kdf_testvectors_random",
+    srcs = ["kdf_testvectors_random.hjson"],
 )
 
 autogen_cryptotest_hjson_external(
     name = "rsa_3072_verify_testvectors_wycheproof",
-    src = "//sw/vendor/wycheproof/testvectors:rsa_signature_3072_sha256_test.json",
+    src = "@wycheproof//testvectors_v1:rsa_signature_3072_sha256_test.json",
     parser = "//sw/device/tests/crypto/testvectors/wycheproof:rsa_3072_verify_parse_testvectors",
 )
+
+exports_files([
+    "sha3_224_hardcoded.hjson",
+])

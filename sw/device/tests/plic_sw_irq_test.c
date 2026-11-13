@@ -1,9 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "hw/top/dt/api.h"      // Generated
+#include "hw/top/dt/rv_plic.h"  // Generated
 #include "sw/device/lib/base/abs_mmio.h"
-#include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_rv_plic.h"
 #include "sw/device/lib/runtime/hart.h"
 #include "sw/device/lib/runtime/irq.h"
@@ -12,12 +13,11 @@
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 #include "sw/device/lib/testing/test_framework/status.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "rv_plic_regs.h"  // Generated.
+#include "hw/top/rv_plic_regs.h"  // Generated.
 
 OTTF_DEFINE_TEST_CONFIG();
 
-static const dif_rv_plic_target_t kPlicTarget = kTopEarlgreyPlicTargetIbex0;
+static const dif_rv_plic_target_t kPlicTarget = 0;
 
 static dif_rv_plic_t plic0;
 
@@ -30,9 +30,11 @@ static uint32_t software_intr_triggered = 0;
 static void plic_configure_irqs(dif_rv_plic_t *plic) {
   // Set IRQ priorities to MAX and Enable the IRQ
   for (int i = 0; i < RV_PLIC_PARAM_NUM_SRC; ++i) {
-    CHECK_DIF_OK(dif_rv_plic_irq_set_priority(plic, i, kDifRvPlicMaxPriority));
+    const dif_rv_plic_irq_id_t irq_id = (dif_rv_plic_irq_id_t)i;
     CHECK_DIF_OK(
-        dif_rv_plic_irq_set_enabled(plic, i, kPlicTarget, kDifToggleEnabled));
+        dif_rv_plic_irq_set_priority(plic, irq_id, kDifRvPlicMaxPriority));
+    CHECK_DIF_OK(dif_rv_plic_irq_set_enabled(plic, irq_id, kPlicTarget,
+                                             kDifToggleEnabled));
   }
 
   // Set Ibex IRQ priority threshold level
@@ -47,7 +49,7 @@ static void plic_configure_irqs(dif_rv_plic_t *plic) {
  * MSIP triggers this. Inside the routine, it reads all Interrupt Pending bits
  * and confirms only MSIP occurs.
  */
-void ottf_external_isr(void) {
+void ottf_external_isr(uint32_t *exc_info) {
   dif_rv_plic_irq_id_t interrupt_id;
 
   ++external_intr_triggered;
@@ -64,7 +66,7 @@ void ottf_external_isr(void) {
  *
  * Only SW ISR should occur in this test.
  */
-void ottf_software_isr(void) {
+void ottf_software_isr(uint32_t *exc_info) {
   LOG_INFO("SOFTWARE ISR entered");
   ++software_intr_triggered;
 
@@ -89,9 +91,8 @@ bool test_main(void) {
   irq_global_ctrl(true);
   irq_external_ctrl(true);
 
-  mmio_region_t plic_base_addr =
-      mmio_region_from_addr(TOP_EARLGREY_RV_PLIC_BASE_ADDR);
-  CHECK_DIF_OK(dif_rv_plic_init(plic_base_addr, &plic0));
+  static_assert(kDtRvPlicCount >= 1, "This test requires an RV PLIC.");
+  CHECK_DIF_OK(dif_rv_plic_init_from_dt((dt_rv_plic_t)0, &plic0));
 
   plic_configure_irqs(&plic0);
 

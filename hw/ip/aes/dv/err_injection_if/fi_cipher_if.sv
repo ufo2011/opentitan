@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -66,7 +66,7 @@ interface fi_cipher_if
     return intf_array.size() + intf_mul_array.size();
   endfunction // get_if_size
 
-  // check which array we need to access and force or releae
+  // check which array we need to access and force or release
   function automatic void force_signal(int target, bit rel, bit [31:0] value);
     if (!rel) aes_cipher_fsm_cg_inst.sample(target);
     if (target < intf_array.size()) begin
@@ -101,12 +101,14 @@ interface fi_cipher_if
       // Similarly, faulting sub_bytes_out_req_i and key_expand_out_req_i to 1 doesn't suffice to
       // make the cipher core advance faster (also depends on cyc_ctr_q).
       //
-      // Therefore, this test only attemps to stall the cipher core by forcing these signals to 0.
+      // Therefore, this test only attempts to stall the cipher core by forcing these signals to 0.
       // For reference, see https://github.com/lowRISC/opentitan/issues/13572 .
       value = 0;
     end else begin
       // Read the current value.
-      uvm_hdl_read(intf_array[target], read);
+      if (!uvm_hdl_read(intf_array[target], read)) begin
+        `uvm_error("fi_cipher_if", $sformatf("Was not able to read %s", intf_array[target]))
+      end
       value = !read;
     end
     // always announce we are forcing something
@@ -124,7 +126,17 @@ interface fi_cipher_if
 
 
   function automatic void release_single_bit(int target);
-    uvm_hdl_release(intf_array[target]);
+
+    //VCS coverage off
+    // pragma coverage off
+
+    if (!uvm_hdl_release(intf_array[target])) begin
+      `uvm_error("fi_cipher_if", $sformatf("Was not able to release %s", intf_array[target]))
+    end
+
+    //VCS coverage on
+    // pragma coverage on
+
     $asserton(0,"tb.dut");
   endfunction
 
@@ -151,7 +163,9 @@ interface fi_cipher_if
       value = value & 2'h3;
     end else begin
       // Read the current value.
-      uvm_hdl_read(intf_mul_array[target], read);
+      if (!uvm_hdl_read(intf_mul_array[target], read)) begin
+        `uvm_error("fi_cipher_if", $sformatf("Was not able to read %s", intf_mul_array[target]))
+      end
       if (check_target_name(intf_mul_array[target], "sel_o")) begin
         // The selector signals are OR-combined. Flipping one bit in one rail to zero doesn't have
         // an effect and cannot be detected. Therefore, this test forces a least one additional bit
@@ -177,9 +191,19 @@ interface fi_cipher_if
 
 
   function automatic void release_multi_bit(int target);
-    uvm_hdl_release(intf_mul_array[target]);
+
+    //VCS coverage off
+    // pragma coverage off
+
+    if (!uvm_hdl_release(intf_mul_array[target])) begin
+      `uvm_error("fi_cipher_if", $sformatf("Was not able to release %s", intf_mul_array[target]))
+    end
+
+    //VCS coverage on
+    // pragma coverage on
+
     $asserton(0,"tb.dut");
-  endfunction // release_single_bit
+  endfunction
 
 
 
@@ -189,7 +213,7 @@ interface fi_cipher_if
 
   covergroup aes_cipher_fsm_cg (int num_bins) with function sample(int target);
     // We want to see coverage per instance,
-    // but as the code are copies of eachother
+    // but as the code are copies of each other
     // we don't need every instance to achieve 100% coverage
     // a total of 100% is enough so we set the option
     // to merge the coverage of the instances

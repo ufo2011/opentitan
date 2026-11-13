@@ -1,7 +1,8 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "hw/top/dt/aon_timer.h"
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_pwrmgr.h"
 #include "sw/device/lib/dif/dif_rstmgr.h"
@@ -11,7 +12,12 @@
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
+static const dt_rstmgr_t kRstmgrDt = 0;
+static_assert(kDtRstmgrCount == 1, "this test expects a rstmgr");
+static const dt_pwrmgr_t kPwrmgrDt = 0;
+static_assert(kDtPwrmgrCount == 1, "this test expects a pwrmgr");
+static const dt_aon_timer_t kAonTimerDt = 0;
+static_assert(kDtAonTimerCount == 1, "this test expects an aon_timer");
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -26,26 +32,29 @@ bool test_main(void) {
   dif_rstmgr_t rstmgr;
 
   // Initialize pwrmgr since this will put the chip in deep sleep.
-  CHECK_DIF_OK(dif_pwrmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_PWRMGR_AON_BASE_ADDR), &pwrmgr));
+  CHECK_DIF_OK(dif_pwrmgr_init_from_dt(kPwrmgrDt, &pwrmgr));
 
   // Initialize rstmgr since this will check some registers.
-  CHECK_DIF_OK(dif_rstmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR), &rstmgr));
+  CHECK_DIF_OK(dif_rstmgr_init_from_dt(kRstmgrDt, &rstmgr));
 
   // Notice we are clearing rstmgr's RESET_INFO, so after the power glitch there
   // is only one bit set.
 
-  if (rstmgr_testutils_is_reset_info(&rstmgr, kDifRstmgrResetInfoPor)) {
+  if (UNWRAP(rstmgr_testutils_is_reset_info(&rstmgr, kDifRstmgrResetInfoPor))) {
     LOG_INFO("Powered up for the first time, begin test");
 
-    CHECK(pwrmgr_testutils_is_wakeup_reason(&pwrmgr, 0));
+    CHECK(UNWRAP(pwrmgr_testutils_is_wakeup_reason(&pwrmgr, 0)) == true);
 
-    rstmgr_testutils_pre_reset(&rstmgr);
+    CHECK_STATUS_OK(rstmgr_testutils_pre_reset(&rstmgr));
 
+    // Any wakeup source will do.
+    dif_pwrmgr_request_sources_t wakeup_sources;
+    CHECK_DIF_OK(dif_pwrmgr_find_request_source(
+        &pwrmgr, kDifPwrmgrReqTypeWakeup, dt_aon_timer_instance_id(kAonTimerDt),
+        kDtAonTimerWakeupWkupReq, &wakeup_sources));
     // Configure deep sleep.
-    pwrmgr_testutils_enable_low_power(&pwrmgr,
-                                      kDifPwrmgrWakeupRequestSourceFive, 0);
+    CHECK_STATUS_OK(
+        pwrmgr_testutils_enable_low_power(&pwrmgr, wakeup_sources, 0));
 
     // This causes core_sleeping to rise and triggers the injection of the
     // power glitch. Enter low power mode.
@@ -53,10 +62,10 @@ bool test_main(void) {
     wait_for_interrupt();
   } else {
     LOG_INFO("Checking reset status.");
-    rstmgr_testutils_post_reset(
+    CHECK_STATUS_OK(rstmgr_testutils_post_reset(
         &rstmgr,
         kDifRstmgrResetInfoPowerUnstable | kDifRstmgrResetInfoLowPowerExit, 0,
-        0, 0, 0);
+        0, 0, 0));
     LOG_INFO("Reset status indicates a power glitch and a deep sleep wakeup");
   }
   return true;

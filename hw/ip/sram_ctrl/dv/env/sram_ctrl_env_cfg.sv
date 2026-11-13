@@ -1,16 +1,25 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-class sram_ctrl_env_cfg #(parameter int AddrWidth = 10)
+class sram_ctrl_env_cfg #(parameter int MemDepth = 1024)
     extends cip_base_env_cfg #(.RAL_T(sram_ctrl_regs_reg_block));
 
-  `uvm_object_param_utils_begin(sram_ctrl_env_cfg#(AddrWidth))
+  `uvm_object_param_utils_begin(sram_ctrl_env_cfg#(MemDepth))
   `uvm_object_utils_end
 
   `uvm_object_new
 
   string sram_ral_name = "sram_ctrl_prim_reg_block";
+
+  // This tracks a key request.
+  bit in_key_req = 1'b0;
+
+  // This tracks when the ram is undergoing initialization in the scoreboard.
+  bit in_init = 1'b0;
+
+  // Disables certain checks for FI tests.
+  bit is_fi_test = 1'b0;
 
   // ext component cfgs
   rand push_pull_agent_cfg#(.DeviceDataWidth(KDI_DATA_SIZE)) m_kdi_cfg;
@@ -20,11 +29,12 @@ class sram_ctrl_env_cfg #(parameter int AddrWidth = 10)
   virtual clk_rst_if otp_clk_rst_vif;
   virtual sram_ctrl_lc_if lc_vif;
   virtual sram_ctrl_exec_if exec_vif;
-  mem_bkdr_util mem_bkdr_util_h;
+  sram_ctrl_bkdr_util sram_ctrl_bkdr_util_h;
+  virtual sram_ctrl_fault_if fault_vif;
 
   // Store the scb handle for seq. When seq initializes the mem, we should initialize mem_model in
   // scb as well.
-  sram_ctrl_scoreboard#(AddrWidth) scb;
+  sram_ctrl_scoreboard#(MemDepth) scb;
 
   // otp clk freq
   rand uint otp_freq_mhz;
@@ -32,21 +42,26 @@ class sram_ctrl_env_cfg #(parameter int AddrWidth = 10)
   constraint otp_freq_mhz_c {
     `DV_COMMON_CLK_CONSTRAINT(otp_freq_mhz)
   }
-  virtual function void initialize(bit [31:0] csr_base_addr = '1);
+
+  virtual function void initialize(bit inherit_ral_models = 1'b0);
     list_of_alerts = sram_ctrl_env_pkg::LIST_OF_ALERTS;
     tl_intg_alert_name = "fatal_error";
     sec_cm_alert_name  = tl_intg_alert_name;
 
-    // Set up second RAL model for SRAM memory and associated collateral
-    ral_model_names.push_back(sram_ral_name);
+    // Request a second RAL model for SRAM memory and associated collateral, by adding mem_ral_name
+    // to the set of known model names. The associated value has no meaning.
+    ral_model_names[sram_ral_name] = 1'b0;
 
-    super.initialize(csr_base_addr);
+    super.initialize(inherit_ral_models);
     tl_intg_alert_fields[ral.status.bus_integ_error] = 1;
 
     // Build KDI cfg object and configure
     m_kdi_cfg = push_pull_agent_cfg#(.DeviceDataWidth(KDI_DATA_SIZE))::type_id::create("m_kdi_cfg");
     m_kdi_cfg.agent_type = push_pull_agent_pkg::PullAgent;
     m_kdi_cfg.if_mode = dv_utils_pkg::Device;
+    m_kdi_cfg.pull_handshake_type = push_pull_agent_pkg::TwoPhase;
+    m_kdi_cfg.device_delay_min = 30;
+    m_kdi_cfg.device_delay_max = 80;
 
     // CDC synchronization between OTP and SRAM clock domains requires that the scrambling seed data
     // should be held for at least a few cycles before it can be safely latched by the SRAM domain.
@@ -55,7 +70,7 @@ class sram_ctrl_env_cfg #(parameter int AddrWidth = 10)
     m_kdi_cfg.hold_d_data_until_next_req = 1'b1;
 
     // KDI interface will never need zero delay mode.
-    // As per SRAM spec, KDI process will generally take around 800 CPU cyclesj
+    // As per SRAM spec, KDI process will generally take around 800 CPU cycles.
     m_kdi_cfg.zero_delays.rand_mode(0);
 
     `uvm_info(`gfn, $sformatf("ral_model_names: %0p", ral_model_names), UVM_LOW)
@@ -82,11 +97,11 @@ class sram_ctrl_env_cfg #(parameter int AddrWidth = 10)
   //
   // Note that the SRAM only has 2 RAL models, one is the "default" CSR model,
   // and the other is the custom model to represent the memory primitive.
-  virtual function dv_base_reg_block create_ral_by_name(string name);
+  virtual protected function dv_base_reg_block create_ral_by_name(string name);
     if (name == RAL_T::type_name) begin
       return super.create_ral_by_name(name);
     end else if (name == sram_ral_name) begin
-      return sram_ctrl_prim_reg_block#(AddrWidth)::type_id::create(sram_ral_name);
+      return sram_ctrl_prim_reg_block#(MemDepth)::type_id::create(sram_ral_name);
     end else begin
       `uvm_error(`gfn, $sformatf("%0s is an illegal RAL model name", name))
     end

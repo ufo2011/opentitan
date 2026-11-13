@@ -1,13 +1,26 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "hw/top/dt/aes.h"
+#include "hw/top/dt/alert_handler.h"
+#include "hw/top/dt/csrng.h"
+#include "hw/top/dt/edn.h"
+#include "hw/top/dt/entropy_src.h"
+#include "hw/top/dt/keymgr_dpe.h"
+#include "hw/top/dt/kmac.h"
+#include "hw/top/dt/otbn.h"
+#include "hw/top/dt/otp_ctrl.h"
+#include "hw/top/dt/pwrmgr.h"
+#include "hw/top/dt/rv_core_ibex.h"
+#include "sw/device/lib/arch/boot_stage.h"
+#include "sw/device/lib/arch/device.h"
 #include "sw/device/lib/base/memory.h"
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_aes.h"
 #include "sw/device/lib/dif/dif_alert_handler.h"
 #include "sw/device/lib/dif/dif_entropy_src.h"
-#include "sw/device/lib/dif/dif_keymgr.h"
+#include "sw/device/lib/dif/dif_keymgr_dpe.h"
 #include "sw/device/lib/dif/dif_kmac.h"
 #include "sw/device/lib/dif/dif_otbn.h"
 #include "sw/device/lib/dif/dif_otp_ctrl.h"
@@ -16,16 +29,18 @@
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/aes_testutils.h"
 #include "sw/device/lib/testing/alert_handler_testutils.h"
+#include "sw/device/lib/testing/entropy_src_testutils.h"
 #include "sw/device/lib/testing/entropy_testutils.h"
-#include "sw/device/lib/testing/keymgr_testutils.h"
+#include "sw/device/lib/testing/keymgr_dpe_testutils.h"
 #include "sw/device/lib/testing/otp_ctrl_testutils.h"
 #include "sw/device/lib/testing/pwrmgr_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
+#include "sw/device/lib/testing/test_framework/ottf_alerts.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
+#include "sw/device/silicon_creator/lib/drivers/retention_sram.h"
 #include "sw/device/tests/otbn_randomness_impl.h"
 
-#include "alert_handler_regs.h"  // Generated.
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
+#include "hw/top/alert_handler_regs.h"  // Generated.
 
 static dif_aes_t aes;
 static dif_csrng_t csrng;
@@ -33,13 +48,12 @@ static dif_edn_t edn0;
 static dif_edn_t edn1;
 static dif_entropy_src_t entropy_src;
 static dif_kmac_t kmac;
-static dif_keymgr_t kmgr;
+static dif_keymgr_dpe_t keymgr_dpe;
 static dif_otbn_t otbn;
 static dif_otp_ctrl_t otp;
 static dif_pwrmgr_t pwrmgr;
 static dif_rv_core_ibex_t ibex;
 static dif_alert_handler_t alert_handler;
-static dif_rv_core_ibex_fpga_info_t fpga_info;
 
 enum {
   kFpgaLoop = 5,
@@ -63,6 +77,7 @@ static void aes_test(const dif_aes_t *aes) {
       .mask_reseeding = kDifAesReseedPerBlock,
       .manual_operation = kDifAesManualOperationManual,
       .reseed_on_key_change = false,
+      .keep_start_trigger_high = false,
       .ctrl_aux_lock = false,
   };
   CHECK_DIF_OK(dif_aes_start(aes, &transaction, /*key=*/NULL, /*iv=*/NULL));
@@ -73,8 +88,6 @@ static void aes_test(const dif_aes_t *aes) {
  * Configure the kmac to use entropy from edn to request entropy.
  */
 static void kmac_test(dif_kmac_t *kmac) {
-  dif_kmac_operation_state_t kmac_operation_state;
-
   LOG_INFO("%s", __func__);
 
   dif_kmac_config_t config = (dif_kmac_config_t){
@@ -85,10 +98,15 @@ static void kmac_test(dif_kmac_t *kmac) {
 }
 
 /**
- * Configure the opt to request entropy from the edn.
+ * Configure the otp to request entropy from the edn.
  */
 static void otp_ctrl_test(const dif_otp_ctrl_t *otp) {
   LOG_INFO("%s", __func__);
+  // In the owner stage, the OTP direct access interface is blocked by the ePMP
+  // so we cannot run this test.
+  if (kBootStage == kBootStageOwner) {
+    return;
+  }
 
   // For security reasons, the LFSR is periodically reseeded with entropy coming
   // from EDN. Setting the integrity period to a small value will make the
@@ -99,23 +117,65 @@ static void otp_ctrl_test(const dif_otp_ctrl_t *otp) {
       .consistency_period_mask = 0x3ffffff,
   };
   CHECK_DIF_OK(dif_otp_ctrl_configure(otp, config));
-  otp_ctrl_testutils_wait_for_dai(otp);
+  CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(otp));
 }
 
 /**
  * Configure the reseed interval to a short period and
- * advance to the `kDifKeymgrStateInitialized` to request entropy from the edn.
+ * advance to the `kDifKeymgrDpeStateAvailable` to request entropy from the edn.
  */
-static void keymgr_test(const dif_keymgr_t *kmgr) {
-  /**
-   * Key manager can only be tested once per boot.
-   */
+static void keymgr_dpe_test(const dif_keymgr_dpe_t *keymgr_dpe) {
+  // keymgr dpe can only be tested once per boot.
   static bool tested = false;
+
   if (!tested) {
     LOG_INFO("%s", __func__);
-    dif_keymgr_config_t config = {.entropy_reseed_interval = 4};
-    CHECK_DIF_OK(dif_keymgr_configure(kmgr, config));
-    CHECK_DIF_OK(dif_keymgr_advance_state(kmgr, NULL));
+
+    // Setup reseed interval
+    dif_keymgr_dpe_config_t config = {.entropy_reseed_interval = 4};
+    CHECK_DIF_OK(dif_keymgr_dpe_configure(keymgr_dpe, config));
+
+    // Exclude some part when using the real ROM!
+    if (retention_sram_get()
+            ->creator
+            .reserved[ARRAYSIZE((retention_sram_t){0}.creator.reserved) - 1] ==
+        TEST_ROM_IDENTIFIER) {
+      LOG_INFO(
+          "TEST ROM identified - keymgr dpe is in `kDifKeymgrDpeStateReset`");
+      // Verify the keymgr dpe is in the reset state
+      CHECK_STATUS_OK(keymgr_dpe_testutils_check_state(
+          keymgr_dpe, kDifKeymgrDpeStateReset));
+      // Initialize the keymgr dpe with the UDS
+      CHECK_STATUS_OK(
+          keymgr_dpe_testutils_initial_load_uds(keymgr_dpe, &kInitialParams));
+      // Verify the keymgr dpe loaded the UDS
+      CHECK_STATUS_OK(keymgr_dpe_testutils_check_state(
+          keymgr_dpe, kDifKeymgrDpeStateAvailable));
+
+      // Derive the first DPE context from the UDS
+      CHECK_STATUS_OK(keymgr_dpe_testutils_advance_state(
+          keymgr_dpe, &kCreatorRootKeyParams));
+      // TODO(#30759): Verify the kCreatorRootKeyParams.slot_dst_sel
+      // hold keys with boot stage set to BootStageCreatorInt (1). (Note:
+      // Current bootstage + 1)
+    } else {
+      LOG_INFO(
+          "ROM identified - keymgr_dpe is in `kDifKeymgrDpeStateAvailable `"
+          "and has derived the `CreatorRootKey`");
+      // Verify the keymgr dpe is in the reset state
+      CHECK_STATUS_OK(keymgr_dpe_testutils_check_state(
+          keymgr_dpe, kDifKeymgrDpeStateAvailable));
+      // TODO(#30759): Verify the kCreatorRootKeyParams.slot_dst_sel
+      // hold keys with boot stage set to BootStageCreatorInt (1). (Note:
+      // Current bootstage + 1)
+    }
+
+    // TODO(#30777): This key generation only works because the slot number
+    // defined by the `kKeyVersionedParams` matches the `kKeymgrDPEAttestSlot`
+    // defined in rom.c
+    CHECK_STATUS_OK(
+        keymgr_dpe_testutils_generate_key(keymgr_dpe, &kKeyVersionedParams));
+
     tested = true;
   }
 }
@@ -171,8 +231,8 @@ static void alert_handler_configure(const dif_alert_handler_t *alert_handler) {
       .classes_len = ARRAYSIZE(class_configs),
       .ping_timeout = 10,
   };
-  alert_handler_testutils_configure_all(alert_handler, config,
-                                        kDifToggleEnabled);
+  CHECK_STATUS_OK(alert_handler_testutils_configure_all(alert_handler, config,
+                                                        kDifToggleEnabled));
 }
 
 /**
@@ -186,66 +246,64 @@ static void alert_handler_test(const dif_pwrmgr_t *pwrmgr) {
 }
 
 void test_initialize(void) {
-  CHECK_DIF_OK(dif_entropy_src_init(
-      mmio_region_from_addr(TOP_EARLGREY_ENTROPY_SRC_BASE_ADDR), &entropy_src));
-  CHECK_DIF_OK(dif_csrng_init(
-      mmio_region_from_addr(TOP_EARLGREY_CSRNG_BASE_ADDR), &csrng));
-  CHECK_DIF_OK(
-      dif_edn_init(mmio_region_from_addr(TOP_EARLGREY_EDN0_BASE_ADDR), &edn0));
-  CHECK_DIF_OK(
-      dif_edn_init(mmio_region_from_addr(TOP_EARLGREY_EDN1_BASE_ADDR), &edn1));
-  CHECK_DIF_OK(dif_rv_core_ibex_init(
-      mmio_region_from_addr(TOP_EARLGREY_RV_CORE_IBEX_CFG_BASE_ADDR), &ibex));
-  CHECK_DIF_OK(dif_pwrmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_PWRMGR_AON_BASE_ADDR), &pwrmgr));
-  CHECK_DIF_OK(dif_keymgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_KEYMGR_BASE_ADDR), &kmgr));
-  CHECK_DIF_OK(
-      dif_otbn_init(mmio_region_from_addr(TOP_EARLGREY_OTBN_BASE_ADDR), &otbn));
-  CHECK_DIF_OK(dif_otp_ctrl_init(
-      mmio_region_from_addr(TOP_EARLGREY_OTP_CTRL_CORE_BASE_ADDR), &otp));
-  CHECK_DIF_OK(
-      dif_aes_init(mmio_region_from_addr(TOP_EARLGREY_AES_BASE_ADDR), &aes));
-  CHECK_DIF_OK(
-      dif_kmac_init(mmio_region_from_addr(TOP_EARLGREY_KMAC_BASE_ADDR), &kmac));
-  CHECK_DIF_OK(dif_alert_handler_init(
-      mmio_region_from_addr(TOP_EARLGREY_ALERT_HANDLER_BASE_ADDR),
-      &alert_handler));
+  CHECK_DIF_OK(dif_entropy_src_init_from_dt(kDtEntropySrc, &entropy_src));
+  CHECK_DIF_OK(dif_csrng_init_from_dt(kDtCsrng, &csrng));
+  CHECK_DIF_OK(dif_edn_init_from_dt(kDtEdn0, &edn0));
+  CHECK_DIF_OK(dif_edn_init_from_dt(kDtEdn1, &edn1));
+  CHECK_DIF_OK(dif_rv_core_ibex_init_from_dt(kDtRvCoreIbex, &ibex));
+  CHECK_DIF_OK(dif_pwrmgr_init_from_dt(kDtPwrmgr, &pwrmgr));
+  CHECK_DIF_OK(dif_keymgr_dpe_init_from_dt(kDtKeymgrDpe, &keymgr_dpe));
+  CHECK_DIF_OK(dif_otbn_init_from_dt(kDtOtbn, &otbn));
+  CHECK_DIF_OK(dif_otp_ctrl_init_from_dt(kDtOtpCtrl, &otp));
+  CHECK_DIF_OK(dif_aes_init_from_dt(kDtAes, &aes));
+  CHECK_DIF_OK(dif_kmac_init_from_dt(kDtKmac, &kmac));
+  CHECK_DIF_OK(dif_alert_handler_init_from_dt(kDtAlertHandler, &alert_handler));
+
+  // We intentionally trigger this alert later, ignore it in OTTF.
+  CHECK_STATUS_OK(ottf_alerts_ignore_alert(
+      dt_pwrmgr_alert_to_alert_id(kDtPwrmgr, kDtPwrmgrAlertFatalFault)));
 }
 
-/**
- * TODO: Run the test entropy src end reqs in continuous mode
- * (https://github.com/lowRISC/opentitan/issues/13393)
- */
-bool test_main() {
-  test_initialize();
-
-  alert_handler_configure(&alert_handler);
-  entropy_testutils_auto_mode_init();
-
-  // ensure health tests are actually running
-  entropy_testutils_wait_for_state(&entropy_src,
-                                   kDifEntropySrcMainFsmStateContHTRunning);
-
-  CHECK_DIF_OK(dif_rv_core_ibex_read_fpga_info(&ibex, &fpga_info));
-  uint32_t loop = (fpga_info != 0) ? kFpgaLoop : 1;
+status_t execute_test(void) {
+  uint32_t loop = (kDeviceType == kDeviceFpgaCw340) ? kFpgaLoop : 1;
 
   for (size_t i = 0; i < loop; ++i) {
     LOG_INFO("Entropy src test %d/%d", i, loop);
     alert_handler_test(&pwrmgr);
     aes_test(&aes);
-    otbn_randomness_test_start(&otbn);
-    keymgr_test(&kmgr);
+    otbn_randomness_test_start(&otbn, /*iters=*/0);
     otp_ctrl_test(&otp);
     kmac_test(&kmac);
+    // This function needs to be called after the kmac test as otherwise a
+    // recoverable fault arises. The reason is the "keymgr_dpe_test" requires
+    // a fully configured kmac unit including the entropy mode.
+    keymgr_dpe_test(&keymgr_dpe);
     ibex_test(&ibex);
 
     AES_TESTUTILS_WAIT_FOR_STATUS(&aes, kDifAesStatusIdle, /*value=*/true,
                                   /*timeout_usec=*/100000);
     CHECK(otbn_randomness_test_end(&otbn, /*skip_otbn_done_check=*/false));
-    keymgr_testutils_wait_for_operation_done(&kmgr);
-    keymgr_testutils_check_state(&kmgr, kDifKeymgrStateInitialized);
-    entropy_testutils_error_check(&entropy_src, &csrng, &edn0, &edn1);
+    CHECK_STATUS_OK(entropy_testutils_error_check(&csrng, &edn0, &edn1));
   }
-  return true;
+
+  return OK_STATUS();
+}
+
+bool test_main(void) {
+  test_initialize();
+
+  // The keymgr cannot be initialized after ROM_EXT because the flash controller
+  // is locked out with the ePMP.
+  if (kBootStage != kBootStageOwner) {
+    CHECK_STATUS_OK(keymgr_dpe_testutils_init_nvm_then_reset());
+  }
+
+  alert_handler_configure(&alert_handler);
+  CHECK_STATUS_OK(entropy_testutils_auto_mode_init());
+
+  // ensure health tests are actually running
+  CHECK_STATUS_OK(entropy_src_testutils_wait_for_state(
+      &entropy_src, kDifEntropySrcMainFsmStateContHTRunning));
+
+  return status_ok(execute_test());
 }

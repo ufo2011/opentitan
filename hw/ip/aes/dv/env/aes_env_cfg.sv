@@ -1,8 +1,8 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
+class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block_extended));
 
   `uvm_object_utils_begin(aes_env_cfg)
   `uvm_object_utils_end
@@ -25,6 +25,7 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
   virtual fi_control_if aes_control_fi_vif[Sp2VWidth];
   virtual fi_cipher_if aes_cipher_control_fi_vif[Sp2VWidth];
   virtual fi_ctr_fsm_if aes_ctr_fsm_fi_vif[Sp2VWidth];
+  virtual fi_ghash_if aes_ghash_fi_vif;
   virtual fi_core_if aes_core_fi_vif;
 
   rand key_sideload_agent_cfg keymgr_sideload_agent_cfg;
@@ -35,6 +36,8 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
   int                num_messages_max            = 1;
   int                message_len_min             = 128;
   int                message_len_max             = 128;
+  int                aad_len_min                 = 128;
+  int                aad_len_max                 = 128;
   bit                use_key_mask                = 0;
   bit                use_c_model_pct             = 0;
 
@@ -44,13 +47,14 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
   bit                random_data_key_iv_order    = 1;
 
   // Mode distribution //
-  // There are 5 modes (ecb, cbc, ofb, cfb, ctr). The weight for mode X is called X_weight. By
-  // default, all weights are set equal at 10 (so each is selected 10/50 = 20% of the time).
+  // There are 6 modes (ecb, cbc, ofb, cfb, ctr, gcm). The weight for mode X is called X_weight. By
+  // default, all weights are set equal at 10 (so each is selected 10/60 = 16.66% of the time).
   int                ecb_weight                 = 10;
   int                cbc_weight                 = 10;
   int                ofb_weight                 = 10;
   int                cfb_weight                 = 10;
   int                ctr_weight                 = 10;
+  int                gcm_weight                 = 10;
 
   // KEYLEN weights
   // change of selecting 128b key
@@ -59,8 +63,8 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
   int                key_192b_weight            = 10;
   int                key_256b_weight            = 10;
 
-  // reseed weigth
-  int                per8_weight                = 60;
+  // reseed weight
+  int                per1_weight                = 60;
   int                per64_weight               = 30;
   int                per8k_weight               = 10;
 
@@ -76,9 +80,11 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
   bit                fixed_data_en              = 0;
   // fixed operation
   bit                fixed_operation_en         = 0;
-  bit                fixed_operation            = 1'b0;
+  bit [1:0]          fixed_operation            = AES_ENC;
   // fixed iv (will set all to bits 0)
   bit                fixed_iv_en                = 0;
+  // fixed aad (will set all to bits 0)
+  bit                fixed_aad_en               = 0;
 
   bit                fixed_keylen_en            = 0;
   bit [2:0]          fixed_keylen               = 3'b001;
@@ -90,10 +96,16 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
   //   [3]: inject Lc_escalate
   error_types_t      error_types                = 4'b1111;
 
-  //   [2]: reseed error
-  //   [1]: mode error
-  //   [0]: key_len
-  cfg_error_type_t   config_error_type          = 3'b000;
+  //   [0]: op_error
+  //   [1]: reseed error
+  //   [2]: mode error
+  //   [3]: key_len
+  //   [4]: gcm_phase
+  cfg_error_type_t   config_error_type_en       = '{gcm_phase:1'b1,
+                                                    key_len:  1'b1,
+                                                    mode:     1'b1,
+                                                    rsd_rate: 1'b1,
+                                                    op:       1'b1};
   int                config_error_pct           = 30;
 
   // min and max wait (clk) before an error injection
@@ -102,12 +114,7 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
   int                inj_max_delay              = 1000;
   rand int           inj_delay;
 
-  rand flip_rst_lc_esc_e    flip_rst_lc_esc;
-
-  // number of messages that was selected to be corrupt
-  // these should be excluded from the num_messages count
-  // when checking that all messages was processed
-  int                num_corrupt_messages       = 0;
+  rand alert_reset_trigger_e alert_reset_trigger;
 
   // clear register percentage
   // percentage of items that will try to clear
@@ -128,8 +135,24 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
   // dont touch updated by env //
   ///////////////////////////////
 
-  // keep track of how many packets was split
+  // keep track of:
+  // - total number of expected messages
+  int                num_messages_tot           = 0;
+  // - number of messages that was selected to be corrupt
+  //   these should be excluded from the num_messages count
+  //   when checking that all messages was processed
+  int                num_corrupt_messages       = 0;
+  // - number of good messages
+  int                good_cnt                   = 0;
+  // - number of aes_mode errors seen
+  int                corrupt_cnt                = 0;
+  // - number of skipped messages
+  int                skipped_cnt                = 0;
+  // - number of packets that were split
   int                split_cnt                  = 0;
+
+  // set when test is trying to end to indicate the last message is finished
+  bit                finish_message             = 0;
 
   // rand variables
   // 0: C model 1: OPEN_SSL/BORING_SSL
@@ -139,7 +162,7 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
   // number of messages to encrypt/decrypt
   rand int           num_messages;
 
-  // TL UL contraints //
+  // TL UL constraints //
   rand tl_ul_access_e host_resp_speed;
 
   rand bit           do_reseed;
@@ -154,14 +177,16 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
 
   constraint inj_delay_c    {inj_delay    inside {[inj_min_delay : inj_max_delay]};}
 
-  constraint flip_rst_lc_esc_c { if ( |error_types[3:1]) {
-                                   flip_rst_lc_esc dist { Flip_bits   :/ error_types.mal_inject,
-                                                          Pull_reset  :/ error_types.reset,
-                                                          Lc_escalate :/ error_types.lc_esc};
-                                 } else {
-                                   flip_rst_lc_esc == Flip_bits;
-                                 }
-                               }
+  constraint alert_reset_trigger_c {
+      if ( |error_types[3:1]) {
+          alert_reset_trigger dist { ShadowRegStorageErr :/ 4 * error_types.mal_inject,
+                                     PullReset           :/ 4 * error_types.reset,
+                                     LcEscalate          :/ 4 * error_types.lc_esc,
+                                     AlertTest           :/     error_types.mal_inject};
+        } else {
+          alert_reset_trigger == ShadowRegStorageErr;
+        }
+      }
 
   constraint reseed_rate_c {reseed_rate dist { 3'b001 :/ 1,
                                                3'b010 :/ 1,
@@ -201,6 +226,8 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
     str = {str,  $sformatf("\n\t ----| Min Number of message %d \t ", num_messages_min)};
     str = {str,  $sformatf("\n\t ----| Max message len %d bytes \t ", message_len_max)};
     str = {str,  $sformatf("\n\t ----| Min message len %d bytes \t ", message_len_min)};
+    str = {str,  $sformatf("\n\t ----| Max aad len %d bytes     \t ", aad_len_max)};
+    str = {str,  $sformatf("\n\t ----| Min aad len %d bytes     \t ", aad_len_min)};
     str = {str,  $sformatf("\n\t ----| Host response speed %s   \t ", host_resp_speed.name())};
     str = {str,  $sformatf("\n\t ----| Reference model:\t    %s              \t ",
          (ref_model==0) ? "C-MODEL" : "OPEN_SSL" )};
@@ -208,6 +235,7 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
     str = {str,  $sformatf("\n\t ----| ECB Weight: %d         \t ", ecb_weight)};
     str = {str,  $sformatf("\n\t ----| CBC Weight: %d         \t ", cbc_weight)};
     str = {str,  $sformatf("\n\t ----| CFB Weight: %d         \t ", cfb_weight)};
+    str = {str,  $sformatf("\n\t ----| GCM Weight: %d         \t ", gcm_weight)};
     str = {str,  $sformatf("\n\t ----| OFB Weight: %d         \t ", ofb_weight)};
     str = {str,  $sformatf("\n\t ----| CTR Weight: %d         \t ", ctr_weight)};
     str = {str,  $sformatf("\n\t ----| key mask:   %b         \t ", key_mask)};
@@ -216,16 +244,20 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
     return str;
   endfunction
 
-  virtual function void initialize(bit [TL_AW-1:0] csr_base_addr = '1);
+  virtual function void initialize(bit inherit_ral_models = 1'b0);
     list_of_alerts = aes_env_pkg::LIST_OF_ALERTS;
-    keymgr_sideload_agent_cfg = key_sideload_agent_cfg#(keymgr_pkg::hw_key_req_t)::type_id
+    keymgr_sideload_agent_cfg = key_sideload_agent_cfg#(keymgr_dpe_pkg::hw_key_req_t)::type_id
                                 ::create("keymgr_sideload_agent_cfg");
     keymgr_sideload_agent_cfg.start_default_seq = 0;
     num_edn = 1;
-    super.initialize(csr_base_addr);
+    super.initialize(inherit_ral_models);
+
+    can_reset_with_csr_accesses = 1;
+
     tl_intg_alert_fields[ral.status.alert_fatal_fault] = 1;
     shadow_update_err_status_fields[ral.status.alert_recov_ctrl_update_err] = 1;
     shadow_storage_err_status_fields[ral.status.alert_fatal_fault] = 1;
+
     // get aes reseed check interface handle
     if (!uvm_config_db#(virtual aes_reseed_if)::get(null, "*.env" , "aes_reseed_vif",
                                                     aes_reseed_vif)) begin
@@ -280,6 +312,12 @@ class aes_env_cfg extends cip_base_env_cfg #(.RAL_T(aes_reg_block));
                            $sformatf("aes_ctr_fsm_fi_vif_%0d",  nn),
                            aes_ctr_fsm_fi_vif[nn])) begin
         `uvm_fatal(`gfn, $sformatf("FAILED TO GET HANDLE TO ROUND COUNTER INJECT INTERFACE %d",nn))
+      end
+    end
+    if (`EN_GCM) begin
+      if (!uvm_config_db#(virtual fi_ghash_if)::get(null, "*.env", "aes_ghash_fi_vif",
+                           aes_ghash_fi_vif)) begin
+        `uvm_fatal(`gfn, "FAILED TO GET HANDLE TO GHASH FAULT INJECTION INTERFACE")
       end
     end
     if (!uvm_config_db#(virtual fi_core_if)::get(null, "*.env", "aes_core_fi_vif",

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,6 +34,7 @@ class alert_handler_entropy_stress_vseq extends alert_handler_smoke_vseq;
 
     foreach (cfg.alert_host_cfg[i]) begin
       cfg.alert_host_cfg[i].alert_delay_max = 0;
+      cfg.alert_host_cfg[i].ping_delay_min = 0;
       cfg.alert_host_cfg[i].ping_delay_max = 0;
     end
     super.pre_start();

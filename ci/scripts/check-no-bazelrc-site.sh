@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 set -e
 
 if [ -f .bazelrc-site ]; then
-    echo -n "##vso[task.logissue type=error]"
+    echo -n "::error::"
     echo "The .bazelrc-site file should not appear in a clean checkout"
     exit 1
 fi

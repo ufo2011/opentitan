@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -33,9 +33,8 @@
                 "{proj_root}/hw/dv/tools/dvsim/tests/csr_tests.hjson",
                 "{proj_root}/hw/dv/tools/dvsim/tests/shadow_reg_errors_tests.hjson",
                 "{proj_root}/hw/dv/tools/dvsim/tests/tl_access_tests.hjson",
-                "{proj_root}/hw/dv/tools/dvsim/tests/sec_cm_tests.hjson"]
-                // TODO: enable stress tests later.
-                // "{proj_root}/hw/dv/tools/dvsim/tests/stress_tests.hjson"]
+                "{proj_root}/hw/dv/tools/dvsim/tests/sec_cm_tests.hjson",
+                "{proj_root}/hw/dv/tools/dvsim/tests/stress_tests.hjson"]
 
   // Add additional tops for simulation.
   sim_tops: [ "aes_bind",
@@ -48,7 +47,7 @@
   xcelium_cov_refine_files: []
 
   // Default iterations for all tests - each test entry can override this.
-  reseed: 50
+  reseed: 10
 
   // Need to override the default output directory
   overrides: [
@@ -66,12 +65,26 @@
     {
       name: aes_unmasked
       build_opts: ["+define+EN_MASKING=0",
-                   "+define+SBOX_IMPL=aes_pkg::SBoxImplCanright" ]
+                   "+define+SBOX_IMPL=aes_pkg::SBoxImplCanright",
+                   "+define+EN_GCM=0"]
     }
     {
       name: aes_masked
-        build_opts: ["+define+EN_MASKING=1",
-                     "+define+SBOX_IMPL=aes_pkg::SBoxImplDom" ]
+      build_opts: ["+define+EN_MASKING=1",
+                   "+define+SBOX_IMPL=aes_pkg::SBoxImplDom",
+                   "+define+EN_GCM=0"]
+    }
+    {
+      name: aes_gcm_unmasked
+      build_opts: ["+define+EN_MASKING=0",
+                   "+define+SBOX_IMPL=aes_pkg::SBoxImplCanright",
+                   "+define+EN_GCM=1"]
+    }
+    {
+      name: aes_gcm_masked
+      build_opts: ["+define+EN_MASKING=1",
+                   "+define+SBOX_IMPL=aes_pkg::SBoxImplDom",
+                   "+define+EN_GCM=1"]
     }
   ]
 
@@ -93,10 +106,14 @@
     }
   ]
 
-  run_opts: ["+uvm_set_verbosity={component_a},{id_a},{verbosity_a},{phase_a}"]
+  // Enable cdc instrumentation.
+  run_opts: ["+uvm_set_verbosity={component_a},{id_a},{verbosity_a},{phase_a}",
+             "+cdc_instrumentation_enabled=1"
+  ]
 
   // List of test specifications.
   tests: [
+    // (basic) Directed tests for which the scoreboard is disabled.
     {
       name: aes_wake_up
       uvm_test: aes_wake_up_test
@@ -110,41 +127,6 @@
       reseed: 1
     }
     {
-      name: aes_smoke
-      uvm_test: aes_smoke_test
-      uvm_test_seq: aes_stress_vseq
-    }
-    {
-      name: aes_config_error
-      uvm_test: aes_config_error_test
-      uvm_test_seq: aes_stress_vseq
-    }
-    {
-      name: aes_stress
-      uvm_test: aes_stress_test
-      uvm_test_seq: aes_stress_vseq
-    }
-    {
-      name: aes_b2b
-      uvm_test: aes_b2b_test
-      uvm_test_seq: aes_stress_vseq
-    }
-    {
-      name: aes_clear
-      uvm_test: aes_clear_test
-      uvm_test_seq: aes_stress_vseq
-    }
-    {
-      name: aes_alert_reset
-      uvm_test: aes_alert_reset_test
-      uvm_test_seq: aes_alert_reset_vseq
-    }
-    {
-      name: aes_sideload
-      uvm_test: aes_sideload_test
-      uvm_test_seq: aes_stress_vseq
-    }
-    {
       name: aes_deinit
       uvm_test: aes_deinit_test
       uvm_test_seq: aes_deinit_vseq
@@ -155,10 +137,55 @@
       uvm_test_seq: aes_manual_config_err_vseq
     }
     {
+      name: aes_readability
+      uvm_test: aes_fi_test
+      uvm_test_seq: aes_readability_vseq
+    }
+    // Regular tests for which the scoreboard is active.
+    {
+      name: aes_smoke
+      uvm_test: aes_smoke_test
+      uvm_test_seq: aes_stress_vseq
+    }
+    {
+      name: aes_config_error
+      uvm_test: aes_config_error_test
+      uvm_test_seq: aes_stress_vseq
+      reseed: 50
+    }
+    {
+      name: aes_stress
+      uvm_test: aes_stress_test
+      uvm_test_seq: aes_stress_vseq
+    }
+    {
+      name: aes_b2b
+      uvm_test: aes_b2b_test
+      uvm_test_seq: aes_stress_vseq
+      reseed: 25
+    }
+    {
+      name: aes_clear
+      uvm_test: aes_clear_test
+      uvm_test_seq: aes_stress_vseq
+    }
+    {
+      name: aes_alert_reset
+      uvm_test: aes_alert_reset_test
+      uvm_test_seq: aes_alert_reset_vseq
+      reseed: 25
+    }
+    {
+      name: aes_sideload
+      uvm_test: aes_sideload_test
+      uvm_test_seq: aes_stress_vseq
+    }
+    {
       name: aes_reseed
       uvm_test: aes_reseed_test
       uvm_test_seq: aes_reseed_vseq
     }
+    // FI tests for which the scoreboard is disabled.
     {
       name: aes_fi
       uvm_test: aes_alert_reset_test
@@ -183,17 +210,25 @@
       uvm_test: aes_fi_test
       uvm_test_seq: aes_ctr_fi_vseq
       run_timeout_mins: 1 // Short test; if not done within 1 min, something's wrong.
+      reseed: 25
     }
     {
       name: aes_core_fi
       uvm_test: aes_fi_test
       uvm_test_seq: aes_core_fi_vseq
-      reseed: 70 // Test must cover 35 bins. Overseed by 2x to get reasonable coverage.
+      reseed: 100 // Test must cover 35 bins. Overseed by 2x to get reasonable coverage.
     }
+    // This test runs several sequences back-to-back with random resets between the individual
+    // sequences. We shouldn't need many seeds here because aes_stress is the real stress test.
     {
-      name: aes_readability
-      uvm_test: aes_fi_test
-      uvm_test_seq: aes_readability_vseq
+      name: "aes_stress_all"
+      uvm_test_seq: "aes_stress_all_vseq"
+      reseed: 10
+    }
+    // A combination of aes_stress_all with random resets injected into the actual sequences.
+    {
+      name: "aes_stress_all_with_rand_reset"
+      reseed: 10
     }
   ]
 

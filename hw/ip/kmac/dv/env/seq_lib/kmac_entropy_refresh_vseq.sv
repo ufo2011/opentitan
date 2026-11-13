@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -15,5 +15,10 @@ class kmac_entropy_refresh_vseq extends kmac_app_with_partial_data_vseq;
     hash_cnt_clr dist {0 :/ 19, 1 :/ 1};
     entropy_req  dist {0 :/ 19, 1 :/ 1};
   }
+
+  virtual task pre_start();
+    `DV_CHECK_FATAL(cfg.enable_full_kmac, "This sequence requires EnFullKmac == 1")
+    super.pre_start();
+  endtask
 
 endclass

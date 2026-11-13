@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,18 +13,38 @@
 /**
  * Manifest size for boot stages stored in flash (in bytes).
  */
-#define CHIP_MANIFEST_SIZE 896
+#define CHIP_MANIFEST_SIZE 1024
 
 /**
- * ROM_EXT manifest identifier (ASCII "OTRE").
+ * Manifest format major and minor versions.
  */
-#define CHIP_ROM_EXT_IDENTIFIER 0x4552544f
+#define CHIP_MANIFEST_VERSION_MINOR_1 0x6c47
+#define CHIP_MANIFEST_VERSION_MAJOR_1 0x71c3
+
+// TODO(moidx): Update to a valid number once we figure out a manifest
+// versioning scheme.
+#define CHIP_MANIFEST_VERSION_MAJOR_2 0x0002
 
 /**
- * Allowed bounds for the `length` field of a ROM_EXT manifest.
+ * Number of entries in the manifest extensions table.
  */
-#define CHIP_ROM_EXT_SIZE_MIN CHIP_MANIFEST_SIZE
-#define CHIP_ROM_EXT_SIZE_MAX 0x10000
+#define CHIP_MANIFEST_EXT_TABLE_ENTRY_COUNT 15
+
+/**
+ * Size of the header of a boot services message.
+ */
+#define CHIP_BOOT_SVC_MSG_HEADER_SIZE 44
+
+/**
+ * Maximum size of a boot services message.
+ */
+#define CHIP_BOOT_SVC_MSG_SIZE_MAX 256
+
+/**
+ * Maximum payload size for a boot services message.
+ */
+#define CHIP_BOOT_SVC_MSG_PAYLOAD_SIZE_MAX \
+  (CHIP_BOOT_SVC_MSG_SIZE_MAX - CHIP_BOOT_SVC_MSG_HEADER_SIZE)
 
 /**
  * First owner boot stage, e.g. BL0, manifest identifier (ASCII "OTB0").
@@ -35,13 +55,43 @@
  * Allowed bounds for the `length` field of a first owner boot stage manifest.
  */
 #define CHIP_BL0_SIZE_MIN CHIP_MANIFEST_SIZE
+#ifndef OT_COVERAGE_ENABLED
 #define CHIP_BL0_SIZE_MAX 0x70000
+#else  // OT_COVERAGE_ENABLED
+#define CHIP_BL0_SIZE_MAX 0x60000
+#endif  // OT_COVERAGE_ENABLED
+
+/**
+ * ROM_EXT manifest identifier (ASCII "OTRE").
+ */
+#define CHIP_ROM_EXT_IDENTIFIER 0x4552544f
+
+/**
+ * Allowed bounds for the `length` field of a ROM_EXT manifest.
+ */
+#define CHIP_ROM_EXT_SIZE_MIN CHIP_MANIFEST_SIZE
+#ifndef OT_COVERAGE_ENABLED
+#define CHIP_ROM_EXT_SIZE_MAX 0x10000
+#else  // OT_COVERAGE_ENABLED
+#define CHIP_ROM_EXT_SIZE_MAX 0x20000
+#endif  // OT_COVERAGE_ENABLED
+#define CHIP_ROM_EXT_RESIZABLE_SIZE_MAX \
+  (CHIP_ROM_EXT_SIZE_MAX + CHIP_BL0_SIZE_MAX)
 
 /**
  * Value written to the end of the retention SRAM creator area by `test_rom` to
  * be able to determine the type of ROM in tests (ASCII "TEST").
  */
 #define TEST_ROM_IDENTIFIER 0x54534554
+
+/**
+ * Pinmux pull up/down wait delay.
+ *
+ * After enabling the pull-up/down on a pin, we need to wait for ~5us for the
+ * configuration to propagate to the physical pads. 5us is 500 clock cycles
+ * assuming a 100MHz clock.
+ */
+#define PINMUX_PAD_ATTR_PROP_CYCLES 500
 
 /**
  * Pinmux peripheral input values for software strap pins.

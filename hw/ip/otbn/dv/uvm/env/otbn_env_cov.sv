@@ -1,9 +1,9 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Covergoups that are dependent on run-time parameters that may be available
+ * Covergroups that are dependent on run-time parameters that may be available
  * only in build_phase can be defined here
  * Covergroups may also be wrapped inside helper classes if needed.
  */
@@ -41,6 +41,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
   `DEF_MNEM(mnem_csrrs,         "csrrs");
   `DEF_MNEM(mnem_csrrw,         "csrrw");
   `DEF_MNEM(mnem_ecall,         "ecall");
+  `DEF_MNEM(mnem_wfi,           "wfi");
   `DEF_MNEM(mnem_loop,          "loop");
   `DEF_MNEM(mnem_loopi,         "loopi");
   `DEF_MNEM(mnem_bn_add,        "bn.add");
@@ -68,6 +69,19 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
   `DEF_MNEM(mnem_bn_movr,       "bn.movr");
   `DEF_MNEM(mnem_bn_wsrr,       "bn.wsrr");
   `DEF_MNEM(mnem_bn_wsrw,       "bn.wsrw");
+  `DEF_MNEM(mnem_bn_addv,       "bn.addv");
+  `DEF_MNEM(mnem_bn_addvm,      "bn.addvm");
+  `DEF_MNEM(mnem_bn_subv,       "bn.subv");
+  `DEF_MNEM(mnem_bn_subvm,      "bn.subvm");
+  `DEF_MNEM(mnem_bn_mulv,       "bn.mulv");
+  `DEF_MNEM(mnem_bn_mulvl,      "bn.mulvl");
+  `DEF_MNEM(mnem_bn_mulvm,      "bn.mulvm");
+  `DEF_MNEM(mnem_bn_mulvml,     "bn.mulvml");
+  `DEF_MNEM(mnem_bn_trn1,       "bn.trn1");
+  `DEF_MNEM(mnem_bn_trn2,       "bn.trn2");
+  `DEF_MNEM(mnem_bn_shv,        "bn.shv");
+  `DEF_MNEM(mnem_bn_pack,       "bn.pack");
+  `DEF_MNEM(mnem_bn_unpk,       "bn.unpk");
   // A fake mnemonic, used for bits that don't decode to a real instruction
   `DEF_MNEM(mnem_dummy,         "dummy-insn");
   // A fake mnemonic, used for invalid IMEM data (after a failed integrity check)
@@ -77,50 +91,64 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
   // A macro used for coverpoints for mnemonics. This expands to entries like
   //
   //    bins mnem_add = {mnem_add};
+  //
+  // The right hand side here is a some string variable defined with DEF_MNEM in the previous block
+  // of code. This is sort of equivalent to something like bins mnem_add = {"add"}, but it wraps the
+  // string literal in a variable, which turns out to be needed for coverage with VCS.
 `define DEF_MNEM_BIN(NAME) bins NAME = {NAME}
 
   // Generate a bin for each mnemonic except ECALL
-`define DEF_MNEM_BINS_EXCEPT_ECALL                                     \
-    `DEF_MNEM_BIN(mnem_add); `DEF_MNEM_BIN(mnem_addi);                 \
-    `DEF_MNEM_BIN(mnem_lui); `DEF_MNEM_BIN(mnem_sub);                  \
-    `DEF_MNEM_BIN(mnem_sll); `DEF_MNEM_BIN(mnem_slli);                 \
-    `DEF_MNEM_BIN(mnem_srl); `DEF_MNEM_BIN(mnem_srli);                 \
-    `DEF_MNEM_BIN(mnem_sra); `DEF_MNEM_BIN(mnem_srai);                 \
-    `DEF_MNEM_BIN(mnem_and); `DEF_MNEM_BIN(mnem_andi);                 \
-    `DEF_MNEM_BIN(mnem_or); `DEF_MNEM_BIN(mnem_ori);                   \
-    `DEF_MNEM_BIN(mnem_xor); `DEF_MNEM_BIN(mnem_xori);                 \
-    `DEF_MNEM_BIN(mnem_lw); `DEF_MNEM_BIN(mnem_sw);                    \
-    `DEF_MNEM_BIN(mnem_beq); `DEF_MNEM_BIN(mnem_bne);                  \
-    `DEF_MNEM_BIN(mnem_jal); `DEF_MNEM_BIN(mnem_jalr);                 \
-    `DEF_MNEM_BIN(mnem_csrrs); `DEF_MNEM_BIN(mnem_csrrw);              \
-    `DEF_MNEM_BIN(mnem_loop); `DEF_MNEM_BIN(mnem_loopi);               \
-    `DEF_MNEM_BIN(mnem_bn_add); `DEF_MNEM_BIN(mnem_bn_addc);           \
-    `DEF_MNEM_BIN(mnem_bn_addi); `DEF_MNEM_BIN(mnem_bn_addm);          \
-    `DEF_MNEM_BIN(mnem_bn_mulqacc); `DEF_MNEM_BIN(mnem_bn_mulqacc_wo); \
-    `DEF_MNEM_BIN(mnem_bn_mulqacc_so);                                 \
-    `DEF_MNEM_BIN(mnem_bn_sub); `DEF_MNEM_BIN(mnem_bn_subb);           \
-    `DEF_MNEM_BIN(mnem_bn_subi); `DEF_MNEM_BIN(mnem_bn_subm);          \
-    `DEF_MNEM_BIN(mnem_bn_and); `DEF_MNEM_BIN(mnem_bn_or);             \
-    `DEF_MNEM_BIN(mnem_bn_not); `DEF_MNEM_BIN(mnem_bn_xor);            \
-    `DEF_MNEM_BIN(mnem_bn_rshi);                                       \
-    `DEF_MNEM_BIN(mnem_bn_sel);                                        \
-    `DEF_MNEM_BIN(mnem_bn_cmp); `DEF_MNEM_BIN(mnem_bn_cmpb);           \
-    `DEF_MNEM_BIN(mnem_bn_lid); `DEF_MNEM_BIN(mnem_bn_sid);            \
-    `DEF_MNEM_BIN(mnem_bn_mov); `DEF_MNEM_BIN(mnem_bn_movr);           \
-    `DEF_MNEM_BIN(mnem_bn_wsrr); `DEF_MNEM_BIN(mnem_bn_wsrw);
+`define DEF_MNEM_BINS_EXCEPT_ECALL                                      \
+  `DEF_MNEM_BIN(mnem_add);           `DEF_MNEM_BIN(mnem_addi);          \
+  `DEF_MNEM_BIN(mnem_lui);           `DEF_MNEM_BIN(mnem_sub);           \
+  `DEF_MNEM_BIN(mnem_sll);           `DEF_MNEM_BIN(mnem_slli);          \
+  `DEF_MNEM_BIN(mnem_srl);           `DEF_MNEM_BIN(mnem_srli);          \
+  `DEF_MNEM_BIN(mnem_sra);           `DEF_MNEM_BIN(mnem_srai);          \
+  `DEF_MNEM_BIN(mnem_and);           `DEF_MNEM_BIN(mnem_andi);          \
+  `DEF_MNEM_BIN(mnem_or);            `DEF_MNEM_BIN(mnem_ori);           \
+  `DEF_MNEM_BIN(mnem_xor);           `DEF_MNEM_BIN(mnem_xori);          \
+  `DEF_MNEM_BIN(mnem_lw);            `DEF_MNEM_BIN(mnem_sw);            \
+  `DEF_MNEM_BIN(mnem_beq);           `DEF_MNEM_BIN(mnem_bne);           \
+  `DEF_MNEM_BIN(mnem_jal);           `DEF_MNEM_BIN(mnem_jalr);          \
+  `DEF_MNEM_BIN(mnem_csrrs);         `DEF_MNEM_BIN(mnem_csrrw);         \
+  `DEF_MNEM_BIN(mnem_wfi);                                              \
+  `DEF_MNEM_BIN(mnem_loop);          `DEF_MNEM_BIN(mnem_loopi);         \
+  `DEF_MNEM_BIN(mnem_bn_add);        `DEF_MNEM_BIN(mnem_bn_addc);       \
+  `DEF_MNEM_BIN(mnem_bn_addi);       `DEF_MNEM_BIN(mnem_bn_addm);       \
+  `DEF_MNEM_BIN(mnem_bn_mulqacc);    `DEF_MNEM_BIN(mnem_bn_mulqacc_wo); \
+  `DEF_MNEM_BIN(mnem_bn_mulqacc_so);                                    \
+  `DEF_MNEM_BIN(mnem_bn_sub);        `DEF_MNEM_BIN(mnem_bn_subb);       \
+  `DEF_MNEM_BIN(mnem_bn_subi);       `DEF_MNEM_BIN(mnem_bn_subm);       \
+  `DEF_MNEM_BIN(mnem_bn_and);        `DEF_MNEM_BIN(mnem_bn_or);         \
+  `DEF_MNEM_BIN(mnem_bn_not);        `DEF_MNEM_BIN(mnem_bn_xor);        \
+  `DEF_MNEM_BIN(mnem_bn_rshi);                                          \
+  `DEF_MNEM_BIN(mnem_bn_sel);                                           \
+  `DEF_MNEM_BIN(mnem_bn_cmp);        `DEF_MNEM_BIN(mnem_bn_cmpb);       \
+  `DEF_MNEM_BIN(mnem_bn_lid);        `DEF_MNEM_BIN(mnem_bn_sid);        \
+  `DEF_MNEM_BIN(mnem_bn_mov);        `DEF_MNEM_BIN(mnem_bn_movr);       \
+  `DEF_MNEM_BIN(mnem_bn_wsrr);       `DEF_MNEM_BIN(mnem_bn_wsrw);       \
+  `DEF_MNEM_BIN(mnem_bn_addv);       `DEF_MNEM_BIN(mnem_bn_addvm);      \
+  `DEF_MNEM_BIN(mnem_bn_subv);       `DEF_MNEM_BIN(mnem_bn_subvm);      \
+  `DEF_MNEM_BIN(mnem_bn_mulv);       `DEF_MNEM_BIN(mnem_bn_mulvl);      \
+  `DEF_MNEM_BIN(mnem_bn_mulvm);      `DEF_MNEM_BIN(mnem_bn_mulvml);     \
+  `DEF_MNEM_BIN(mnem_bn_trn1);       `DEF_MNEM_BIN(mnem_bn_trn2);       \
+  `DEF_MNEM_BIN(mnem_bn_shv);                                           \
+  `DEF_MNEM_BIN(mnem_bn_pack);       `DEF_MNEM_BIN(mnem_bn_unpk);
 
-  // Equivalents of DEF_MNEM and DEF_MNEM_BINp, but for external CSRs. Again, we want to use the CSR
+  // Equivalents of DEF_MNEM and DEF_MNEM_BIN, but for external CSRs. Again, we want to use the CSR
   // names as bins in coverpoints and need sized literals.
 `define DEF_CSR(CSR_NAME, STR) \
   csr_str_t CSR_NAME = csr_str_t'(STR)
   `DEF_CSR(csr_load_checksum, "load_checksum");
   `DEF_CSR(csr_ctrl, "ctrl");
 `undef DEF_CSR
+  // Define a bin for a CSR. This is analogous to DEF_MNEM_BIN (which has a detailed explanation of
+  // how it works).
 `define DEF_CSR_BIN(NAME) bins NAME = {NAME}
 
   // Cross one, two or three coverpoints with mnemonic_cp.
   //
-  // This is intentended to be used inside covergroups that support multiple instructions. In each
+  // This is intended to be used inside covergroups that support multiple instructions. In each
   // of these, we define a coverpoint called mnemonic_cp to track which instruction is being
   // sampled.
 `define DEF_MNEM_CROSS(BASENAME)                                         \
@@ -267,6 +295,20 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
 `define DEF_NZ_IF_CP(NAME, VALUE, TEST) NAME: coverpoint (VALUE) iff (TEST) `_NZ_CP_BINS
 `define DEF_SEEN_IF_CP(NAME, EXPR, TEST) NAME: coverpoint (EXPR) iff (TEST) { bins seen = {1'b1}; }
 
+  // Macros to define a coverpoint for the possible element lengths implemented by the vectorized
+  // instructions. Most support only 32bits but a few support all lengths.
+`define DEF_ELEN_32_CP elen_cp:  coverpoint (insn_data[26:25]) { \
+    bins elen32        = {2'b00};                                \
+    ignore_bins other  = {2'b01, 2'b10, 2'b11};                  \
+  }
+
+`define DEF_ELEN_ALL_CP elen_cp: coverpoint (insn_data[26:25]) { \
+    bins elen32       = {2'b00};                                 \
+    bins elen64       = {2'b01};                                 \
+    bins elen128      = {2'b10};                                 \
+    ignore_bins other = {2'b11};                                 \
+  }
+
   // Remap a CSR index to an internal "coverage" index. This function avoids having to duplicate the
   // list of CSRs below and is also an easy way to explicitly track invalid CSRs explicitly
   // (SystemVerilog doesn't provide a helpful "catch anything else" bin because 'default' doesn't
@@ -287,7 +329,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
       12'h7d5: return 8;   // MOD5
       12'h7d6: return 9;   // MOD6
       12'h7d7: return 10;  // MOD7
-      12'hfc8: return 11;  // RND_PREFETCH
+      12'h7d8: return 11;  // RND_PREFETCH
       12'hfc0: return 12;  // RND
       12'hfc1: return 13;  // URND
       default: return -1;  // (invalid)
@@ -383,6 +425,28 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
 
   // Non-core covergroups //////////////////////////////////////////////////////
 
+  // Tracking for the escalate_en_i input
+  covergroup escalate_en_cg with function sample(lc_ctrl_pkg::lc_tx_t value);
+    // Any value other than Off should be treated as an escalation request. We want to make sure we
+    // see genuine On and Off, but also an invalid value (which will be treated as On)
+    value_cp: coverpoint {value} {
+      bins off = {lc_ctrl_pkg::Off};
+      bins on  = {lc_ctrl_pkg::On};
+      bins bad = {[0:$]} with (!(item inside {lc_ctrl_pkg::Off, lc_ctrl_pkg::On}));
+    }
+  endgroup
+
+  // Tracking for the rma_req_i input
+  covergroup rma_req_cg with function sample(lc_ctrl_pkg::lc_tx_t value);
+    // Any value other than On should be ignored. We want to make sure we see genuine On and Off,
+    // but also an invalid value (which will be treated as Off)
+    value_cp: coverpoint {value} {
+      bins off = {lc_ctrl_pkg::Off};
+      bins on  = {lc_ctrl_pkg::On};
+      bins bad = {[0:$]} with (!(item inside {lc_ctrl_pkg::Off, lc_ctrl_pkg::On}));
+    }
+  endgroup
+
   // CMD external CSR
   covergroup ext_csr_cmd_cg
     with function sample(otbn_pkg::cmd_e     value,
@@ -431,10 +495,10 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
 
   // ERR_BITS external CSR
   covergroup ext_csr_err_bits_cg
-    with function sample(otbn_pkg::err_bits_t value,
-                         logic [31:0]         old_value,
-                         access_e             access_type,
-                         operational_state_e  state);
+    with function sample(err_bits_reg_t      value,
+                         logic [31:0]        old_value,
+                         access_e            access_type,
+                         operational_state_e state);
     // We want to read every error bit at least once.
 `define DEF_ERR_BIT_CP(NAME) \
   `DEF_SEEN_IF_CP(err_bits_``NAME``_cp, value.NAME, access_type == AccessSoftwareRead)
@@ -447,6 +511,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     `DEF_ERR_BIT_CP(key_invalid)
     `DEF_ERR_BIT_CP(rnd_rep_chk_fail)
     `DEF_ERR_BIT_CP(rnd_fips_chk_fail)
+    `DEF_ERR_BIT_CP(mai_software_error)
     `DEF_ERR_BIT_CP(imem_intg_violation)
     `DEF_ERR_BIT_CP(dmem_intg_violation)
     `DEF_ERR_BIT_CP(reg_intg_violation)
@@ -633,8 +698,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
                          otbn_pkg::controller_bad_int_t controller_bad_int,
                          otbn_pkg::start_stop_bad_int_t start_stop_bad_int,
                          logic rf_base_spurious_we_err,
-                         logic rf_bignum_spurious_we_err,
-                         logic ext_mubi_err);
+                         logic rf_bignum_spurious_we_err);
 
     `DEF_SEEN_CP(alu_bignum_predec_err, predec_err.alu_bignum_err)
     `DEF_SEEN_CP(mac_bignum_predec_err, predec_err.mac_bignum_err)
@@ -666,7 +730,6 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     `DEF_SEEN_CP(scramble_state_err_cp, scramble_state_err)
     `DEF_SEEN_CP(rf_base_spurious_we_err_cp, rf_base_spurious_we_err)
     `DEF_SEEN_CP(rf_bignum_spurious_we_err_cp, rf_bignum_spurious_we_err)
-    `DEF_SEEN_CP(ext_mubi_err_cp, ext_mubi_err)
 
   endgroup
 
@@ -676,7 +739,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     `DEF_SEEN_CP(rf_base_intg_err_cp, intg_err.rf_base_intg_err)
     `DEF_SEEN_CP(rf_bignum_intg_err_cp, intg_err.rf_bignum_intg_err)
     `DEF_SEEN_CP(mod_ispr_intg_err_cp, intg_err.mod_ispr_intg_err)
-    `DEF_SEEN_CP(acc_ispr_intg_err_cp, intg_err.acc_ispr_intg_err)
+    `DEF_SEEN_CP(mac_ispr_intg_err_cp, intg_err.mac_ispr_intg_err)
     `DEF_SEEN_CP(loop_stack_addr_intg_err_cp, intg_err.loop_stack_addr_intg_err)
     `DEF_SEEN_CP(insn_fetch_intg_err_cp, intg_err.insn_fetch_intg_err)
 
@@ -845,7 +908,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
   covergroup enc_bnan_cg
     with function sample(mnem_str_t    mnemonic,
                          logic [31:0]  insn_data,
-                         logic [255:0] wdr_operand_a,
+                         logic [255:0] wdr_operand_b,
                          flags_t       flags_write_data [2],
                          logic [255:0] wdr_write_data);
 
@@ -854,11 +917,11 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
       illegal_bins other = default;
     }
 
-    // The shifted version of wdr_operand_a is nonzero
+    // The shifted version of wdr_operand_b is nonzero
     `DEF_SEEN_CP(nz_shifted_cp,
                  0 != (insn_data[30] ?
-                       (wdr_operand_a >> {insn_data[29:25], 3'b0}) :
-                       (wdr_operand_a << {insn_data[29:25], 3'b0})))
+                       (wdr_operand_b >> {insn_data[29:25], 3'b0}) :
+                       (wdr_operand_b << {insn_data[29:25], 3'b0})))
 
     sb_cp: coverpoint insn_data[29:25] { bins extremes[] = {'0, '1}; }
     st_cp: coverpoint insn_data[30];
@@ -869,7 +932,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     `DEF_MNEM_CROSS3(st, sb, nz_shifted)
 
     // Toggle coverage of the input result
-    `DEF_WDR_TOGGLE_COV(wrs, wdr_operand_a)
+    `DEF_WDR_TOGGLE_COV(wrs, wdr_operand_b)
 
     // BN.NOT can write the M, L and Z flags, but does not affect the carry flag (bit 0 in the
     // flags_t struct).
@@ -1153,11 +1216,12 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     `DEF_GPR_TOGGLE_CROSS(grs2)
   endgroup
 
-  covergroup enc_ecall_cg with function sample(mnem_str_t mnemonic, logic [31:0] insn_data);
-    // Used by the ECALL instruction. Although it uses the I encoding in the tooling, it has no
-    // immediate or register operands so we give it a separate covergroup here.
+  covergroup enc_fixed_cg with function sample(mnem_str_t mnemonic, logic [31:0] insn_data);
+    // Used by the ECALL and WFI instructions. Although they use the I encoding in the tooling, they
+    // have no immediate or register operands so we give them a separate covergroup here.
     mnemonic_cp: coverpoint mnemonic {
       `DEF_MNEM_BIN(mnem_ecall);
+      `DEF_MNEM_BIN(mnem_wfi);
       illegal_bins other = default;
     }
   endgroup
@@ -1331,6 +1395,119 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     `DEF_MNEM_CROSS(wsr)
   endgroup
 
+  covergroup enc_bnva_cg with function sample(mnem_str_t    mnemonic,
+                                              logic [31:0]  insn_data,
+                                              logic [255:0] wdr_operand_a,
+                                              logic [255:0] wdr_operand_b);
+    mnemonic_cp: coverpoint mnemonic {
+      `DEF_MNEM_BIN(mnem_bn_addv);
+      `DEF_MNEM_BIN(mnem_bn_addvm);
+      `DEF_MNEM_BIN(mnem_bn_subv);
+      `DEF_MNEM_BIN(mnem_bn_subvm);
+      illegal_bins other = default;
+    }
+
+    `DEF_ELEN_32_CP
+
+    `DEF_WDR_TOGGLE_COV(wrs1, wdr_operand_a)
+    `DEF_WDR_TOGGLE_COV(wrs2, wdr_operand_b)
+    `DEF_WDR_TOGGLE_CROSS(wrs1)
+    `DEF_WDR_TOGGLE_CROSS(wrs2)
+  endgroup
+
+  covergroup enc_bnvm_cg with function sample(mnem_str_t    mnemonic,
+                                              logic [31:0]  insn_data,
+                                              logic [255:0] wdr_operand_a,
+                                              logic [255:0] wdr_operand_b);
+    mnemonic_cp: coverpoint mnemonic {
+      `DEF_MNEM_BIN(mnem_bn_mulv);
+      `DEF_MNEM_BIN(mnem_bn_mulvl);
+      `DEF_MNEM_BIN(mnem_bn_mulvm);
+      `DEF_MNEM_BIN(mnem_bn_mulvml);
+      illegal_bins other = default;
+    }
+
+    `DEF_ELEN_32_CP
+
+    `DEF_WDR_TOGGLE_COV(wrs1, wdr_operand_a)
+    `DEF_WDR_TOGGLE_COV(wrs2, wdr_operand_b)
+    `DEF_WDR_TOGGLE_CROSS(wrs1)
+    `DEF_WDR_TOGGLE_CROSS(wrs2)
+  endgroup
+
+  covergroup enc_bnvtrn_cg with function sample(mnem_str_t    mnemonic,
+                                                logic [31:0]  insn_data,
+                                                logic [255:0] wdr_operand_a,
+                                                logic [255:0] wdr_operand_b);
+    mnemonic_cp: coverpoint mnemonic {
+      `DEF_MNEM_BIN(mnem_bn_trn1);
+      `DEF_MNEM_BIN(mnem_bn_trn2);
+      illegal_bins other = default;
+    }
+
+    `DEF_ELEN_ALL_CP
+
+    `DEF_WDR_TOGGLE_COV(wrs1, wdr_operand_a)
+    `DEF_WDR_TOGGLE_COV(wrs2, wdr_operand_b)
+    `DEF_WDR_TOGGLE_CROSS(wrs1)
+    `DEF_WDR_TOGGLE_CROSS(wrs2)
+  endgroup
+
+  covergroup enc_bnvsh_cg with function sample(mnem_str_t    mnemonic,
+                                               logic [31:0]  insn_data,
+                                               logic [255:0] wdr_operand_b,
+                                               logic [7:0]   nonzero_shift_results);
+    mnemonic_cp: coverpoint mnemonic {
+      `DEF_MNEM_BIN(mnem_bn_shv);
+      illegal_bins other = default;
+    }
+
+    `DEF_ELEN_32_CP
+
+    sb_cp: coverpoint {insn_data[19:15]} { bins extremes[] = {'0, '1}; }
+    st_cp: coverpoint insn_data[30];
+
+    // We want to see a vector where all the shifted results are nonzero so we are sure the shift
+    // actually did something for each element.
+    `DEF_SEEN_CP(nz_shifted_cp, nonzero_shift_results == '1)
+
+    // Crossing st_cp, sb_cp and nz_shifted_cp means that we see extremal values of shift in both
+    // directions, restricted to cases where the result is nonzero (so the shift actually did
+    // something).
+    `DEF_MNEM_CROSS3(st, sb, nz_shifted)
+
+    // This checks for a nonzero right shift where the top bit of each element is set (ensuring we
+    // do a check for a logical shift, not an arithmetic shift).
+    `DEF_SEEN_CP(srl_elem0_cp, (insn_data[19:15] != 0) && insn_data[30] && wdr_operand_b[1*32-1])
+    `DEF_SEEN_CP(srl_elem1_cp, (insn_data[19:15] != 0) && insn_data[30] && wdr_operand_b[2*32-1])
+    `DEF_SEEN_CP(srl_elem2_cp, (insn_data[19:15] != 0) && insn_data[30] && wdr_operand_b[3*32-1])
+    `DEF_SEEN_CP(srl_elem3_cp, (insn_data[19:15] != 0) && insn_data[30] && wdr_operand_b[4*32-1])
+    `DEF_SEEN_CP(srl_elem4_cp, (insn_data[19:15] != 0) && insn_data[30] && wdr_operand_b[5*32-1])
+    `DEF_SEEN_CP(srl_elem5_cp, (insn_data[19:15] != 0) && insn_data[30] && wdr_operand_b[6*32-1])
+    `DEF_SEEN_CP(srl_elem6_cp, (insn_data[19:15] != 0) && insn_data[30] && wdr_operand_b[7*32-1])
+    `DEF_SEEN_CP(srl_elem7_cp, (insn_data[19:15] != 0) && insn_data[30] && wdr_operand_b[8*32-1])
+
+    `DEF_WDR_TOGGLE_COV(wrs, wdr_operand_b)
+    `DEF_WDR_TOGGLE_CROSS(wrs)
+  endgroup
+
+  covergroup enc_bnpk_cg with function sample(mnem_str_t    mnemonic,
+                                              logic [31:0]  insn_data,
+                                              logic [255:0] wdr_operand_a,
+                                              logic [255:0] wdr_operand_b);
+    mnemonic_cp: coverpoint mnemonic {
+      `DEF_MNEM_BIN(mnem_bn_pack);
+      `DEF_MNEM_BIN(mnem_bn_unpk);
+      illegal_bins other = default;
+    }
+
+    `DEF_ELEN_32_CP
+
+    `DEF_WDR_TOGGLE_COV(wrs1, wdr_operand_a)
+    `DEF_WDR_TOGGLE_COV(wrs2, wdr_operand_b)
+    `DEF_WDR_TOGGLE_CROSS(wrs1)
+    `DEF_WDR_TOGGLE_CROSS(wrs2)
+  endgroup
   // Per-instruction covergroups ///////////////////////////////////////////////
 
   covergroup insn_addsub_cg
@@ -1996,7 +2173,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     `DEF_SEEN_CP(underflow_and_bad_addr_cp,
                  call_stack_underflow &&
                  (grs1 != 5'd1) &&
-                 ((0 < addr) || (addr >= DmemSizeByte) || ((addr & 32'd31) != 0)))
+                 ((addr < 0) || (addr >= DmemSizeByte) || ((addr & 32'd31) != 0)))
     `DEF_MNEM_CROSS(underflow_and_bad_addr)
 
     // Set both increments and have a bad WDR index in *grd/*grs2.
@@ -2008,14 +2185,14 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     `DEF_SEEN_CP(inc_both_and_bad_addr_cp,
                  inc_both &&
                  !call_stack_underflow &&
-                 ((0 < addr) || (addr >= DmemSizeByte) || ((addr & 32'd31) != 0)))
+                 ((addr < 0) || (addr >= DmemSizeByte) || ((addr & 32'd31) != 0)))
     `DEF_MNEM_CROSS(inc_both_and_bad_addr)
 
     // Have a bad WDR index and also compute a bad address
     `DEF_SEEN_CP(bad_wdr_and_bad_addr_cp,
                  !call_stack_underflow &&
                  (operand_b >= 32) &&
-                 ((0 < addr) || (addr >= DmemSizeByte) || ((addr & 32'd31) != 0)))
+                 ((addr < 0) || (addr >= DmemSizeByte) || ((addr & 32'd31) != 0)))
     `DEF_MNEM_CROSS(bad_wdr_and_bad_addr)
 
     // Underflow call stack with grs1, set both increments, and have a bad WDR index in *grd/*grs2
@@ -2031,7 +2208,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
                  call_stack_underflow &&
                  inc_both &&
                  (grs1 != 5'd1) &&
-                 ((0 < addr) || (addr >= DmemSizeByte) || ((addr & 32'd31) != 0)))
+                 ((addr < 0) || (addr >= DmemSizeByte) || ((addr & 32'd31) != 0)))
     `DEF_MNEM_CROSS(underflow_and_inc_both_and_bad_addr)
 
     // Set both increments, have a bad WDR index and compute a bad address
@@ -2039,7 +2216,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
                  inc_both &&
                  !call_stack_underflow &&
                  (operand_b >= 32) &&
-                 ((0 < addr) || (addr >= DmemSizeByte) || ((addr & 32'd31) != 0)))
+                 ((addr < 0) || (addr >= DmemSizeByte) || ((addr & 32'd31) != 0)))
     `DEF_MNEM_CROSS(inc_both_and_bad_wdr_and_bad_addr)
   endgroup
 
@@ -2102,6 +2279,9 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
   function new(string name, uvm_component parent);
     super.new(name, parent);
 
+    escalate_en_cg = new;
+    rma_req_cg = new;
+
     ext_csr_cmd_cg = new;
     ext_csr_ctrl_cg = new;
     ext_csr_status_cg = new;
@@ -2135,7 +2315,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     enc_bns_cg = new;
     enc_bnxid_cg = new;
     enc_b_cg = new;
-    enc_ecall_cg = new;
+    enc_fixed_cg = new;
     enc_i_cg = new;
     enc_is_cg = new;
     enc_j_cg = new;
@@ -2145,6 +2325,11 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     enc_s_cg = new;
     enc_wcsr_cg = new;
     enc_u_cg = new;
+    enc_bnva_cg = new;
+    enc_bnvm_cg = new;
+    enc_bnvtrn_cg = new;
+    enc_bnvsh_cg = new;
+    enc_bnpk_cg = new;
 
     insn_addsub_cg = new;
     insn_addi_cg = new;
@@ -2171,6 +2356,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     insn_bn_xid_cg = new;
     insn_bn_movr_cg = new;
     insn_bn_wsrr_cg = new;
+    // TODO(lowrisc/opentitan#29465): Add insn specific vectorized instruction covergroups
 
     // Set up instruction encoding mapping
     insn_encodings[mnem_add]           = "R";
@@ -2197,7 +2383,8 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     insn_encodings[mnem_jalr]          = "I";
     insn_encodings[mnem_csrrs]         = "I";
     insn_encodings[mnem_csrrw]         = "I";
-    insn_encodings[mnem_ecall]         = "ecall";
+    insn_encodings[mnem_ecall]         = "fixed";
+    insn_encodings[mnem_wfi]           = "fixed";
     insn_encodings[mnem_loop]          = "loop";
     insn_encodings[mnem_loopi]         = "loopi";
     insn_encodings[mnem_bn_add]        = "bnaf";
@@ -2225,6 +2412,19 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     insn_encodings[mnem_bn_movr]       = "bnmovr";
     insn_encodings[mnem_bn_wsrr]       = "wcsr";
     insn_encodings[mnem_bn_wsrw]       = "wcsr";
+    insn_encodings[mnem_bn_addv]       = "bnva";
+    insn_encodings[mnem_bn_addvm]      = "bnva";
+    insn_encodings[mnem_bn_subv]       = "bnva";
+    insn_encodings[mnem_bn_subvm]      = "bnva";
+    insn_encodings[mnem_bn_mulv]       = "bnvm";
+    insn_encodings[mnem_bn_mulvl]      = "bnvm";
+    insn_encodings[mnem_bn_mulvm]      = "bnvm";
+    insn_encodings[mnem_bn_mulvml]     = "bnvm";
+    insn_encodings[mnem_bn_trn1]       = "bnvtrn";
+    insn_encodings[mnem_bn_trn2]       = "bnvtrn";
+    insn_encodings[mnem_bn_shv]        = "bnvsh";
+    insn_encodings[mnem_bn_pack]       = "bnpk";
+    insn_encodings[mnem_bn_unpk]       = "bnpk";
     insn_encodings[mnem_dummy]         = "dummy";
     insn_encodings[mnem_question_mark] = "dummy";
   endfunction
@@ -2237,10 +2437,13 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     last_mnem = '0;
   endfunction
 
-  // Called on each change of operational state
-  function void on_state_change(operational_state_e new_state);
+  // Called on each change of STATUS
+  function void on_state_change(otbn_pkg::status_e new_status);
     last_err_bits = 0;
-    last_mnem = '0;
+    // A WFI pause does not end the program, so keep tracking instruction pairs across it
+    if (!(new_status inside {otbn_pkg::StatusBusyExecute, otbn_pkg::StatusPaused})) begin
+      last_mnem = '0;
+    end
     // Sample bad internal state related signals here because otherwise they tend to not get
     // captured.
     bad_internal_state_cg.sample(cfg.trace_vif.urnd_all_zero_q,
@@ -2251,8 +2454,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
                                  cfg.trace_vif.controller_bad_int_q,
                                  cfg.trace_vif.start_stop_bad_int_q,
                                  cfg.trace_vif.rf_base_spurious_we_err_q,
-                                 cfg.trace_vif.rf_bignum_spurious_we_err_q,
-                                 cfg.trace_vif.ext_mubi_err_q);
+                                 cfg.trace_vif.rf_bignum_spurious_we_err_q);
 
     internal_intg_err_cg.sample(cfg.trace_vif.internal_intg_err_q);
   endfunction
@@ -2288,7 +2490,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
       end
       "err_bits": begin
         last_err_bits = data;
-        ext_csr_err_bits_cg.sample(otbn_pkg::err_bits_t'(data),
+        ext_csr_err_bits_cg.sample(err_bits_reg_t'(data),
                                    csr.get_mirrored_value(), access_type, state);
       end
       "fatal_alert_cause": begin
@@ -2390,6 +2592,10 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     logic [14:0]        imm15;
     logic [20:0]        imm21;
 
+    logic [7:0] nonzero_shift_results;
+    logic [4:0] shift;
+    logic       is_right_shift;
+
     // Since iss_item and rtl_item have come in separately, we do a quick check here to make sure
     // they actually match the same instruction.
     `DV_CHECK_EQ(iss_item.insn_addr, rtl_item.insn_addr)
@@ -2432,6 +2638,15 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
     end
     last_mnem = mnem;
 
+    // Detect whether any bits in an element of a shifted vector are nonzero (the shift actually
+    // did something). This is used by the bnvsh covergroup.
+    shift = insn_data[19:15];
+    is_right_shift = insn_data[30];
+    for (int unsigned i = 0; i < 8; i++) begin
+      logic [31:0] lane = rtl_item.wdr_operand_b[i * 32 +: 32];
+      nonzero_shift_results[i] = |(is_right_shift ? lane >> shift : lane << shift);
+    end
+
     // Per-encoding coverage. First, use insn_encodings to find the encoding for the instruction.
     // Every instruction mnemonic should have an associated encoding schema.
     encoding = insn_encodings[mnem];
@@ -2451,8 +2666,10 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
       "bnam":
         enc_bnam_cg.sample(mnem, insn_data, rtl_item.wdr_operand_a, rtl_item.wdr_operand_b);
       "bnan":
+        // BN.NOT has a single source, which is encoded in the rs2 field. The RTL reads it on
+        // bignum read port B and leaves port A disabled.
         enc_bnan_cg.sample(mnem, insn_data,
-                           rtl_item.wdr_operand_a,
+                           rtl_item.wdr_operand_b,
                            rtl_item.flags_write_data,
                            rtl_item.wdr_write_data);
       "bnaq":
@@ -2483,8 +2700,8 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
         enc_bnxid_cg.sample(mnem, insn_data, rtl_item.gpr_operand_a, rtl_item.gpr_operand_b);
       "B":
         enc_b_cg.sample(mnem, insn_data, rtl_item.gpr_operand_a, rtl_item.gpr_operand_b);
-      "ecall":
-        enc_ecall_cg.sample(mnem, insn_data);
+      "fixed":
+        enc_fixed_cg.sample(mnem, insn_data);
       "I":
         enc_i_cg.sample(mnem, insn_data, rtl_item.gpr_operand_a);
       "Is":
@@ -2503,6 +2720,16 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
         enc_u_cg.sample(mnem, insn_data);
       "wcsr":
         enc_wcsr_cg.sample(mnem, insn_data);
+      "bnva":
+        enc_bnva_cg.sample(mnem, insn_data, rtl_item.wdr_operand_a, rtl_item.wdr_operand_b);
+      "bnvm":
+        enc_bnvm_cg.sample(mnem, insn_data, rtl_item.wdr_operand_a, rtl_item.wdr_operand_b);
+      "bnvtrn":
+        enc_bnvtrn_cg.sample(mnem, insn_data, rtl_item.wdr_operand_a, rtl_item.wdr_operand_b);
+      "bnvsh":
+        enc_bnvsh_cg.sample(mnem, insn_data, rtl_item.wdr_operand_b, nonzero_shift_results);
+      "bnpk":
+        enc_bnpk_cg.sample(mnem, insn_data, rtl_item.wdr_operand_a, rtl_item.wdr_operand_b);
       "dummy":
         // Bad instruction: no encoding-level coverage.
         ;
@@ -2691,6 +2918,7 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
         logic [7:0] wsr_imm = insn_data[27:20];
         insn_bn_wsrr_cg.sample(wsr_imm, rtl_item.has_sideload_key);
       end
+      // TODO(lowrisc/opentitan#29465): Add insns specific covergroup for vectorized instructions
       default:
         // No special handling for this instruction yet.
         ;
@@ -2730,6 +2958,8 @@ class otbn_env_cov extends cip_base_env_cov #(.CFG_T(otbn_env_cfg));
 `undef DEF_NZ_IF_CP
 `undef DEF_SEEN_CP
 `undef DEF_SEEN_IF_CP
+`undef DEF_ELEN_32_CP
+`undef DEF_ELEN_ALL_CP
 `undef DEF_CSR_CP
 
 endclass

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,6 +49,15 @@
     {
       name: sec_cm_ack_sm_fsm_sparse
       desc: "Verify the countermeasure(s) ACK_SM.FSM.SPARSE."
+      stage: V2S
+      tests: ["edn_sec_cm"]
+    }
+    {
+      name: sec_cm_fifo_ctr_redun
+      desc: '''
+            Verify the countermeasure(s) FIFO.CTR.REDUN.
+            The auto-generated edn_sec_cm test verifies that if there is any mismatch in the redundant pointers inside the FIFOs, a fatal alert is triggered and that the DUT enters a terminal error state.
+            '''
       stage: V2S
       tests: ["edn_sec_cm"]
     }

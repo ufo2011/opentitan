@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -6,7 +6,13 @@
 
 `include "prim_assert.sv"
 
-module rv_timer_reg_top (
+module rv_timer_reg_top
+  # (
+    parameter bit          EnableRacl           = 1'b0,
+    parameter bit          RaclErrorRsp         = 1'b1,
+    parameter top_racl_pkg::racl_policy_sel_t RaclPolicySelVec[rv_timer_reg_pkg::NumRegs] =
+      '{rv_timer_reg_pkg::NumRegs{0}}
+  ) (
   input clk_i,
   input rst_ni,
   input  tlul_pkg::tl_h2d_t tl_i,
@@ -15,11 +21,12 @@ module rv_timer_reg_top (
   output rv_timer_reg_pkg::rv_timer_reg2hw_t reg2hw, // Write
   input  rv_timer_reg_pkg::rv_timer_hw2reg_t hw2reg, // Read
 
-  // Integrity check errors
-  output logic intg_err_o,
+  // RACL interface
+  input  top_racl_pkg::racl_policy_vec_t racl_policies_i,
+  output top_racl_pkg::racl_error_log_t  racl_error_o,
 
-  // Config
-  input devmode_i // If 1, explicit error return for unmapped register access
+  // Integrity check errors
+  output logic intg_err_o
 );
 
   import rv_timer_reg_pkg::* ;
@@ -113,19 +120,22 @@ module rv_timer_reg_top (
     .be_o    (reg_be),
     .busy_i  (reg_busy),
     .rdata_i (reg_rdata),
-    .error_i (reg_error)
+    // Translate RACL error to TLUL error if enabled
+    .error_i (reg_error | (RaclErrorRsp & racl_error_o.valid))
   );
 
   // cdc oversampling signals
 
   assign reg_rdata = reg_rdata_next ;
-  assign reg_error = (devmode_i & addrmiss) | wr_err | intg_err;
+  assign reg_error = addrmiss | wr_err | intg_err;
 
   // Define SW related signals
   // Format: <reg>_<field>_{wd|we|qs}
   //        or <reg>_{wd|we|qs} if field == 1 or 0
   logic alert_test_we;
-  logic alert_test_wd;
+  logic alert_test_fatal_fault_wd;
+  logic alert_test_regwen_qs;
+  logic alert_test_regwen_wd;
   logic ctrl_we;
   logic ctrl_qs;
   logic ctrl_wd;
@@ -158,14 +168,18 @@ module rv_timer_reg_top (
   // Register instances
   // R[alert_test]: V(True)
   logic alert_test_qe;
-  logic [0:0] alert_test_flds_we;
+  logic [1:0] alert_test_flds_we;
   assign alert_test_qe = &alert_test_flds_we;
+  // Create REGWEN-gated WE signal
+  logic alert_test_gated_we;
+  assign alert_test_gated_we = alert_test_we && alert_test_regwen_qs;
+  //   F[fatal_fault]: 0:0
   prim_subreg_ext #(
     .DW    (1)
-  ) u_alert_test (
+  ) u_alert_test_fatal_fault (
     .re     (1'b0),
-    .we     (alert_test_we),
-    .wd     (alert_test_wd),
+    .we     (alert_test_gated_we),
+    .wd     (alert_test_fatal_fault_wd),
     .d      ('0),
     .qre    (),
     .qe     (alert_test_flds_we[0]),
@@ -175,16 +189,46 @@ module rv_timer_reg_top (
   );
   assign reg2hw.alert_test.qe = alert_test_qe;
 
+  //   F[regwen]: 31:31
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW0C),
+    .RESVAL  (1'h1),
+    .Mubi    (1'b0)
+  ) u_alert_test_regwen (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (alert_test_we),
+    .wd     (alert_test_regwen_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (alert_test_flds_we[1]),
+    .q      (),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (alert_test_regwen_qs)
+  );
+
 
   // Subregister 0 of Multireg ctrl
   // R[ctrl]: V(False)
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ctrl (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (ctrl_we),
@@ -209,10 +253,12 @@ module rv_timer_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable0_we),
@@ -237,10 +283,12 @@ module rv_timer_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state0_we),
@@ -286,10 +334,12 @@ module rv_timer_reg_top (
   prim_subreg #(
     .DW      (12),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (12'h0)
+    .RESVAL  (12'h0),
+    .Mubi    (1'b0)
   ) u_cfg0_prescale (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (cfg0_we),
@@ -312,10 +362,12 @@ module rv_timer_reg_top (
   prim_subreg #(
     .DW      (8),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (8'h1)
+    .RESVAL  (8'h1),
+    .Mubi    (1'b0)
   ) u_cfg0_step (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (cfg0_we),
@@ -339,10 +391,12 @@ module rv_timer_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_timer_v_lower0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timer_v_lower0_we),
@@ -366,10 +420,12 @@ module rv_timer_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_timer_v_upper0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timer_v_upper0_we),
@@ -404,10 +460,12 @@ module rv_timer_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'hffffffff)
+    .RESVAL  (32'hffffffff),
+    .Mubi    (1'b0)
   ) u_compare_lower0_0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (compare_lower0_0_we),
@@ -443,10 +501,12 @@ module rv_timer_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'hffffffff)
+    .RESVAL  (32'hffffffff),
+    .Mubi    (1'b0)
   ) u_compare_upper0_0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (compare_upper0_0_we),
@@ -469,8 +529,31 @@ module rv_timer_reg_top (
 
 
   logic [9:0] addr_hit;
+  top_racl_pkg::racl_role_vec_t racl_role_vec;
+  top_racl_pkg::racl_role_t racl_role;
+
+  logic [9:0] racl_addr_hit_read;
+  logic [9:0] racl_addr_hit_write;
+
+  if (EnableRacl) begin : gen_racl_role_logic
+    // Retrieve RACL role from user bits and one-hot encode that for the comparison bitmap
+    assign racl_role = top_racl_pkg::tlul_extract_racl_role_bits(tl_i.a_user.rsvd);
+
+    prim_onehot_enc #(
+      .OneHotWidth( $bits(top_racl_pkg::racl_role_vec_t) )
+    ) u_racl_role_encode (
+      .in_i ( racl_role     ),
+      .en_i ( 1'b1          ),
+      .out_o( racl_role_vec )
+    );
+  end else begin : gen_no_racl_role_logic
+    assign racl_role     = '0;
+    assign racl_role_vec = '0;
+  end
+
   always_comb begin
-    addr_hit = '0;
+    racl_addr_hit_read  = '0;
+    racl_addr_hit_write = '0;
     addr_hit[0] = (reg_addr == RV_TIMER_ALERT_TEST_OFFSET);
     addr_hit[1] = (reg_addr == RV_TIMER_CTRL_OFFSET);
     addr_hit[2] = (reg_addr == RV_TIMER_INTR_ENABLE0_OFFSET);
@@ -481,62 +564,91 @@ module rv_timer_reg_top (
     addr_hit[7] = (reg_addr == RV_TIMER_TIMER_V_UPPER0_OFFSET);
     addr_hit[8] = (reg_addr == RV_TIMER_COMPARE_LOWER0_0_OFFSET);
     addr_hit[9] = (reg_addr == RV_TIMER_COMPARE_UPPER0_0_OFFSET);
+
+    if (EnableRacl) begin : gen_racl_hit
+      for (int unsigned slice_idx = 0; slice_idx < 10; slice_idx++) begin
+        racl_addr_hit_read[slice_idx] =
+            addr_hit[slice_idx] & (|(racl_policies_i[RaclPolicySelVec[slice_idx]].read_perm
+                                      & racl_role_vec));
+        racl_addr_hit_write[slice_idx] =
+            addr_hit[slice_idx] & (|(racl_policies_i[RaclPolicySelVec[slice_idx]].write_perm
+                                      & racl_role_vec));
+      end
+    end else begin : gen_no_racl
+      racl_addr_hit_read  = addr_hit;
+      racl_addr_hit_write = addr_hit;
+    end
   end
 
   assign addrmiss = (reg_re || reg_we) ? ~|addr_hit : 1'b0 ;
+  // A valid address hit, access, but failed the RACL check
+  assign racl_error_o.valid = |addr_hit & ((reg_re & ~|racl_addr_hit_read) |
+                                           (reg_we & ~|racl_addr_hit_write));
+  assign racl_error_o.request_address = top_pkg::TL_AW'(reg_addr);
+  assign racl_error_o.racl_role       = racl_role;
+  assign racl_error_o.overflow        = 1'b0;
+
+  if (EnableRacl) begin : gen_racl_log
+    assign racl_error_o.ctn_uid     = top_racl_pkg::tlul_extract_ctn_uid_bits(tl_i.a_user.rsvd);
+    assign racl_error_o.read_access = tl_i.a_opcode == tlul_pkg::Get;
+  end else begin : gen_no_racl_log
+    assign racl_error_o.ctn_uid     = '0;
+    assign racl_error_o.read_access = 1'b0;
+  end
 
   // Check sub-word write is permitted
   always_comb begin
     wr_err = (reg_we &
-              ((addr_hit[0] & (|(RV_TIMER_PERMIT[0] & ~reg_be))) |
-               (addr_hit[1] & (|(RV_TIMER_PERMIT[1] & ~reg_be))) |
-               (addr_hit[2] & (|(RV_TIMER_PERMIT[2] & ~reg_be))) |
-               (addr_hit[3] & (|(RV_TIMER_PERMIT[3] & ~reg_be))) |
-               (addr_hit[4] & (|(RV_TIMER_PERMIT[4] & ~reg_be))) |
-               (addr_hit[5] & (|(RV_TIMER_PERMIT[5] & ~reg_be))) |
-               (addr_hit[6] & (|(RV_TIMER_PERMIT[6] & ~reg_be))) |
-               (addr_hit[7] & (|(RV_TIMER_PERMIT[7] & ~reg_be))) |
-               (addr_hit[8] & (|(RV_TIMER_PERMIT[8] & ~reg_be))) |
-               (addr_hit[9] & (|(RV_TIMER_PERMIT[9] & ~reg_be)))));
+              ((racl_addr_hit_write[0] & (|(RV_TIMER_PERMIT[0] & ~reg_be))) |
+               (racl_addr_hit_write[1] & (|(RV_TIMER_PERMIT[1] & ~reg_be))) |
+               (racl_addr_hit_write[2] & (|(RV_TIMER_PERMIT[2] & ~reg_be))) |
+               (racl_addr_hit_write[3] & (|(RV_TIMER_PERMIT[3] & ~reg_be))) |
+               (racl_addr_hit_write[4] & (|(RV_TIMER_PERMIT[4] & ~reg_be))) |
+               (racl_addr_hit_write[5] & (|(RV_TIMER_PERMIT[5] & ~reg_be))) |
+               (racl_addr_hit_write[6] & (|(RV_TIMER_PERMIT[6] & ~reg_be))) |
+               (racl_addr_hit_write[7] & (|(RV_TIMER_PERMIT[7] & ~reg_be))) |
+               (racl_addr_hit_write[8] & (|(RV_TIMER_PERMIT[8] & ~reg_be))) |
+               (racl_addr_hit_write[9] & (|(RV_TIMER_PERMIT[9] & ~reg_be)))));
   end
 
   // Generate write-enables
-  assign alert_test_we = addr_hit[0] & reg_we & !reg_error;
+  assign alert_test_we = racl_addr_hit_write[0] & reg_we & !reg_error;
 
-  assign alert_test_wd = reg_wdata[0];
-  assign ctrl_we = addr_hit[1] & reg_we & !reg_error;
+  assign alert_test_fatal_fault_wd = reg_wdata[0];
+
+  assign alert_test_regwen_wd = reg_wdata[31];
+  assign ctrl_we = racl_addr_hit_write[1] & reg_we & !reg_error;
 
   assign ctrl_wd = reg_wdata[0];
-  assign intr_enable0_we = addr_hit[2] & reg_we & !reg_error;
+  assign intr_enable0_we = racl_addr_hit_write[2] & reg_we & !reg_error;
 
   assign intr_enable0_wd = reg_wdata[0];
-  assign intr_state0_we = addr_hit[3] & reg_we & !reg_error;
+  assign intr_state0_we = racl_addr_hit_write[3] & reg_we & !reg_error;
 
   assign intr_state0_wd = reg_wdata[0];
-  assign intr_test0_we = addr_hit[4] & reg_we & !reg_error;
+  assign intr_test0_we = racl_addr_hit_write[4] & reg_we & !reg_error;
 
   assign intr_test0_wd = reg_wdata[0];
-  assign cfg0_we = addr_hit[5] & reg_we & !reg_error;
+  assign cfg0_we = racl_addr_hit_write[5] & reg_we & !reg_error;
 
   assign cfg0_prescale_wd = reg_wdata[11:0];
 
   assign cfg0_step_wd = reg_wdata[23:16];
-  assign timer_v_lower0_we = addr_hit[6] & reg_we & !reg_error;
+  assign timer_v_lower0_we = racl_addr_hit_write[6] & reg_we & !reg_error;
 
   assign timer_v_lower0_wd = reg_wdata[31:0];
-  assign timer_v_upper0_we = addr_hit[7] & reg_we & !reg_error;
+  assign timer_v_upper0_we = racl_addr_hit_write[7] & reg_we & !reg_error;
 
   assign timer_v_upper0_wd = reg_wdata[31:0];
-  assign compare_lower0_0_we = addr_hit[8] & reg_we & !reg_error;
+  assign compare_lower0_0_we = racl_addr_hit_write[8] & reg_we & !reg_error;
 
   assign compare_lower0_0_wd = reg_wdata[31:0];
-  assign compare_upper0_0_we = addr_hit[9] & reg_we & !reg_error;
+  assign compare_upper0_0_we = racl_addr_hit_write[9] & reg_we & !reg_error;
 
   assign compare_upper0_0_wd = reg_wdata[31:0];
 
   // Assign write-enables to checker logic vector.
   always_comb begin
-    reg_we_check = '0;
     reg_we_check[0] = alert_test_we;
     reg_we_check[1] = ctrl_we;
     reg_we_check[2] = intr_enable0_we;
@@ -553,44 +665,45 @@ module rv_timer_reg_top (
   always_comb begin
     reg_rdata_next = '0;
     unique case (1'b1)
-      addr_hit[0]: begin
+      racl_addr_hit_read[0]: begin
         reg_rdata_next[0] = '0;
+        reg_rdata_next[31] = alert_test_regwen_qs;
       end
 
-      addr_hit[1]: begin
+      racl_addr_hit_read[1]: begin
         reg_rdata_next[0] = ctrl_qs;
       end
 
-      addr_hit[2]: begin
+      racl_addr_hit_read[2]: begin
         reg_rdata_next[0] = intr_enable0_qs;
       end
 
-      addr_hit[3]: begin
+      racl_addr_hit_read[3]: begin
         reg_rdata_next[0] = intr_state0_qs;
       end
 
-      addr_hit[4]: begin
+      racl_addr_hit_read[4]: begin
         reg_rdata_next[0] = '0;
       end
 
-      addr_hit[5]: begin
+      racl_addr_hit_read[5]: begin
         reg_rdata_next[11:0] = cfg0_prescale_qs;
         reg_rdata_next[23:16] = cfg0_step_qs;
       end
 
-      addr_hit[6]: begin
+      racl_addr_hit_read[6]: begin
         reg_rdata_next[31:0] = timer_v_lower0_qs;
       end
 
-      addr_hit[7]: begin
+      racl_addr_hit_read[7]: begin
         reg_rdata_next[31:0] = timer_v_upper0_qs;
       end
 
-      addr_hit[8]: begin
+      racl_addr_hit_read[8]: begin
         reg_rdata_next[31:0] = compare_lower0_0_qs;
       end
 
-      addr_hit[9]: begin
+      racl_addr_hit_read[9]: begin
         reg_rdata_next[31:0] = compare_upper0_0_qs;
       end
 
@@ -615,6 +728,8 @@ module rv_timer_reg_top (
   logic unused_be;
   assign unused_wdata = ^reg_wdata;
   assign unused_be = ^reg_be;
+  logic unused_policy_sel;
+  assign unused_policy_sel = ^racl_policies_i;
 
   // Assertions for Register Interface
   `ASSERT_PULSE(wePulse, reg_we, clk_i, !rst_ni)

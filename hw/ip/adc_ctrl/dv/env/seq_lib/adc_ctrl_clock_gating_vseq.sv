@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -30,8 +30,8 @@ class adc_ctrl_clock_gating_vseq extends adc_ctrl_filters_polled_vseq;
 
   virtual task configure_adc_ctrl();
     adc_ctrl_testmode_e testmode;
-    bit [ADC_CTRL_NUM_FILTERS:0] adc_intr_ctl;
-    bit [ADC_CTRL_NUM_FILTERS-1:0] adc_wakeup_ctl;
+    bit [ADC_CTRL_NUM_FILTERS+1:0] adc_intr_ctl;
+    bit [ADC_CTRL_NUM_FILTERS:0] adc_wakeup_ctl;
 
     super.configure_adc_ctrl();
     // Normal or low power
@@ -89,7 +89,7 @@ class adc_ctrl_clock_gating_vseq extends adc_ctrl_filters_polled_vseq;
     super.adc_ctrl_off();
   endtask
 
-  // Monitor wakeup signal and re-enable clock on postitive edge
+  // Monitor wakeup signal and re-enable clock on positive edge.
   virtual task monitor_wakeup();
     bit wakeup = 0, wakeup_prev = 0;
     forever begin

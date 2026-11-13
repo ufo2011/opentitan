@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,8 +41,15 @@ class kmac_smoke_vseq extends kmac_base_vseq;
         fname_arr[1] == 77; // "M"
         fname_arr[2] == 65; // "A"
         fname_arr[3] == 67; // "C"
-      } else {
+      } else if (cfg.enable_full_kmac) {
         fname_len == 0;
+      } else {
+        // Without the keyed MAC, SW can select cSHAKE with kmac_en == 0, so these values end up
+        // in the prefix. An empty function name and customization string makes the reference
+        // model fall back to SHAKE while the DUT still does cSHAKE, so keep one of them non-empty.
+        fname_len + custom_str_len > 0;
+        // The scoreboard expects len(fname) in bits to be encoded in a single byte.
+        fname_len < 32;
       }
     }
   }
@@ -103,8 +110,8 @@ class kmac_smoke_vseq extends kmac_base_vseq;
   // Do a full message hash, repeated num_trans times
   task body();
 
-    logic [keymgr_pkg::KeyWidth-1:0] sideload_share0;
-    logic [keymgr_pkg::KeyWidth-1:0] sideload_share1;
+    logic [keymgr_dpe_pkg::KeyWidth-1:0] sideload_share0;
+    logic [keymgr_dpe_pkg::KeyWidth-1:0] sideload_share1;
     key_sideload_set_seq sideload_seq;
 
     `uvm_info(`gfn, $sformatf("Starting %0d message hashes", num_trans), UVM_LOW)
@@ -168,7 +175,9 @@ class kmac_smoke_vseq extends kmac_base_vseq;
 
       // Only send a KMAC_APP request when in KMAC mode
       if (en_app) begin
-        bit process_key_err_before_app_done = $urandom_range(0, 1);
+        // Handle an injected error while the app operation is still running, or let it finish
+        // first. Mainly targets the KeyNotValid error, which cannot occur without the keyed MAC.
+        bit process_key_err_before_app_done = cfg.enable_full_kmac ? $urandom_range(0, 1) : 0;
         // Inject error might be disabled by the `send_kmac_req` thread.
         bit error_injected = 0;
 
@@ -195,7 +204,7 @@ class kmac_smoke_vseq extends kmac_base_vseq;
             bit [TL_DW-1:0] rand_data;
             `DV_CHECK_MEMBER_RANDOMIZE_FATAL(fifo_addr)
             `DV_CHECK_STD_RANDOMIZE_FATAL(rand_data)
-            wait (cfg.m_kmac_app_agent_cfg[app_mode].vif.kmac_data_req.valid);
+            wait (cfg.m_kmac_app_agent_cfg[app_mode].vif.mon_cb.req_valid);
             tl_access(.addr(ral.get_addr_from_offset(fifo_addr)),
                       .write(1),
                       .data(rand_data),
@@ -211,7 +220,7 @@ class kmac_smoke_vseq extends kmac_base_vseq;
           // the only command that will trigger this particular error is CmdStart.
           if (kmac_err_type == kmac_pkg::ErrSwIssuedCmdInAppActive) begin : sw_cmd_in_app
             kmac_pkg::kmac_cmd_e invalid_cmd = kmac_pkg::CmdStart;
-            wait (cfg.m_kmac_app_agent_cfg[app_mode].vif.kmac_data_req.valid);
+            wait (cfg.m_kmac_app_agent_cfg[app_mode].vif.mon_cb.req_valid);
             cfg.clk_rst_vif.wait_clks($urandom_range(25, 250));
             issue_cmd(invalid_cmd);
             error_injected = 1;
@@ -221,7 +230,7 @@ class kmac_smoke_vseq extends kmac_base_vseq;
           // provided to an AppKeymgr operation that is in progress.
           if (kmac_err_type == kmac_pkg::ErrKeyNotValid) begin : check_invalid_key_err
             // wait until the first valid request is seen
-            wait (cfg.m_kmac_app_agent_cfg[app_mode].vif.kmac_data_req.valid);
+            wait (cfg.m_kmac_app_agent_cfg[app_mode].vif.mon_cb.req_valid);
             if (process_key_err_before_app_done) begin
               disable send_kmac_req;
               check_err();
@@ -238,13 +247,18 @@ class kmac_smoke_vseq extends kmac_base_vseq;
         end else begin
           // Wait until the KMAC engine has completely finished
           `uvm_info(`gfn, "waiting for kmac_app operation to finish", UVM_HIGH)
-          wait (cfg.m_kmac_app_agent_cfg[app_mode].vif.rsp_done == 1);
+          wait (cfg.m_kmac_app_agent_cfg[app_mode].vif.mon_cb.rsp_valid);
           `uvm_info(`gfn, "finished waiting for kmac_app operation", UVM_HIGH)
 
           if (kmac_err_type inside
               {kmac_pkg::ErrSwPushedMsgFifo, kmac_pkg::ErrSwIssuedCmdInAppActive} &&
               error_injected) begin
+            // For ErrSwPushedMsgFifo error, err_code.get_mirror_value method
+            // incorrect return value for error injection test.
+            // Skip read check to remove false error.
+            cfg.skip_read_check = 1;
             check_err();
+            cfg.skip_read_check = 0;
             csr_utils_pkg::wait_no_outstanding_access();
           end
 
@@ -339,7 +353,10 @@ class kmac_smoke_vseq extends kmac_base_vseq;
       end else begin
         // If we don't read out the state window again, wait a few clocks before dropping the
         // sideload key (if applicable).
-        cfg.clk_rst_vif.wait_clks(5);
+        // TODO: This delay must be at least the rsp_delay_max from the app agent config. Otherwise
+        // the key can get invalidated before the response arrives which results in an error. We
+        // should change this that we wait until the response actually has arrived.
+        cfg.clk_rst_vif.wait_clks(10);
       end
 
       // Drop the sideloaded key if it was provided to the DUT.

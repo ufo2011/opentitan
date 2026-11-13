@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Luke Valenty (TinyFPGA project, https://github.com/tinyfpga/TinyFPGA-Bootloader).
@@ -16,10 +16,10 @@ module usb_fs_nb_in_pe #(
   parameter logic [4:0] NumInEps = 12,
   parameter int unsigned MaxInPktSizeByte = 32,
   // Targeting 17 bit times for the timeout. The counter runs on the 48 MHz
-  // clock, the SOP delay to rx_pkt_start_i is 3 bit times, and the EOP delay
-  // to tx_pkt_end_i is essentially 0. This timeout originates from Section
+  // clock, the SOP delay to rx_pkt_start_i is 1.5 bit times (synchronizer flops and K detection),
+  // and the EOP delay to tx_pkt_end_i is essentially 0. This timeout originates from Section
   // 7.1.19.1 of the USB 2.0 specification.
-  parameter int unsigned AckTimeoutCnt = (17 + 3) * 4,
+  parameter int unsigned AckTimeoutCnt = ((17 * 4) + 6) - 1,  // -1 because [N-1:0] counted
   localparam int unsigned InEpW = $clog2(NumInEps), // derived parameter
   localparam int unsigned PktW = $clog2(MaxInPktSizeByte), // derived parameter
   localparam int unsigned AckTimeoutCntW = $clog2(AckTimeoutCnt) // derived parameter
@@ -30,6 +30,12 @@ module usb_fs_nb_in_pe #(
   input  logic               link_active_i,
   input  logic [6:0]         dev_addr_i,
 
+
+  ////////////////////
+  // Transaction starting
+  ////////////////////
+  output logic                  in_xact_starting_o, // Start of an IN transaction; capture details
+  output logic [3:0]            in_xact_start_ep_o, // Endpoint starting an IN transaction
 
   ////////////////////
   // endpoint interface
@@ -47,7 +53,10 @@ module usb_fs_nb_in_pe #(
   input  logic [NumInEps-1:0]   in_ep_data_done_i, // Set when out of data
   input  logic [NumInEps-1:0]   in_ep_iso_i, // Configure endpoint in isochronous mode
 
-  input  logic [NumInEps-1:0]   data_toggle_clear_i, // Clear the data toggles for an EP
+  output logic [NumInEps-1:0]   in_data_toggle_o, // Current state of IN data toggles
+  input  logic                  in_datatog_we_i, // IN data toggles write strobe from software
+  input  logic [NumInEps-1:0]   in_datatog_status_i, // New state of selected IN data toggles
+  input  logic [NumInEps-1:0]   in_datatog_mask_i, // Which IN EP data toggles to modify
 
   ////////////////////
   // rx path
@@ -76,7 +85,14 @@ module usb_fs_nb_in_pe #(
   // Data payload to send if any
   output logic              tx_data_avail_o,
   input  logic              tx_data_get_i,
-  output logic [7:0]        tx_data_o
+  output logic [7:0]        tx_data_o,
+
+  ////////////////////
+  // event counters
+  ////////////////////
+  output logic              event_timeout_in_o,
+  output logic              event_nak_in_o,
+  output logic              event_nodata_in_o
 );
 
   ////////////////////////////////////////////////////////////////////////////////
@@ -105,7 +121,7 @@ module usb_fs_nb_in_pe #(
   logic [NumInEps-1:0] data_toggle_q, data_toggle_d;
 
   // endpoint data buffer
-  logic       token_received, setup_token_received, in_token_received, ack_received;
+  logic       token_received, setup_token_received, in_token_received, ack_received, nak_received;
   logic       more_data_to_send;
   logic       ep_in_hw, ep_active;
   logic [3:0] in_ep_current_d;
@@ -135,6 +151,11 @@ module usb_fs_nb_in_pe #(
     rx_pkt_valid_i &&
     rx_pid == UsbPidAck;
 
+  assign nak_received =
+    rx_pkt_end_i &&
+    rx_pkt_valid_i &&
+    rx_pid == UsbPidNak;
+
   // Is the specified endpoint actually implemented in hardware?
   assign ep_in_hw = {1'b0, rx_endp_i} < NumInEps;
   assign in_ep_current_d = ep_in_hw ? rx_endp_i : '0;
@@ -150,10 +171,22 @@ module usb_fs_nb_in_pe #(
   // Is the endpoint active?
   assign ep_active = in_ep_enabled_i[in_ep_index_d] & ep_in_hw;
 
-  assign more_data_to_send =
-      in_ep_has_data_i[in_ep_index] & ~in_ep_data_done_i[in_ep_index];
+  // Retain whether the current IN transmission has associated data; an Isochronous transaction
+  // for which there was no packet data available must not raise a 'pkt_sent' interrupt.
+  logic has_data_q;
+
+  assign more_data_to_send = has_data_q & ~in_ep_data_done_i[in_ep_index];
 
   assign tx_data_avail_o = logic'(in_xact_state == StSendData) & more_data_to_send;
+
+  ////////////////////////////////////////////////////////////////////////////////
+  // Transaction is starting on this IN endpoint; capture the packet details.
+  ////////////////////////////////////////////////////////////////////////////////
+  logic in_starting;
+  assign in_starting = (in_xact_state == StIdle || in_xact_state == StWaitAck) && in_token_received;
+
+  assign in_xact_starting_o = in_starting & ep_active;
+  assign in_xact_start_ep_o = in_ep_current_d;
 
   ////////////////////////////////////////////////////////////////////////////////
   // in transaction state machine
@@ -192,7 +225,7 @@ module usb_fs_nb_in_pe #(
         end else if (in_ep_stall_i[in_ep_index]) begin
           in_xact_state_next = StIdle;
           tx_pid_o = {UsbPidStall}; // STALL
-        end else if (in_ep_has_data_i[in_ep_index]) begin
+        end else if (has_data_q) begin
           in_xact_state_next = StSendData;
           tx_pid_o = {data_toggle_q[in_ep_index], 1'b0, {UsbPidTypeData}}; // DATA0/1
         end else begin
@@ -206,7 +239,7 @@ module usb_fs_nb_in_pe #(
         if ((!more_data_to_send) || ((&in_ep_get_addr_o) && tx_data_get_i)) begin
           if (in_ep_iso_i[in_ep_index]) begin
             in_xact_state_next = StIdle; // no ACK for ISO EPs
-            in_xact_end = in_ep_has_data_i[in_ep_index];
+            in_xact_end = has_data_q;
           end else begin
             if (tx_pkt_end_i) begin
               in_xact_state_next = StWaitAckStart;
@@ -246,9 +279,11 @@ module usb_fs_nb_in_pe #(
           in_xact_state_next = StIdle;
           in_xact_end = 1'b1;
         end else if (in_token_received) begin
-          in_xact_state_next = StRcvdIn;
+          // Handshake response is missing.
+          in_xact_state_next = ep_active ? StRcvdIn : StIdle;
           rollback_in_xact = 1'b1;
         end else if (rx_pkt_end_i) begin
+          // Includes NAK
           in_xact_state_next = StIdle;
           rollback_in_xact = 1'b1;
         end else begin
@@ -278,7 +313,6 @@ module usb_fs_nb_in_pe #(
     end else begin
       tx_data_o <= in_ep_data_i;
     end
-
   end
 
   always_ff @(posedge clk_48mhz_i or negedge rst_ni) begin
@@ -308,18 +342,21 @@ module usb_fs_nb_in_pe #(
 
   always_ff @(posedge clk_48mhz_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      in_ep_newpkt_o <= 1'b0;
+      in_ep_newpkt_o  <= 1'b0;
       in_ep_current_o <= '0;
+      has_data_q      <= 1'b0;
     end else begin
       if (in_token_received) begin
         in_ep_current_o <= in_ep_current_d;
-        in_ep_newpkt_o <= 1'b1;
+        in_ep_newpkt_o  <= 1'b1;
+        has_data_q      <= in_ep_has_data_i[in_ep_index_d];
       end else begin
         in_ep_newpkt_o <= 1'b0;
       end
     end
   end
 
+  // Updating of data toggles
   always_comb begin : proc_data_toggle_d
     data_toggle_d = data_toggle_q;
 
@@ -328,9 +365,14 @@ module usb_fs_nb_in_pe #(
     end else if ((in_xact_state == StWaitAck) && ack_received) begin
       data_toggle_d[in_ep_index] = ~data_toggle_q[in_ep_index];
     end
-
-    data_toggle_d = data_toggle_d & ~data_toggle_clear_i;
+    // Selective modification by software
+    if (in_datatog_we_i) begin
+      data_toggle_d = (data_toggle_d & ~in_datatog_mask_i) |
+                      (in_datatog_status_i & in_datatog_mask_i);
+    end
   end
+  // Supply current data toggles to register interface
+  assign in_data_toggle_o = data_toggle_q;
 
   always_ff @(posedge clk_48mhz_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -353,6 +395,34 @@ module usb_fs_nb_in_pe #(
       end
     end
   end
+
+  ////////////////////////////////////////////////////////////////////////////////
+  // Count non-Isochronous IN transactions not receiving a handshake response.
+  //
+  // - no handshake response within the timeout period
+  // - packet reception started within the timeout period but it was not ACK/NAK.
+  ////////////////////////////////////////////////////////////////////////////////
+  assign event_timeout_in_o = (in_xact_state == StWaitAckStart ||
+                              (in_xact_state == StWaitAck && rx_pkt_end_i && !nak_received))
+                            & rollback_in_xact;
+
+  ////////////////////////////////////////////////////////////////////////////////
+  // Count IN transactions that are actively NAKed by the host.
+  ////////////////////////////////////////////////////////////////////////////////
+  assign event_nak_in_o = (in_xact_state == StWaitAck) && nak_received;
+
+  ////////////////////////////////////////////////////////////////////////////////
+  // Count the number of IN requests for which data is not available, including
+  // endpoints which are supported but not presently enabled/configured.
+  // (These may be ignored using the event counter configuration if required.)
+  ////////////////////////////////////////////////////////////////////////////////
+  logic event_nodata_in_q;
+  // This event signal must be delayed by a single cycle so that 'in_ep_current_o' becomes valid.
+  always_ff @(posedge clk_48mhz_i or negedge rst_ni) begin
+    if (!rst_ni) event_nodata_in_q <= 1'b0;
+    else event_nodata_in_q <= in_starting & (ep_in_hw ? !in_ep_has_data_i[in_ep_index_d] : 1'b0);
+  end
+  assign event_nodata_in_o = event_nodata_in_q;
 
   ////////////////
   // Assertions //

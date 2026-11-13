@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -51,7 +51,7 @@ def main() -> int:
     parser.add_argument('elf', help=('The .elf file to check.'))
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
-    program = decode_elf(args.elf)
+    program = decode_elf(args.elf, [])
     result = check_call_stack(program)
     if args.verbose or result.has_errors() or result.has_warnings():
         print(result.report())

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 #include "sw/device/lib/base/mock_mmio.h"
 #include "sw/device/lib/dif/dif_test_base.h"
 
-#include "uart_regs.h"  // Generated.
+#include "hw/top/uart_regs.h"  // Generated.
 
 namespace dif_uart_unittest {
 namespace {
@@ -64,6 +64,12 @@ TEST_F(ConfigTest, NullArgs) {
   EXPECT_DIF_BADARG(dif_uart_configure(nullptr, config_));
 }
 
+TEST_F(ConfigTest, BadRxBreakLevel) {
+  dif_uart_config_t config = config_;
+  config.rx_break_level = (dif_uart_rx_break_level_t)5;
+  EXPECT_DIF_BADARG(dif_uart_configure(&uart_, config));
+}
+
 TEST_F(ConfigTest, DefaultTxRxEnabled) {
   ExpectDeviceReset();
   EXPECT_WRITE32(UART_CTRL_REG_OFFSET, {
@@ -71,7 +77,6 @@ TEST_F(ConfigTest, DefaultTxRxEnabled) {
                                            {UART_CTRL_RX_BIT, true},
                                            {UART_CTRL_NCO_OFFSET, 1},
                                        });
-  EXPECT_WRITE32(UART_INTR_ENABLE_REG_OFFSET, 0);
   EXPECT_DIF_OK(dif_uart_configure(&uart_, config_));
 }
 
@@ -81,7 +86,6 @@ TEST_F(ConfigTest, DefaultTxEnabled) {
                                            {UART_CTRL_TX_BIT, true},
                                            {UART_CTRL_NCO_OFFSET, 1},
                                        });
-  EXPECT_WRITE32(UART_INTR_ENABLE_REG_OFFSET, 0);
   config_.rx_enable = kDifToggleDisabled;
   EXPECT_DIF_OK(dif_uart_configure(&uart_, config_));
 }
@@ -92,7 +96,6 @@ TEST_F(ConfigTest, DefaultRxEnabled) {
                                            {UART_CTRL_RX_BIT, true},
                                            {UART_CTRL_NCO_OFFSET, 1},
                                        });
-  EXPECT_WRITE32(UART_INTR_ENABLE_REG_OFFSET, 0);
   config_.tx_enable = kDifToggleDisabled;
   EXPECT_DIF_OK(dif_uart_configure(&uart_, config_));
 }
@@ -100,7 +103,6 @@ TEST_F(ConfigTest, DefaultRxEnabled) {
 TEST_F(ConfigTest, DefaultTxRxDisabled) {
   ExpectDeviceReset();
   EXPECT_WRITE32(UART_CTRL_REG_OFFSET, {{UART_CTRL_NCO_OFFSET, 1}});
-  EXPECT_WRITE32(UART_INTR_ENABLE_REG_OFFSET, 0);
   config_.tx_enable = kDifToggleDisabled;
   config_.rx_enable = kDifToggleDisabled;
   EXPECT_DIF_OK(dif_uart_configure(&uart_, config_));
@@ -119,8 +121,6 @@ TEST_F(ConfigTest, ParityEven) {
                                            {UART_CTRL_NCO_OFFSET, 1},
                                        });
 
-  EXPECT_WRITE32(UART_INTR_ENABLE_REG_OFFSET, 0);
-
   EXPECT_DIF_OK(dif_uart_configure(&uart_, config_));
 }
 
@@ -138,9 +138,30 @@ TEST_F(ConfigTest, ParityOdd) {
                                            {UART_CTRL_NCO_OFFSET, 1},
                                        });
 
-  EXPECT_WRITE32(UART_INTR_ENABLE_REG_OFFSET, 0);
-
   EXPECT_DIF_OK(dif_uart_configure(&uart_, config_));
+}
+
+class RxBreakLevelSetTest : public UartTest {};
+
+TEST_F(RxBreakLevelSetTest, UartNull) {
+  EXPECT_DIF_BADARG(
+      dif_uart_rx_break_level_set(nullptr, kDifUartRxBreakLevel2));
+}
+
+TEST_F(RxBreakLevelSetTest, Success) {
+  EXPECT_MASK32(UART_CTRL_REG_OFFSET,
+                {
+                    {UART_CTRL_RXBLVL_OFFSET, UART_CTRL_RXBLVL_MASK,
+                     UART_CTRL_RXBLVL_VALUE_BREAK2},
+                });
+  EXPECT_DIF_OK(dif_uart_rx_break_level_set(&uart_, kDifUartRxBreakLevel2));
+
+  EXPECT_MASK32(UART_CTRL_REG_OFFSET,
+                {
+                    {UART_CTRL_RXBLVL_OFFSET, UART_CTRL_RXBLVL_MASK,
+                     UART_CTRL_RXBLVL_VALUE_BREAK16},
+                });
+  EXPECT_DIF_OK(dif_uart_rx_break_level_set(&uart_, kDifUartRxBreakLevel16));
 }
 
 class WatermarkRxSetTest : public UartTest {};
@@ -165,9 +186,9 @@ TEST_F(WatermarkRxSetTest, Success) {
   EXPECT_MASK32(UART_FIFO_CTRL_REG_OFFSET,
                 {
                     {UART_FIFO_CTRL_RXILVL_OFFSET, UART_FIFO_CTRL_RXILVL_MASK,
-                     UART_FIFO_CTRL_RXILVL_VALUE_RXLVL30},
+                     UART_FIFO_CTRL_RXILVL_VALUE_RXLVL62},
                 });
-  EXPECT_DIF_OK(dif_uart_watermark_rx_set(&uart_, kDifUartWatermarkByte30));
+  EXPECT_DIF_OK(dif_uart_watermark_rx_set(&uart_, kDifUartWatermarkByte62));
 }
 
 class WatermarkTxSetTest : public UartTest {};
@@ -177,7 +198,7 @@ TEST_F(WatermarkTxSetTest, NullArgs) {
 }
 
 TEST_F(WatermarkTxSetTest, InvalidWatermark) {
-  EXPECT_EQ(dif_uart_watermark_tx_set(&uart_, kDifUartWatermarkByte30),
+  EXPECT_EQ(dif_uart_watermark_tx_set(&uart_, kDifUartWatermarkByte62),
             kDifError);
 }
 

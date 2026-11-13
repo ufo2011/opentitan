@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 r"""Command-line tool to validate and convert register hjson
@@ -11,11 +11,14 @@ import re
 import sys
 from pathlib import Path
 
-from reggen import (gen_cheader, gen_dv, gen_fpv, gen_html, gen_json, gen_rtl,
-                    gen_rust, gen_sec_cm_testplan, gen_selfdoc, gen_tock,
-                    version)
-from reggen.countermeasure import CounterMeasure
+from reggen import (
+    gen_cfg_md, gen_cheader, gen_dv, gen_fpv, gen_md, gen_html, gen_json, gen_rtl,
+    gen_rust, gen_sec_cm_testplan, gen_selfdoc, systemrdl_exporter, gen_tock, version,
+    vendor_specific
+)
 from reggen.ip_block import IpBlock
+
+import version_file
 
 DESC = """regtool, generate register info from Hjson source"""
 
@@ -43,7 +46,7 @@ def main():
                         help='input file in Hjson type')
     parser.add_argument('-d',
                         action='store_true',
-                        help='Output register documentation (html)')
+                        help='Output register documentation (markdown)')
     parser.add_argument('-a',
                         '--alias',
                         type=Path,
@@ -65,9 +68,15 @@ def main():
     parser.add_argument('--tock',
                         action='store_true',
                         help='Output Tock constants')
+    parser.add_argument('--interfaces',
+                        action='store_true',
+                        help='Output interfaces documentation (markdown)')
+    parser.add_argument('--doc-html-old',
+                        action='store_true',
+                        help='Output html documentation (depreciated)')
     parser.add_argument('--doc',
                         action='store_true',
-                        help='Output source file documentation (gfm)')
+                        help='Output source file documentation (markdown)')
     parser.add_argument('-j',
                         action='store_true',
                         help='Output as formatted JSON')
@@ -81,6 +90,9 @@ def main():
     parser.add_argument('-s',
                         action='store_true',
                         help='Output as UVM Register class')
+    parser.add_argument('--systemrdl',
+                        action='store_true',
+                        help='Output a SystemRDL description')
     parser.add_argument('-f',
                         action='store_true',
                         help='Output as FPV CSR rw assertion module')
@@ -123,6 +135,13 @@ def main():
     parser.add_argument('--novalidate',
                         action='store_true',
                         help='Skip validate, just output json')
+    parser.add_argument('--node',
+                        '-n',
+                        type=str,
+                        default="",
+                        help='''Regblock node to generate.
+                                By default, generate for all nodes.
+                                ''')
     parser.add_argument(
         '--version-stamp',
         type=str,
@@ -130,18 +149,26 @@ def main():
         help=
         'If version stamping, the location of workspace version stamp file.')
 
+    parser.add_argument('--vendor-specific-fields',
+                        type=str,
+                        default=None,
+                        help='A hjson file describing vendor defined fields.')
+
     args = parser.parse_args()
+
+    vendor_specific.extend_optional_fields(args.vendor_specific_fields)
 
     if args.version:
         version.show_and_exit(__file__, ["Hjson", "Mako"])
 
+    log_format = "%(filename)s:%(lineno)d: %(levelname)s: %(message)s"
     verbose = args.verbose
     if verbose:
-        log.basicConfig(format="%(levelname)s: %(message)s", level=log.DEBUG)
+        log.basicConfig(format=log_format, level=log.DEBUG)
     elif args.quiet:
-        log.basicConfig(format="%(levelname)s: %(message)s", level=log.ERROR)
+        log.basicConfig(format=log_format, level=log.ERROR)
     else:
-        log.basicConfig(format="%(levelname)s: %(message)s")
+        log.basicConfig(format=log_format)
 
     # Entries are triples of the form (arg, (fmt, dirspec)).
     #
@@ -150,11 +177,14 @@ def main():
     # the output needs a directory, it is a default path relative to the source
     # file (used when --outdir is not given).
     arg_to_format = [('j', ('json', None)), ('c', ('compact', None)),
-                     ('d', ('html', None)), ('doc', ('doc', None)),
+                     ('d', ('registers', None)), ('doc', ('doc', None)),
                      ('r', ('rtl', 'rtl')), ('s', ('dv', 'dv')),
                      ('f', ('fpv', 'fpv/vip')), ('cdefines', ('cdh', None)),
                      ('sec_cm_testplan', ('sec_cm_testplan', 'data')),
-                     ('rust', ('rs', None)), ('tock', ('trs', None))]
+                     ('rust', ('rs', None)), ('tock', ('trs', None)),
+                     ('interfaces', ('interfaces', None)),
+                     ('systemrdl', ('systemrdl', None)),
+                     ('doc_html_old', ('doc_html_old', None))]
     fmt = None
     dirspec = None
     for arg_name, spec in arg_to_format:
@@ -210,12 +240,8 @@ def main():
                     fmt))
             sys.exit(1)
 
-    version_stamp = {}
-    if args.version_stamp is not None:
-        with open(args.version_stamp, 'rt') as f:
-            for line in f:
-                k, v = line.strip().split(' ', 1)
-                version_stamp[k] = v
+    # Extract version stamp from file
+    version_stamp = version_file.VersionInformation(args.version_stamp)
 
     if fmt == 'doc':
         with outfile:
@@ -225,7 +251,7 @@ def main():
     srcfull = infile.read()
 
     try:
-        obj = IpBlock.from_text(srcfull, params, infile.name)
+        obj = IpBlock.from_text(srcfull, params, infile.name, args.node)
     except ValueError as err:
         log.error(str(err))
         exit(1)
@@ -243,16 +269,6 @@ def main():
         if args.scrub:
             raise ValueError('The --scrub argument is only meaningful in '
                              'combination with the --alias argument')
-
-    # If this block has countermeasures, we grep for RTL annotations in all
-    # .sv implementation files and check whether they match up with what is
-    # defined inside the Hjson.
-    # Skip this check when generating DV code - its not needed.
-    if fmt != 'dv':
-        sv_files = Path(
-            infile.name).parent.joinpath('..').joinpath('rtl').glob('*.sv')
-        rtl_names = CounterMeasure.search_rtl_files(sv_files)
-        obj.check_cm_annotations(rtl_names, infile.name)
 
     if args.novalidate:
         with outfile:
@@ -272,7 +288,9 @@ def main():
         found_spdx = None
         found_lunder = None
         copy = re.compile(r'.*(copyright.*)|(.*\(c\).*)', re.IGNORECASE)
+        # REUSE-IgnoreStart
         spdx = re.compile(r'.*(SPDX-License-Identifier:.+)')
+        # REUSE-IgnoreEnd
         lunder = re.compile(r'.*(Licensed under.+)', re.IGNORECASE)
         for line in srcfull.splitlines():
             mat = copy.match(line)
@@ -290,7 +308,14 @@ def main():
             src_lic += '\n' + found_spdx
 
         with outfile:
-            if fmt == 'html':
+            if fmt == 'registers':
+                return gen_md.gen_md(obj, outfile)
+            elif fmt == 'interfaces':
+                # Assumes the registers will be in a file called `registers.md`
+                # and within the same location as the output's destination.
+                # Exposing this as an option would nice to do.
+                return gen_cfg_md.gen_cfg_md(obj, outfile, "registers.md")
+            elif fmt == 'doc_html_old':
                 return gen_html.gen_html(obj, outfile)
             elif fmt == 'cdh':
                 return gen_cheader.gen_cdefines(obj, outfile, src_lic,
@@ -300,6 +325,8 @@ def main():
             elif fmt == 'trs':
                 return gen_tock.gen_tock(obj, outfile, infile.name, src_lic,
                                          src_copy, version_stamp)
+            elif fmt == 'systemrdl':
+                return systemrdl_exporter.SystemrdlExporter(obj).export(outfile)
             else:
                 return gen_json.gen_json(obj, outfile, fmt)
 

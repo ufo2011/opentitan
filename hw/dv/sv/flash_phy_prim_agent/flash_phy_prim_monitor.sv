@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,7 +42,7 @@ class flash_phy_prim_monitor extends dv_base_monitor #(
   task run_phase(uvm_phase phase);
     if (cfg.scb_otf_en) begin
       `DV_SPINWAIT(wait(cfg.mon_start);,
-                   "timeout waiting for mon_start", 100_000)
+                   "timeout waiting for mon_start", 500_000)
       fork
         super.run_phase(phase);
         monitor_core();
@@ -76,7 +76,7 @@ class flash_phy_prim_monitor extends dv_base_monitor #(
   endtask
 
   // collect transactions forever - already forked in dv_base_monitor::run_phase
-  virtual protected task collect_trans(uvm_phase phase);
+  virtual protected task collect_trans();
     `DV_SPINWAIT(wait(cfg.vif.rst_n == 1);,
                  "timeout waiting for reset deassert", 100_000)
     `uvm_info(`gfn, $sformatf("flash_phy_prim_monitor %s", (cfg.scb_otf_en)? "enabled" :
@@ -138,13 +138,14 @@ class flash_phy_prim_monitor extends dv_base_monitor #(
       write_buffer[bank] = {};
     end
   endtask // collect_item
+
   function void collect_lm_item(int bank);
     flash_phy_prim_item item;
     `uvm_create_obj(flash_phy_prim_item, item)
     item.req = cfg.vif.req[bank];
     item.rsp = cfg.vif.rsp[bank];
     eg_rtl_lm_port[bank].write(item);
-    `uvm_info("lm_debug", $sformatf("I sent bank%0d", bank),UVM_MEDIUM)
+    `uvm_info("lm_debug", $sformatf("Sent reguest %p for bank %0d", item.req, bank), UVM_MEDIUM)
   endfunction // collect_lm_item
 
 endclass

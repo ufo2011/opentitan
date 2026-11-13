@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 #ifndef OPENTITAN_SW_DEVICE_SILICON_CREATOR_ROM_BOOTSTRAP_H_
@@ -14,11 +14,12 @@ extern "C" {
 /**
  * Checks whether bootstrap is requested.
  *
- * The return value of this function also depends on the `ROM_BOOTSTRAP_EN` OTP
+ * The return value of this function also depends on the `ROM_BOOTSTRAP_DIS` OTP
  * item.
  *
  * @return Whether bootstrap is requested.
  */
+OT_WARN_UNUSED_RESULT
 hardened_bool_t bootstrap_requested(void);
 
 /**
@@ -27,7 +28,6 @@ hardened_bool_t bootstrap_requested(void);
  *
  * OpenTitan bootstrap uses the typical SPI flash EEPROM commands. A typical
  * bootstrap session involves:
- * - Asserting bootstrap pins to enter bootstrap mode,
  * - Erasing the chip (WREN, CHIP_ERASE, busy loop ...),
  * - Programming the chip (WREN, PAGE_PROGRAM, busy loop ...), and
  * - Resetting the chip (RESET).
@@ -37,6 +37,7 @@ hardened_bool_t bootstrap_requested(void);
  *
  * @return Result of the operation.
  */
+OT_WARN_UNUSED_RESULT
 rom_error_t bootstrap(void);
 
 #ifdef __cplusplus

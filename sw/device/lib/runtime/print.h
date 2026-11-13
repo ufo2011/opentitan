@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,6 @@
 
 #include <stdarg.h>
 #include <stddef.h>
-
-#include "sw/device/lib/dif/dif_uart.h"
 
 /**
  * @file
@@ -28,6 +26,12 @@
  */
 
 /**
+ * Function pointer type for data sink.
+ * The function should return the number of bytes actually written.
+ */
+typedef size_t (*sink_func_ptr)(void *data, const char *buf, size_t len);
+
+/**
  * A buffer_sink_t represents a place to write bytes to, implemented as a
  * C-style "closure".
  *
@@ -35,11 +39,10 @@
  * information, and a sink function, which takes the data pointer, a buffer, and
  * that buffer's length.
  *
- * The sink function should return the number of bytes actually written.
  */
 typedef struct buffer_sink {
   void *data;
-  size_t (*sink)(void *data, const char *buf, size_t len);
+  sink_func_ptr sink;
 } buffer_sink_t;
 
 /**
@@ -65,6 +68,7 @@ typedef struct buffer_sink {
  * - %b, which prints an unsigned binary uint32_t.
  *
  * Finally, additional nonstandard format specifiers is supported:
+ * - %C prints a 'FourCC' style uint32_t (ASCII bytes in little-endian order).
  * - %!s, which takes a size_t followed by a pointer to a buffer, and prints
  *   out that many characters from the buffer.
  * - %!x, %!X, %!y, and %!Y, which are like %!s but print out a hex dump
@@ -92,7 +96,7 @@ typedef struct buffer_sink {
  * Note that for logging in DV, the following script updates the format
  * specifiers supported in C above and changes them to match the SystemVerilog
  * language semantics: util/device_sw_utils/extract_sw_logs.py
- * It also makes fixes as needed for custom speficiers such as %!s.
+ * It also makes fixes as needed for custom specifiers such as %!s.
  *
  * @param format the format spec.
  * @param ... values to interpolate in the format spec.
@@ -278,15 +282,5 @@ size_t base_fhexdump_with(buffer_sink_t out, base_hexdump_fmt_t fmt,
  * @param out the sink to use for "default" printing.
  */
 void base_set_stdout(buffer_sink_t out);
-
-/**
- * Configures UART stdout for `base_print.h` to use.
- *
- * Note that this function will save `uart` in a global variable, so the pointer
- * must have static storage duration.
- *
- * @param uart The UART handle to use for stdout.
- */
-void base_uart_stdout(const dif_uart_t *uart);
 
 #endif  // OPENTITAN_SW_DEVICE_LIB_RUNTIME_PRINT_H_

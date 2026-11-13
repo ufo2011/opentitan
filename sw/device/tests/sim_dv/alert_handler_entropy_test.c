@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "alert_handler_regs.h"  // Generated.
+#include "hw/top/alert_handler_regs.h"  // Generated.
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
 
 /*
@@ -32,7 +32,7 @@ static void alert_handler_config(void) {
 
   // Enable all incoming alerts and configure them to classa.
   // This alert should never fire because we do not expect any incoming alerts.
-  for (int i = 0; i < ALERT_HANDLER_PARAM_N_ALERTS; ++i) {
+  for (dif_alert_handler_alert_t i = 0; i < ALERT_HANDLER_PARAM_N_ALERTS; ++i) {
     alerts[i] = i;
     alert_classes[i] = kDifAlertHandlerClassA;
   }
@@ -40,7 +40,8 @@ static void alert_handler_config(void) {
   // Enable all local alerts and configure them to classb.
   dif_alert_handler_alert_t loc_alerts[ALERT_HANDLER_PARAM_N_LOC_ALERT];
   dif_alert_handler_class_t loc_alert_classes[ALERT_HANDLER_PARAM_N_LOC_ALERT];
-  for (int i = 0; i < ALERT_HANDLER_PARAM_N_LOC_ALERT; ++i) {
+  for (dif_alert_handler_alert_t i = 0; i < ALERT_HANDLER_PARAM_N_LOC_ALERT;
+       ++i) {
     loc_alerts[i] = i;
     loc_alert_classes[i] = kDifAlertHandlerClassB;
   }
@@ -77,8 +78,8 @@ static void alert_handler_config(void) {
       .ping_timeout = 1000,
   };
 
-  alert_handler_testutils_configure_all(&alert_handler, config,
-                                        kDifToggleEnabled);
+  CHECK_STATUS_OK(alert_handler_testutils_configure_all(&alert_handler, config,
+                                                        kDifToggleEnabled));
 }
 
 bool test_main(void) {

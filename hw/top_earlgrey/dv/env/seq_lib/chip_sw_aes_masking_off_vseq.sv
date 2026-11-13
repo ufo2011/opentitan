@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -201,7 +201,7 @@ class chip_sw_aes_masking_off_vseq extends chip_sw_base_vseq;
     super.body();
 
     // Set path to the AES cipher core.
-    aes_cipher_core_path = "tb.dut.top_earlgrey.u_aes.u_aes_core.u_aes_cipher_core";
+    aes_cipher_core_path = "tb.dut.top_earlgrey.earlgrey_pd_main.u_aes.u_aes_core.u_aes_cipher_core";
 
     // Initialize block counter. We will do 4 blocks.
     block_ctr = 0;

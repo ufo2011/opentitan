@@ -1,10 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 // Request sequence for Push and Pull protocols.
 //
-// Similiar push_pull_host_seq, this sequence will send an unlimited number of requests to
+// Similar push_pull_host_seq, this sequence will send an unlimited number of requests to
 // the DUT. It is the responsibility of the parent sequence to halt this sequence by setting
 // the stop field.
 //

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -8,6 +8,7 @@ module tb;
   import dv_utils_pkg::*;
   import aon_timer_env_pkg::*;
   import aon_timer_test_pkg::*;
+  import top_racl_pkg::*;
 
   // macro includes
   `include "uvm_macros.svh"
@@ -18,9 +19,11 @@ module tb;
   wire                          clk_aon, rst_aon_n;
   wire                          lc_escalate_en_bit;
   lc_ctrl_pkg::lc_tx_t          lc_escalate_en;
-  wire                          wkup_expired, wdog_bark;
+  wire                          wkup_expired, wdog_bark, wdog_bark_nmi;
   wire                          wkup_req, rst_req;
   wire                          sleep;
+  racl_policy_vec_t racl_policies;
+  assign racl_policies = 0;
 
   clk_rst_if fast_clk_rst_if(.clk(clk),     .rst_n(rst_n));
   clk_rst_if aon_clk_rst_if (.clk(clk_aon), .rst_n(rst_aon_n));
@@ -55,14 +58,18 @@ module tb;
     .tl_o                      (tl_if.d2h),
     .alert_rx_i                (alert_rx),
     .alert_tx_o                (alert_tx),
+    .racl_policies_i           (racl_policies),
+    .racl_error_o              (),
     .lc_escalate_en_i          (lc_escalate_en),
     .intr_wkup_timer_expired_o (wkup_expired),
     .intr_wdog_timer_bark_o    (wdog_bark),
-    .nmi_wdog_timer_bark_o     (/*TODO*/),
+    .nmi_wdog_timer_bark_o     (wdog_bark_nmi),
     .wkup_req_o                (wkup_req),
     .aon_timer_rst_req_o       (rst_req),
     .sleep_mode_i              (sleep)
   );
+
+  `ASSERT(wdog_bark_intr_is_nmi, wdog_bark === wdog_bark_nmi, clk, rst_n)
 
   initial begin
     // Configure interfaces

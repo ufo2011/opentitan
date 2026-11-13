@@ -1,4 +1,4 @@
-/* Copyright lowRISC contributors. */
+/* Copyright lowRISC contributors (OpenTitan project). */
 /* Licensed under the Apache License, Version 2.0, see LICENSE for details. */
 /* SPDX-License-Identifier: Apache-2.0 */
 
@@ -27,39 +27,10 @@ start:
   unimp
 
 p256_gen_secret_key:
-  /* Init all-zero register. */
-  bn.xor    w31, w31, w31
-
-  /* Load shares of seed from DMEM.
-       [w21,w20] <= dmem[seed0]
-       [w23,w33] <= dmem[seed1] */
-  li        x2, 20
-  la        x3, seed0
-  bn.lid    x2, 0(x3++)
-  li        x2, 21
-  bn.lid    x2++, 0(x3)
-  la        x3, seed1
-  bn.lid    x2, 0(x3++)
-  li        x2, 23
-  bn.lid    x2, 0(x3)
-
-  /* Generate the derived secret key.
-       [w21,w20] <= d0
-       [w23,w33] <= d1 */
-  jal       x1, p256_key_from_seed
-
-  /* Write the results to DMEM.
-       dmem[d0] <= [w21, w20]
-       dmem[d1] <= [w23, w22] */
-  li        x2, 20
-  la        x3, d0
-  bn.sid    x2, 0(x3++)
-  li        x2, 21
-  bn.sid    x2++, 0(x3)
-  la        x3, d1
-  bn.sid    x2, 0(x3++)
-  li        x2, 23
-  bn.sid    x2, 0(x3)
+  /* First, generate the masked secret key d and write to DMEM.
+       dmem[d0] <= d0
+       dmem[d1] <= d1 */
+  jal       x1, run_gen_secret_key
 
   ecall
 
@@ -67,7 +38,7 @@ p256_gen_keypair:
   /* First, generate the masked secret key d and write to DMEM.
        dmem[d0] <= d0
        dmem[d1] <= d1 */
-  jal       x1, p256_gen_secret_key
+  jal       x1, run_gen_secret_key
 
   /* Generate the public key Q = d*G.
        dmem[x] <= Q.x
@@ -76,6 +47,44 @@ p256_gen_keypair:
 
   ecall
 
+run_gen_secret_key:
+  /* Init all-zero register. */
+  bn.xor    w31, w31, w31
+
+  /* Load shares of seed from DMEM.
+       [w21,w20] <= dmem[seed0]
+       [w11,w10] <= dmem[seed1] */
+  li        x2, 20
+  la        x3, seed0
+  bn.lid    x2, 0(x3++)
+  li        x2, 21
+  bn.lid    x2, 0(x3)
+  li        x2, 10
+  la        x3, seed1
+  bn.lid    x2, 0(x3++)
+  li        x2, 11
+  bn.lid    x2, 0(x3)
+
+  /* Generate the derived secret key.
+       [w21,w20] <= d0
+       [w11,w10] <= d1 */
+  jal       x1, p256_key_from_seed
+
+  /* Write the results to DMEM.
+       dmem[d0] <= [w21, w20]
+       dmem[d1] <= [w11, w10] */
+  li        x2, 20
+  la        x3, d0
+  bn.sid    x2, 0(x3++)
+  li        x2, 21
+  bn.sid    x2, 0(x3)
+  li        x2, 10
+  la        x3, d1
+  bn.sid    x2, 0(x3++)
+  li        x2, 11
+  bn.sid    x2, 0(x3)
+
+  ret
 
 /**
  * Note: Technically this could be a .bss section, but it is convenient for

@@ -34,8 +34,8 @@ class ibex_icache_core_monitor extends dv_base_monitor #(
     disable fork;
   endtask
 
-  // collect transactions forever - already forked in dv_base_moditor::run_phase
-  virtual protected task collect_trans(uvm_phase phase);
+  // collect transactions forever - already forked in dv_base_monitor::run_phase
+  virtual protected task collect_trans();
     ibex_icache_core_bus_item trans;
     logic                     last_inval = 0;
     logic                     last_enable = 0;

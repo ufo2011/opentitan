@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,10 @@ if { $lr_synth_timing_run } {
 yosys "read_verilog -sv $lr_synth_out_dir/generated/*.v"
 
 # Set top-module parameters.
-yosys "chparam -set EnMasking $lr_synth_en_masking $lr_synth_top_module"
+if { $lr_synth_top_module != "kmac_reduced"} {
+  # For an unknown reason, synthesis of the kmac_reduced modules fails with an error if we try to set this top-level paramater.
+  yosys "chparam -set EnMasking $lr_synth_en_masking $lr_synth_top_module"
+}
 if { $lr_synth_top_module == "keccak_2share" || $lr_synth_top_module == "keccak_round"} {
   yosys "chparam -set Width $lr_synth_width $lr_synth_top_module"
 }
@@ -25,10 +28,15 @@ if { $lr_synth_top_module == "keccak_2share" || $lr_synth_top_module == "keccak_
 # Remap Xilinx Vivado "dont_touch" attributes to Yosys "keep" attributes.
 yosys "attrmap -tocase keep -imap dont_touch=\"yes\" keep=1 -imap dont_touch=\"no\" keep=0 -remove keep=0"
 
-# Place keep_hierarchy contraints on relevant modules to prevent aggressive synthesis optimzations
+# Place keep_hierarchy constraints on relevant modules to prevent aggressive synthesis optimizations
 # across the boundaries of these modules.
 yosys "hierarchy -check -top $lr_synth_top_module"
-yosys "setattr -mod -set keep_hierarchy 1 *prim_xilinx*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_and2*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_buf*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_clock*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_flop*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_xnor2*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_xor2*"
 
 # Synthesize.
 yosys "synth -nofsm $flatten_opt -top $lr_synth_top_module"
@@ -38,12 +46,22 @@ yosys "write_verilog $lr_synth_pre_map_out"
 
 # Remove keep_hierarchy constraints before writing out the netlist for Alma as it doesn't like
 # these constraints.
-yosys "setattr -mod -set keep_hierarchy 0 *prim_xilinx*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_and2*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_buf*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_clock*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_flop*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_xnor2*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_xor2*"
 
 yosys "write_verilog $lr_synth_alma_out"
 
 # Re-add keep_hierarchy constraints for further synthesis steps.
-yosys "setattr -mod -set keep_hierarchy 1 *prim_xilinx*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_and2*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_buf*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_clock*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_flop*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_xnor2*"
+yosys "setattr -mod -set keep_hierarchy 1 *prim_xor2*"
 
 yosys "dfflibmap -liberty $lr_synth_cell_library_path"
 yosys "opt"
@@ -57,14 +75,19 @@ if { $lr_synth_timing_run } {
 }
 
 # Remove keep_hierarchy constraints before the final flattening step. We're done optimizing.
-yosys "setattr -mod -set keep_hierarchy 0 *prim_xilinx*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_and2*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_buf*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_clock*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_flop*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_xnor2*"
+yosys "setattr -mod -set keep_hierarchy 0 *prim_xor2*"
 
 # Final flattening.
 if { $lr_synth_flatten } {
   yosys "flatten"
 }
 
-yosys "clean"
+yosys "clean -purge"
 yosys "write_verilog $lr_synth_netlist_out"
 
 if { $lr_synth_timing_run } {
@@ -79,4 +102,3 @@ yosys "check"
 yosys "log ======== Yosys Stat Report ========"
 yosys "tee -o $lr_synth_out_dir/reports/area.rpt stat -liberty $lr_synth_cell_library_path"
 yosys "log ====== End Yosys Stat Report ======"
-

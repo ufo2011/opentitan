@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 
 /**
  * @file
- * @brief <a href="/hw/ip/pattgen/doc/">Pattern Generator</a> Device Interface
+ * @brief <a href="/book/hw/ip/pattgen/">Pattern Generator</a> Device Interface
  * Functions
  */
 
@@ -109,6 +109,22 @@ typedef struct dif_pattgen_channel_config {
    * Valid range: [1, 1024]
    */
   uint16_t num_pattern_repetitions;
+  /**
+   * Inactive level of the data signal.
+   *
+   * This is the level of the PDA output when the pattgen is not actively
+   * sending data bits (i.e., when pattgen is disabled or all data bits have
+   * been sent).
+   */
+  bool inactive_level_pda;
+  /**
+   * Inactive level of the clock signal.
+   *
+   * This is the level of the PCL output when the pattgen is not actively
+   * sending data bits (i.e., when pattgen is disabled or all data bits have
+   * been sent).
+   */
+  bool inactive_level_pcl;
 } dif_pattgen_channel_config_t;
 
 /**

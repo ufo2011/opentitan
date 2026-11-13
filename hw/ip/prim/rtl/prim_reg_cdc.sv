@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -11,6 +11,17 @@
 //
 // If in the future this assumption changes, we can modify this module easily to
 // support the new behavior.
+//
+// Note on domain resets
+//
+// When a single domain is reset, assertions of the internal signals 'dst_req'
+// and/or 'src_ack' may occur as the two ends of a pulse synchronizer
+// (prim_pulse_sync or prim_sync_reqack, NRZ option) are briefly inconsistent,
+// generating a spurious pulse at the destination.
+//
+// These pulses are prevented from propagating outside of this module, provided
+// that the reset does not occur whilst a transaction is in progress; firmware
+// is responsible for preventing that.
 
 `include "prim_assert.sv"
 
@@ -77,7 +88,7 @@ module prim_reg_cdc #(
   // register.
   // When software performs a write, the write data is captured in src_q for
   // CDC purposes.  When not performing a write, the src_q reflects the most recent
-  // hardware value. For registes with no hardware access, this is simply the
+  // hardware value. For registers with no hardware access, this is simply the
   // the value programmed by software (or in the case R1C, W1C etc) the value after
   // the operation. For registers with hardware access, this reflects a potentially
   // delayed version of the real value, as the software facing updates lag real
@@ -100,6 +111,24 @@ module prim_reg_cdc #(
   // This is the current destination value
   logic [DataWidth-1:0] dst_qs;
   logic src_update;
+
+  // The dst_to_src signal (on the src clock) means that data should be moving from the dst clock
+  // domain to the src clock domain on this cycle.
+  //
+  // This either means that an operation from the src side is being acknowledged or (if it's
+  // possible for the value to change on the dst side) it means that a register read response is
+  // coming from the dst clock domain. The register value may have changed from last time so should
+  // be copied back.
+  logic dst_to_src;
+  if (DstWrReq) begin : gen_wr_req
+    assign dst_to_src = src_busy_q && src_ack || src_update && !busy;
+  end else begin : gen_passthru
+    assign dst_to_src = src_busy_q && src_ack;
+
+    logic unused_dst_wr;
+    assign unused_dst_wr = src_update ^ busy;
+  end
+
   always_ff @(posedge clk_src_i or negedge rst_src_ni) begin
     if (!rst_src_ni) begin
       src_q <= ResetVal;
@@ -111,11 +140,11 @@ module prim_reg_cdc #(
       // change for the duration of the synchronization operation.
       src_q <= src_wd_i & BitMask;
       txn_bits_q <= {src_we_i, src_re_i, src_regwen_i};
-    end else if (src_busy_q && src_ack || src_update && !busy) begin
+    end else if (dst_to_src) begin
       // sample data whenever a busy transaction finishes OR
       // when an update pulse is seen.
       // TODO: We should add a cover group to test different sync timings
-      // between src_ack and src_update. Ie, there can be 3 scearios:
+      // between src_ack and src_update. ie. there can be 3 scenarios:
       // 1. update one cycle before ack
       // 2. ack one cycle before update
       // 3. update / ack on the same cycle
@@ -183,15 +212,29 @@ module prim_reg_cdc #(
   );
 
 
-  // Each is valid only when destination request pulse is high
+  // Each is valid only when destination request pulse is high; this is important in not propagating
+  // the internal assertion of 'dst_req' by the 'prim_pulse_sync' channel when just one domain is
+  // reset.
   assign {dst_we_o, dst_re_o, dst_regwen_o} = txn_bits_q & {TxnWidth{dst_req}};
 
   `ASSERT_KNOWN(SrcBusyKnown_A, src_busy_o, clk_src_i, !rst_src_ni)
   `ASSERT_KNOWN(DstReqKnown_A, dst_req, clk_dst_i, !rst_dst_ni)
 
-  // If busy goes high, we must eventually see an ack
+  // If busy goes high, we must eventually see an ack.
+  //
+  // This is fundamentally a liveness property and only really useful in a formal setting (since a
+  // simulation can never give a counterexample). Unfortunately, proving liveness properties can be
+  // intractable for formal tools. This assertion bounds the time, making it a safety property that
+  // the tool can handle more easily.
+  //
+  // The required bound depends on the ratio between the two clocks. If there are N edges of
+  // clk_dst_i for each edge of clk_src_i, we can expect a bound of 4*N to suffice (because there is
+  // a 2-flop synchroniser in each direction).
+  //
+  // The possible clock ratios rely on tool configuration, but we set N=10 (which matches the
+  // configuration for the main clock and the slow aon clock in our FPV tool setup).
   `ifdef FPV_ON
-    `ASSERT(HungHandShake_A, $rose(src_req) |-> strong(##[0:$] src_ack), clk_src_i, !rst_src_ni)
+  `ASSERT(HungHandShake_A, $rose(src_req) |-> ##[0:40] src_ack, clk_src_i, !rst_src_ni)
     // TODO: #14913 check if we can add additional sim assertions.
   `endif
 endmodule // prim_subreg_cdc

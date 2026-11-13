@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,13 +9,35 @@ package(default_visibility = ["//visibility:public"])
 py_library(
     name = "common",
     srcs = ["common.py"],
+    imports = ["../../"],
+    deps = [
+        "//util/topgen",
+    ],
+)
+
+py_test(
+    name = "common_test",
+    srcs = ["common_test.py"],
+    deps = [":common"],
+)
+
+py_library(
+    name = "immutable_section_processor",
+    srcs = ["ImmutableSectionProcessor.py"],
+    imports = ["../../"],
+    deps = [
+        requirement("pycryptodome"),
+        requirement("pyelftools"),
+    ],
 )
 
 py_library(
     name = "lc_st_enc",
     srcs = ["LcStEnc.py"],
+    imports = ["../../"],
     deps = [
         ":common",
+        "//util/topgen",
         requirement("pycryptodome"),
     ],
 )
@@ -23,9 +45,20 @@ py_library(
 py_library(
     name = "otp_mem_map",
     srcs = ["OtpMemMap.py"],
+    # Since this module is used by the `gen-otp-img.py` script, which is invoked
+    # manually (by dvsim), and imported by the `gen-flash-img.py` script,
+    # which is invoked automatically (via Bazel), we cannot use full package
+    # includes within this module yet. Adding `util/design` to the imports path,
+    # temporarily resolves this issue until the entire hw/ subtree can be
+    # Bazelfied.
+    imports = [
+        "../",
+        "../../",
+    ],
     deps = [
         ":common",
         "//util/design/mubi:prim_mubi",
+        "//util/topgen",
         requirement("tabulate"),
     ],
 )
@@ -33,6 +66,7 @@ py_library(
 py_library(
     name = "otp_mem_img",
     srcs = ["OtpMemImg.py"],
+    imports = ["../../"],
     deps = [
         ":common",
         ":lc_st_enc",
@@ -46,4 +80,14 @@ py_library(
 py_library(
     name = "present",
     srcs = ["Present.py"],
+)
+
+py_library(
+    name = "otp_scrambling_keys",
+    srcs = ["otp_scrambling_keys.py"],
+    imports = ["../../"],
+    deps = [
+        ":common",
+        ":present",
+    ],
 )

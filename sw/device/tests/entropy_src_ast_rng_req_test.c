@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,8 +10,6 @@
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"  // Generated.
-
 OTTF_DEFINE_TEST_CONFIG();
 
 enum {
@@ -19,7 +17,7 @@ enum {
    * The size of the buffer used in firmware to process the entropy bits in
    * firmware override mode.
    */
-  kEntropyFifoBufferSize = 32,
+  kEntropyFifoBufferSize = 16,
 };
 
 static uint32_t read_fifo_depth(dif_entropy_src_t *entropy) {
@@ -28,10 +26,9 @@ static uint32_t read_fifo_depth(dif_entropy_src_t *entropy) {
   return fifo_depth;
 }
 
-bool test_main() {
+bool test_main(void) {
   dif_entropy_src_t entropy_src;
-  CHECK_DIF_OK(dif_entropy_src_init(
-      mmio_region_from_addr(TOP_EARLGREY_ENTROPY_SRC_BASE_ADDR), &entropy_src));
+  CHECK_DIF_OK(dif_entropy_src_init_from_dt(kDtEntropySrc, &entropy_src));
 
   CHECK_DIF_OK(dif_entropy_src_set_enabled(&entropy_src, kDifToggleDisabled));
 
@@ -45,11 +42,15 @@ bool test_main() {
   // Program the entropy src in normal RNG mode.
   const dif_entropy_src_config_t config = {
       .fips_enable = true,
+      .fips_flag = true,
+      .rng_fips = true,
       // Route the entropy data received from RNG to the FIFO.
       .route_to_firmware = true,
+      .bypass_conditioner = false,
+      .clear_esfinal_fifo_while_disabled = true,
       .single_bit_mode = kDifEntropySrcSingleBitModeDisabled,
       .health_test_threshold_scope = false, /*default*/
-      .health_test_window_size = 0x0200,    /*default*/
+      .health_test_window_size = 0x0800,    /*default*/
       .alert_threshold = 2,                 /*default*/
   };
   CHECK_DIF_OK(

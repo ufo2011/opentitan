@@ -6,7 +6,6 @@
 `include "cosim_dpi.svh"
 
 class ibex_cosim_scoreboard extends uvm_scoreboard;
-  import ibex_pkg::*;
   chandle cosim_handle;
 
   core_ibex_cosim_cfg cfg;
@@ -71,9 +70,13 @@ class ibex_cosim_scoreboard extends uvm_scoreboard;
   protected function void init_cosim();
     cleanup_cosim();
 
+    `DV_CHECK_FATAL(cfg.dm_start_addr > 0, "Debug module start address configured to zero.")
+    `DV_CHECK_FATAL(cfg.dm_end_addr > 0, "Debug module end address configured to zero.")
+
     // TODO: Ensure log file on reset gets append rather than overwrite?
     cosim_handle = spike_cosim_init(cfg.isa_string, cfg.start_pc, cfg.start_mtvec, cfg.log_file,
-      cfg.pmp_num_regions, cfg.pmp_granularity, cfg.mhpm_counter_num, cfg.secure_ibex, cfg.icache);
+      cfg.pmp_num_regions, cfg.pmp_granularity, cfg.mhpm_counter_num, cfg.secure_ibex, cfg.icache,
+      cfg.dm_start_addr, cfg.dm_end_addr);
 
     if (cosim_handle == null) begin
       `uvm_fatal(`gfn, "Could not initialise cosim")
@@ -116,6 +119,16 @@ class ibex_cosim_scoreboard extends uvm_scoreboard;
     forever begin
       rvfi_port.get(rvfi_instr);
 
+      if (rvfi_instr.irq_only) begin
+        // RVFI item is only notifying about new interrupts, not a retired instruction, so provide
+        // cosim with interrupt information and loop back to await the next item.
+        riscv_cosim_set_nmi(cosim_handle, rvfi_instr.nmi);
+        riscv_cosim_set_nmi_int(cosim_handle, rvfi_instr.nmi_int);
+        riscv_cosim_set_mip(cosim_handle, rvfi_instr.pre_mip, rvfi_instr.pre_mip);
+
+        continue;
+      end
+
       if (iside_error_queue.size() > 0) begin
         // Remove entries from iside_error_queue where the instruction never reaches the RVFI
         // interface because it was flushed.
@@ -131,16 +144,20 @@ class ibex_cosim_scoreboard extends uvm_scoreboard;
         end
       end
 
+      // Note these must be called in this order to ensure debug vs nmi vs normal interrupt are
+      // handled with the correct priority when they occur together.
+      riscv_cosim_set_debug_req(cosim_handle, rvfi_instr.debug_req);
       riscv_cosim_set_nmi(cosim_handle, rvfi_instr.nmi);
       riscv_cosim_set_nmi_int(cosim_handle, rvfi_instr.nmi_int);
-      riscv_cosim_set_mip(cosim_handle, rvfi_instr.mip);
-      riscv_cosim_set_debug_req(cosim_handle, rvfi_instr.debug_req);
+      riscv_cosim_set_mip(cosim_handle, rvfi_instr.pre_mip, rvfi_instr.post_mip);
       riscv_cosim_set_mcycle(cosim_handle, rvfi_instr.mcycle);
 
       // Set performance counters through a pseudo-backdoor write
       for (int i=0; i < 10; i++) begin
-        riscv_cosim_set_csr(cosim_handle, CSR_MHPMCOUNTER3 + i, rvfi_instr.mhpmcounters[i]);
-        riscv_cosim_set_csr(cosim_handle, CSR_MHPMCOUNTER3H + i, rvfi_instr.mhpmcountersh[i]);
+        riscv_cosim_set_csr(cosim_handle,
+                            ibex_pkg::CSR_MHPMCOUNTER3 + i, rvfi_instr.mhpmcounters[i]);
+        riscv_cosim_set_csr(cosim_handle,
+                            ibex_pkg::CSR_MHPMCOUNTER3H + i, rvfi_instr.mhpmcountersh[i]);
       end
 
       riscv_cosim_set_ic_scr_key_valid(cosim_handle, rvfi_instr.ic_scr_key_valid);
@@ -165,7 +182,8 @@ class ibex_cosim_scoreboard extends uvm_scoreboard;
       dmem_port.get(mem_op);
       // Notify the cosim of all dside accesses emitted by the RTL
       riscv_cosim_notify_dside_access(cosim_handle, mem_op.read_write == WRITE, mem_op.addr,
-        mem_op.data, mem_op.be, mem_op.error, mem_op.misaligned_first, mem_op.misaligned_second);
+        mem_op.data, mem_op.be, mem_op.error, mem_op.misaligned_first, mem_op.misaligned_second,
+        mem_op.misaligned_first_saw_error, mem_op.m_mode_access);
     end
   endtask: run_cosim_dmem
 
@@ -250,8 +268,7 @@ class ibex_cosim_scoreboard extends uvm_scoreboard;
     bit [31:0] aligned_next_addr;
     forever begin
       // Wait for new instruction to appear in ID stage
-      wait (instr_vif.instr_cb.valid_id &&
-            instr_vif.instr_cb.instr_new_id &&
+      wait (instr_vif.instr_cb.rvfi_id_done &&
             latest_order != instr_vif.instr_cb.rvfi_order_id);
 
       latest_order = instr_vif.instr_cb.rvfi_order_id;
@@ -302,9 +319,9 @@ class ibex_cosim_scoreboard extends uvm_scoreboard;
       // Wait for a new instruction or a writeback exception. When a new instruction has entered the
       // ID stage and we haven't seen a writeback exception we know the instruction associated with the
       // error just added to the queue isn't getting flushed.
-      wait (instr_vif.instr_cb.instr_new_id || dut_vif.dut_cb.wb_exception);
+      wait (instr_vif.instr_cb.rvfi_id_done || dut_vif.dut_cb.wb_exception);
 
-      if (!instr_vif.instr_cb.instr_new_id && dut_vif.dut_cb.wb_exception) begin
+      if (!instr_vif.instr_cb.rvfi_id_done && dut_vif.dut_cb.wb_exception) begin
         // If we hit a writeback exception without seeing a new instruction then the newly added
         // error relates to an instruction just flushed from the ID stage so pop it from the
         // queue.
@@ -333,7 +350,7 @@ class ibex_cosim_scoreboard extends uvm_scoreboard;
   endfunction : final_phase
 
   // If the UVM_EXIT action is triggered (such as by reaching max_quit_count), this callback is run.
-  // This ensures proper cleanup, such as commiting the logfile to disk.
+  // This ensures proper cleanup, such as committing the logfile to disk.
   function void pre_abort();
     cleanup_cosim();
   endfunction

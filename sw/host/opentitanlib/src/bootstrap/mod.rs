@@ -1,30 +1,29 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use clap::{Args, ValueEnum};
 use humantime::parse_duration;
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 use std::time::Duration;
-use structopt::clap::arg_enum;
-use structopt::StructOpt;
 use thiserror::Error;
 
-use crate::app::TransportWrapper;
+use crate::app::{NoProgressBar, TransportWrapper, UartRx};
 use crate::impl_serializable_error;
 use crate::io::gpio::GpioPin;
 use crate::io::spi::SpiParams;
 use crate::io::uart::UartParams;
-use crate::transport::Capability;
+use crate::transport::{Capability, ProgressIndicator};
 
 mod eeprom;
 mod legacy;
+mod legacy_rescue;
 mod primitive;
-mod rescue;
 
 pub use legacy::LegacyBootstrapError;
-pub use rescue::RescueError;
+pub use legacy_rescue::LegacyRescueError;
 
 #[derive(Debug, Error, Serialize, Deserialize)]
 pub enum BootstrapError {
@@ -33,23 +32,21 @@ pub enum BootstrapError {
 }
 impl_serializable_error!(BootstrapError);
 
-arg_enum! {
-    /// `BootstrapProtocol` describes the supported types of bootstrap.
-    /// The `Primitive` SPI protocol is used by OpenTitan during development.
-    /// The `Legacy` SPI protocol is used by previous generations of Google Titan-class chips.
-    /// The `Eeprom` SPI protocol is planned to be implemented for OpenTitan.
-    /// The `Rescue` UART protocol is used by Google Ti50 firmware.
-    /// The 'Emulator' value indicates that this tool has a direct way
-    /// of communicating with the OpenTitan emulator, to replace the
-    /// contents of the emulated flash storage.
-    #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-    pub enum BootstrapProtocol {
-        Primitive,
-        Legacy,
-        Eeprom,
-        Rescue,
-        Emulator,
-    }
+/// `BootstrapProtocol` describes the supported types of bootstrap.
+/// The `Primitive` SPI protocol is used by OpenTitan during development.
+/// The `Legacy` SPI protocol is used by previous generations of Google Titan-class chips.
+/// The `LegacyRescue` UART protocol is used by previous generations of Google Titan-class chips.
+/// The `Eeprom` SPI protocol is planned to be implemented for OpenTitan.
+/// The 'Emulator' value indicates that this tool has a direct way
+/// of communicating with the OpenTitan emulator, to replace the
+/// contents of the emulated flash storage.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, ValueEnum)]
+pub enum BootstrapProtocol {
+    Primitive,
+    Legacy,
+    LegacyRescue,
+    Eeprom,
+    Emulator,
 }
 
 // Implementations of bootstrap need to implement the `UpdateProtocol` trait.
@@ -70,37 +67,36 @@ trait UpdateProtocol {
         container: &Bootstrap,
         transport: &TransportWrapper,
         payload: &[u8],
-        progress: &dyn Fn(u32, u32),
+        progress: &dyn ProgressIndicator,
     ) -> Result<()>;
 }
 
 /// Options which control bootstrap behavior.
 /// The meaning of each of these values depends on the specific bootstrap protocol being used.
-#[derive(Clone, Debug, StructOpt, Serialize, Deserialize)]
+#[derive(Clone, Debug, Args, Serialize, Deserialize)]
 pub struct BootstrapOptions {
-    #[structopt(flatten)]
+    #[command(flatten)]
     pub uart_params: UartParams,
-    #[structopt(flatten)]
+    #[command(flatten)]
     pub spi_params: SpiParams,
-    #[structopt(
-        short,
-        long,
-        possible_values = &BootstrapProtocol::variants(),
-        case_insensitive = true,
-        default_value = "eeprom",
-        help = "Bootstrap protocol to use"
-    )]
+    /// Bootstrap protocol to use.
+    #[arg(short, long, value_enum, ignore_case = true, default_value = "eeprom")]
     pub protocol: BootstrapProtocol,
-    #[structopt(
-        long,
-        help = "Whether to reset target and clear UART RX buffer after bootstrap. For CW310 only."
-    )]
+    /// Whether to reset target and clear UART RX buffer after bootstrap. For Chip Whisperer board only.
+    #[arg(long)]
     pub clear_uart: Option<bool>,
-    #[structopt(long, parse(try_from_str=parse_duration), default_value = "100ms", help = "Duration of the reset delay")]
-    pub reset_delay: Duration,
-    #[structopt(long, parse(try_from_str=parse_duration), help = "Duration of the inter-frame delay")]
+    /// If set, keep the bootstrap strapping applied and do not perform the post-bootstrap reset
+    /// sequence.
+    #[arg(long)]
+    pub leave_in_bootstrap: bool,
+    /// If set, leave the reset signal asserted after completed bootstrapping.
+    #[arg(long)]
+    pub leave_in_reset: bool,
+    /// Duration of the inter-frame delay.
+    #[arg(long, value_parser = parse_duration)]
     pub inter_frame_delay: Option<Duration>,
-    #[structopt(long, parse(try_from_str=parse_duration), help = "Duration of the flash-erase delay")]
+    /// Duration of the flash-erase delay.
+    #[arg(long, value_parser = parse_duration)]
     pub flash_erase_delay: Option<Duration>,
 }
 
@@ -111,7 +107,8 @@ pub struct Bootstrap<'a> {
     pub uart_params: &'a UartParams,
     pub spi_params: &'a SpiParams,
     reset_pin: Rc<dyn GpioPin>,
-    reset_delay: Duration,
+    leave_in_reset: bool,
+    leave_in_bootstrap: bool,
 }
 
 impl<'a> Bootstrap<'a> {
@@ -122,7 +119,7 @@ impl<'a> Bootstrap<'a> {
         options: &BootstrapOptions,
         payload: &[u8],
     ) -> Result<()> {
-        Self::update_with_progress(transport, options, payload, |_, _| {})
+        Self::update_with_progress(transport, options, payload, &NoProgressBar)
     }
 
     /// Perform the update, sending the firmware `payload` to a SPI or UART target depending on
@@ -132,7 +129,7 @@ impl<'a> Bootstrap<'a> {
         transport: &TransportWrapper,
         options: &BootstrapOptions,
         payload: &[u8],
-        progress: impl Fn(u32, u32),
+        progress: &dyn ProgressIndicator,
     ) -> Result<()> {
         if transport
             .capabilities()?
@@ -149,7 +146,7 @@ impl<'a> Bootstrap<'a> {
         let updater: Box<dyn UpdateProtocol> = match options.protocol {
             BootstrapProtocol::Primitive => Box::new(primitive::Primitive::new(options)),
             BootstrapProtocol::Legacy => Box::new(legacy::Legacy::new(options)),
-            BootstrapProtocol::Rescue => Box::new(rescue::Rescue::new(options)),
+            BootstrapProtocol::LegacyRescue => Box::new(legacy_rescue::LegacyRescue::new(options)),
             BootstrapProtocol::Eeprom => Box::new(eeprom::Eeprom::new()),
             BootstrapProtocol::Emulator => {
                 // Not intended to be implemented by this struct.
@@ -162,9 +159,10 @@ impl<'a> Bootstrap<'a> {
             uart_params: &options.uart_params,
             spi_params: &options.spi_params,
             reset_pin: transport.gpio_pin("RESET")?,
-            reset_delay: options.reset_delay,
+            leave_in_reset: options.leave_in_reset,
+            leave_in_bootstrap: options.leave_in_bootstrap,
         }
-        .do_update(updater, transport, payload, &progress)
+        .do_update(updater, transport, payload, progress)
     }
 
     fn do_update(
@@ -172,26 +170,41 @@ impl<'a> Bootstrap<'a> {
         updater: Box<dyn UpdateProtocol>,
         transport: &TransportWrapper,
         payload: &[u8],
-        progress: &dyn Fn(u32, u32),
+        progress: &dyn ProgressIndicator,
     ) -> Result<()> {
         updater.verify_capabilities(self, transport)?;
         let perform_bootstrap_reset = updater.uses_common_bootstrap_reset();
+        let rom_boot_strapping = transport.pin_strapping("ROM_BOOTSTRAP")?;
 
         if perform_bootstrap_reset {
             log::info!("Asserting bootstrap pins...");
-            transport.apply_pin_strapping("ROM_BOOTSTRAP")?;
-            transport.reset_target(self.reset_delay, self.clear_uart_rx)?;
+            rom_boot_strapping.apply()?;
+            let uart_rx = match self.clear_uart_rx {
+                true => UartRx::Clear,
+                false => UartRx::Keep,
+            };
+            transport.reset(uart_rx)?;
             log::info!("Performing bootstrap...");
         }
         let result = updater.update(self, transport, payload, progress);
 
-        if perform_bootstrap_reset {
-            log::info!("Releasing bootstrap pins...");
-            transport.remove_pin_strapping("ROM_BOOTSTRAP")?;
+        if !self.leave_in_bootstrap && perform_bootstrap_reset {
+            if self.leave_in_reset {
+                log::info!("Releasing bootstrap pins, leaving device in reset...");
+                transport.pin_strapping("RESET")?.apply()?;
+                // For the case the ROM continuously monitors the bootstrapping pin, and boots the
+                // newly flashed image as soon as it is de-asserted, we only de-assert after
+                // having put the device under reset, in order to ensure that the caller can
+                // control when the newly flashed image gets to boot the first time.
+                rom_boot_strapping.remove()?;
+            } else {
+                log::info!("Releasing bootstrap pins, resetting device...");
+                rom_boot_strapping.remove()?;
+                // Don't clear the UART RX buffer after bootstrap to preserve the bootstrap
+                // output.
+                transport.reset(UartRx::Keep)?;
+            }
         }
-
-        // Don't clear the UART RX buffer after bootstrap to preserve the bootstrap output.
-        transport.reset_target(self.reset_delay, false)?;
         result
     }
 }

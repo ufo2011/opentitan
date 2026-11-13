@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,10 @@ rust_test(
     compile_data = [
         ":example",
     ],
-    data = ["//sw/device/lib/ujson:example_roundtrip"],
+    data = [
+        ":example",
+        "//sw/device/lib/ujson:example_roundtrip",
+    ],
     env = {
         "ROUNDTRIP_CLIENT": "$(rootpath //sw/device/lib/ujson:example_roundtrip)",
         "RUST_BACKTRACE": "1",
@@ -31,6 +34,9 @@ rust_test(
     deps = [
         "//sw/host/opentitanlib",
         "@crate_index//:anyhow",
+        "@crate_index//:arrayvec",
+        "@crate_index//:clap",
+        "@crate_index//:crc",
         "@crate_index//:serde",
         "@crate_index//:serde_json",
     ],

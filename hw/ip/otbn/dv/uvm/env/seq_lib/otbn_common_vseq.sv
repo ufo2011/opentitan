@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,18 +26,18 @@ class otbn_common_vseq extends otbn_base_vseq;
                          output bit                saw_err,
                          input uint             tl_access_timeout_ns = default_spinwait_timeout_ns,
                          input bit [BUS_DBW-1:0]   mask = '1,
-                         input bit                 check_rsp = 1'b1,
+                         input bit                 check_err_rsp = 1'b1,
                          input bit                 exp_err_rsp = 1'b0,
+                         input bit                 check_exp_data = 1'b0,
                          input bit [BUS_DW-1:0]    exp_data = 0,
                          input bit [BUS_DW-1:0]    compare_mask = '1,
-                         input bit                 check_exp_data = 1'b0,
                          input bit                 blocking = csr_utils_pkg::default_csr_blocking,
                          input mubi4_t             instr_type = MuBi4False,
                          tl_sequencer              tl_sequencer_h = p_sequencer.tl_sequencer_h,
                          input tl_intg_err_e       tl_intg_err_type = TlIntgErrNone,
                          input int                 req_abort_pct = 0);
     super.tl_access_w_abort(addr, write, data, completed, saw_err, tl_access_timeout_ns, mask,
-                            check_rsp, exp_err_rsp, exp_data, compare_mask, check_exp_data,
+                            check_err_rsp, exp_err_rsp, check_exp_data, exp_data, compare_mask,
                             blocking, instr_type, tl_sequencer_h, tl_intg_err_type, req_abort_pct);
 
     // If we see a write which causes an integrity error AND we've disabled the scoreboard (which
@@ -60,7 +60,7 @@ class otbn_common_vseq extends otbn_base_vseq;
     `DV_ASSERT_CTRL_REQ("otbn_status_assert_en", 1'b1)
   endtask
 
-  // Overriden from cip_base_vseq. Initialise Imem and Dmem and then call the super function.
+  // Overridden from cip_base_vseq. Initialise Imem and Dmem and then call the super function.
   task run_passthru_mem_tl_intg_err_vseq_sub(string ral_name);
     `uvm_info(`gfn, "Overriding run_passthru_mem_tl_intg_err_vseq_sub", UVM_HIGH)
     imem_init();
@@ -114,20 +114,88 @@ class otbn_common_vseq extends otbn_base_vseq;
     uvm_reg_field fatal_cause;
     super.check_sec_cm_fi_resp(if_proxy);
 
+    // We expect the fault injection to have caused the module to go into the LOCKED state. Wait
+    // until it changes from the current execute / secure wipe state and then check that we have
+    // locked, as expected.
+    //
+    // Note that we do the waiting by looking at the model interface. This is safe (because we have
+    // assertions to check that it matches the genuine status).
+    //
+    // The CSR read uses a back-door interface because then we will get a response, even if TL
+    // access is frozen.
+    `DV_WAIT(!(cfg.model_agent_cfg.vif.status inside {otbn_pkg::StatusBusyExecute,
+                                                      otbn_pkg::StatusBusySecWipeInt}));
+    cfg.clk_rst_vif.wait_clks(1);
+    csr_utils_pkg::csr_rd_check(.ptr(ral.status), .compare_value('hFF), .backdoor(1));
+
+    // We know that we've locked. Check that the FATAL_ALERT_CAUSE register has the explanation that
+    // we expect. This is normally a bad internal state, but there is a special case for faults
+    // injected into the counters of a TLUL adapter. These cause a TileLink error which is
+    // registered as a bus integrity violation.
     if (if_proxy.sec_cm_type == SecCmPrimCount &&
         !uvm_re_match("*.u_tlul_adapter_sram_*", if_proxy.path)) begin
-      // Faults injected into the counters of an OTBN TLUL adapter manifest as bus integrity
-      // violation.
       fatal_cause = ral.fatal_alert_cause.bus_intg_violation;
     end else begin
       fatal_cause = ral.fatal_alert_cause.bad_internal_state;
     end
 
-    csr_utils_pkg::csr_rd_check(.ptr(fatal_cause), .compare_value(1));
-    `DV_WAIT(!(cfg.model_agent_cfg.vif.status inside {otbn_pkg::StatusBusyExecute,
-                                                      otbn_pkg::StatusBusySecWipeInt}));
-    csr_utils_pkg::csr_rd_check(.ptr(ral.status), .compare_value('hFF));
+    csr_utils_pkg::csr_rd_check(.ptr(fatal_cause), .compare_value(1), .backdoor(1));
   endtask : check_sec_cm_fi_resp
+
+  // Return 1 if path is a pointer in the prim_count associated with the fifo at fifo_path
+  function bit is_ptr_in_prim_counts_fifo(string path, string fifo_path);
+    string cnt_path = {fifo_path, ".gen_normal_fifo.u_fifo_cnt"};
+    string ptr_rel_paths[] = '{"gen_secure_ptrs.u_rptr", "gen_secure_ptrs.u_wptr"};
+
+    foreach (ptr_rel_paths[i]) begin
+      if (path == {cnt_path, ".", ptr_rel_paths[i]}) begin
+        return 1'b1;
+      end
+    end
+    return 1'b0;
+  endfunction
+
+  // Return 1 if path is a pointer in a prim_count for a fifo in with the adapter at adapter_path.
+  //
+  // If returning 1, this also writes to in_req_fifo output argument, setting the bit if this is a
+  // request fifo.
+  function bit is_ptr_in_adapters_fifo(string path, string adapter_path, output bit in_req_fifo);
+    string fifo_paths[] = '{{adapter_path, ".gen_no_sec_u_reqfifo.u_reqfifo"},
+                            {adapter_path, ".gen_no_sec_u_sramreqfifo.u_sramreqfifo"},
+                            {adapter_path, ".gen_no_sec_u_rspfifo.u_rspfifo"}};
+
+    foreach (fifo_paths[i]) begin
+      if (is_ptr_in_prim_counts_fifo(path, fifo_paths[i])) begin
+        in_req_fifo = (i == 0 || i == 1);
+        return 1'b1;
+      end
+    end
+    return 1'b0;
+  endfunction
+
+  // Return 1 if path is a pointer for a prim_count associated with an sram adapter or the MAI.
+  //
+  // If returning 1, this also writes to in_req_fifo output argument, setting the bit if this is a
+  // request fifo.
+  function bit is_ptr_in_fifo(string path, output bit in_req_fifo);
+    string adapter_paths[] = {{"tb.dut.u_tlul_adapter_sram_dmem"},
+                              {"tb.dut.u_tlul_adapter_sram_imem"}};
+    string mask_fifo_path =
+        "tb.dut.u_otbn_core.gen_mai.u_otbn_mai.u_otbn_mask_accelerator.u_prim_fifo_sync_mask";
+
+    foreach (adapter_paths[i]) begin
+      if (is_ptr_in_adapters_fifo(path, adapter_paths[i], in_req_fifo)) return 1'b1;
+    end
+
+    // The mask accelerator holds a standalone prim_fifo_sync. Its prim_count pointers need the
+    // same assertion handling, but it is not a request fifo.
+    if (is_ptr_in_prim_counts_fifo(path, mask_fifo_path)) begin
+      in_req_fifo = 1'b0;
+      return 1'b1;
+    end
+
+    return 1'b0;
+  endfunction
 
   virtual function void sec_cm_fi_ctrl_svas(sec_cm_base_if_proxy if_proxy, bit enable);
     if (enable) begin
@@ -141,29 +209,43 @@ class otbn_common_vseq extends otbn_base_vseq;
       $assertoff(0, "tb.MatchingReqURND_A");
       $assertoff(0, "tb.dut.u_otbn_core.u_otbn_start_stop_control.StartStopStateValid_A");
     end
+
     if (if_proxy.sec_cm_type == SecCmPrimCount) begin
-      cfg.model_agent_cfg.vif.otbn_disable_stack_check();
-      $assertoff(0, "tb.dut.u_otbn_core.u_otbn_controller.u_otbn_loop_controller.loop_info_stack\
-               .next_stack_top_idx_correct");
-      $assertoff(0, "tb.dut.u_otbn_core.u_otbn_rf_base.u_call_stack.next_stack_top_idx_correct");
-      if (if_proxy.path == {"tb.dut.u_tlul_adapter_sram_dmem.u_rspfifo.gen_normal_fifo.u_fifo_cnt.",
-                            "gen_secure_ptrs.u_wptr"} ||
-          if_proxy.path == {"tb.dut.u_tlul_adapter_sram_dmem.u_rspfifo.gen_normal_fifo.u_fifo_cnt.",
-                            "gen_secure_ptrs.u_rptr"}) begin
-        if (enable) begin
-          $asserton(0, "tb.dut.u_tlul_adapter_sram_dmem.u_rspfifo.DataKnown_A");
+      // If we are injecting an error into a prim_count inside a prim_fifo_sync, we need to disable
+      // the DataKnown_A assertion inside the fifo. The problem is that we're telling the FIFO that
+      // it contains some elements that it doesn't really contain, so the backing memory is probably
+      // 'X, which fails an !$isunknown() check. The touching_fifo bit is computed to figure out
+      // whether this is happening.
+
+      bit touching_fifo = 1'b0, touching_req_fifo = 1'b0;
+
+      if (is_ptr_in_fifo(if_proxy.path, touching_req_fifo)) begin
+        if (!enable) begin
+          `uvm_info(`gfn, "Doing FI on a prim_fifo_sync. Disabling related assertions", UVM_HIGH)
+          $assertoff(0, "prim_fifo_sync");
         end else begin
-          $assertoff(0, "tb.dut.u_tlul_adapter_sram_dmem.u_rspfifo.DataKnown_A");
+          $asserton(0, "prim_fifo_sync");
         end
-      end
-      if (if_proxy.path == {"tb.dut.u_tlul_adapter_sram_imem.u_rspfifo.gen_normal_fifo.u_fifo_cnt.",
-                            "gen_secure_ptrs.u_wptr"} ||
-          if_proxy.path == {"tb.dut.u_tlul_adapter_sram_imem.u_rspfifo.gen_normal_fifo.u_fifo_cnt.",
-                            "gen_secure_ptrs.u_rptr"}) begin
-        if (enable) begin
-          $asserton(0, "tb.dut.u_tlul_adapter_sram_imem.u_rspfifo.DataKnown_A");
-        end else begin
-          $assertoff(0, "tb.dut.u_tlul_adapter_sram_imem.u_rspfifo.DataKnown_A");
+
+        // Disable assertions that we expect to fail if we corrupt a request FIFO. This causes us to
+        // generate spurious TL transactions. Disable the TL checker (which, quite reasonably, will
+        // have assertions that fire).
+        //
+        // Also disable assertions in the tlul_socket_1n in our register block. This gets confused
+        // because of an unexpected response, which causes our num_req_outstanding counter to be
+        // decremented to -1 (which is more than MaxOutstanding when considered as an unsigned
+        // integer).
+        if (touching_req_fifo) begin
+          if (!enable) begin
+            `uvm_info(`gfn, "Doing FI on a request fifo. Disabling related assertions", UVM_HIGH)
+            cfg.m_tl_agent_cfg.check_tl_errs = 1'b0;
+            $assertoff(0, "tb.dut.tlul_checker");
+            $assertoff(0, "tb.dut.u_reg.u_socket");
+          end else begin
+            $asserton(0, "tb.dut.u_reg.u_socket");
+            $asserton(0, "tb.dut.tlul_checker");
+            cfg.m_tl_agent_cfg.check_tl_errs = 1'b1;
+          end
         end
       end
     end
@@ -171,20 +253,43 @@ class otbn_common_vseq extends otbn_base_vseq;
   endfunction: sec_cm_fi_ctrl_svas
 
   virtual task sec_cm_inject_fault(sec_cm_base_if_proxy if_proxy);
+    // When testing the countermeasures for the OTBN hardware loop stack, the current_loop_valid
+    // will be high when the loop stack counter is forced to zero. This fault should be detected
+    // and assert the `hw_err_o` of the loop controller. As in this test no SW is run, the loop
+    // stack has undefined values (x). When the `current_loop_valid` is high, the integrity
+    // check of the loop address (current_loop_intg_err) is OR factored into the `hw_err_o` as well
+    // leading to undefined error bits.
+    // We prevent this x propagation by defining the loop stack data. The loop info data bits are
+    // set to random data which pass ECC checks. This ensures that always the `hw_err_o` error
+    // triggers and not the ECC check. Using random values which pass ECC checks but make no sense
+    // when interpreted as loop info is also ok. What can happen is that a loop jump (loop_jump_o)
+    // is requested which could result in a SW error due to a misaligned instruction address (from
+    // `current_loop.loop_addr_info.loop_start` via `insn_fetch_req_addr_o`). But OTBN will
+    // escalate anyway so raising a SW error does not affect the test.
+    if (!uvm_re_match("*loop_info_stack*u_stack_wr_ptr*", if_proxy.path)) begin
+      cfg.loop_vif.randomize_loop_addrs_info();
+    end
+
     fork
       begin
         if_proxy.inject_fault();
       end
       begin
-        bit [31:0] err_val = 32'd1 << 20;
+        err_bits_reg_t err_bits = '{bad_internal_state: 1'b1, default: 1'b0};
         `uvm_info(`gfn, "injecting fsm error into ISS", UVM_HIGH)
         if (!uvm_re_match("*u_otbn_start_stop_control*", if_proxy.path)) begin
-          cfg.model_agent_cfg.vif.lock_immediately(err_val);
+          cfg.model_agent_cfg.vif.lock_immediately(err_bits);
         end else begin
-          cfg.model_agent_cfg.vif.send_err_escalation(err_val);
+          cfg.model_agent_cfg.vif.send_err_escalation(err_bits);
         end
       end
     join
+
+    // Re-enable the current_loop_intg_err for the next tests
+    if (!uvm_re_match("*loop_info_stack*u_stack_wr_ptr*", if_proxy.path)) begin
+      cfg.loop_vif.release_loop_addrs_info();
+    end
+
   endtask : sec_cm_inject_fault
 
   virtual task pre_run_sec_cm_fi_vseq();

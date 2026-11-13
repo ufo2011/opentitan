@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -49,7 +49,7 @@ module prim_mubi8_sender
 
     // This unused companion logic helps remove lint errors
     // for modules where clock and reset are used for assertions only
-    // This logic will be removed for sythesis since it is unloaded.
+    // This logic will be removed for synthesis since it is unloaded.
     mubi8_t unused_logic;
     always_ff @(posedge clk_i or negedge rst_ni) begin
       if (!rst_ni) begin

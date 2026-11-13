@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -8,7 +8,9 @@
 module lc_ctrl_state_transition
   import lc_ctrl_pkg::*;
   import lc_ctrl_state_pkg::*;
-(
+#(
+  parameter bit             SecVolatileRawUnlockEn = 0
+) (
   // Life cycle state vector.
   input  lc_state_e         lc_state_i,
   input  lc_cnt_e           lc_cnt_i,
@@ -18,6 +20,14 @@ module lc_ctrl_state_transition
   input  ext_dec_lc_state_t dec_lc_state_i,
   // Transition target.
   input  ext_dec_lc_state_t trans_target_i,
+  // ---------- VOLATILE_TEST_UNLOCKED CODE SECTION START ----------
+  // NOTE THAT THIS IS A FEATURE FOR TEST CHIPS ONLY TO MITIGATE
+  // THE RISK OF A BROKEN OTP MACRO. THIS WILL BE DISABLED VIA
+  // SecVolatileRawUnlockEn AT COMPILETIME FOR PRODUCTION DEVICES.
+  // ---------------------------------------------------------------
+  input  logic              volatile_raw_unlock_i,
+  input  logic              trans_cmd_i,
+  // ----------- VOLATILE_TEST_UNLOCKED CODE SECTION END -----------
   // Updated state vector.
   output lc_state_e         next_lc_state_o,
   output lc_cnt_e           next_lc_cnt_o,
@@ -30,6 +40,11 @@ module lc_ctrl_state_transition
   // Signal Decoder Logic //
   //////////////////////////
 
+  if (!SecVolatileRawUnlockEn) begin : gen_no_volatile_unlock
+    logic unused_trans_cmd;
+    assign unused_trans_cmd = trans_cmd_i;
+  end
+
   // The decoder logic below checks whether a given transition edge
   // is valid and computes the next lc counter ans state vectors.
   always_comb begin : p_lc_state_transition
@@ -38,6 +53,22 @@ module lc_ctrl_state_transition
     next_lc_state_o = lc_state_i;
     trans_cnt_oflw_error_o = 1'b0;
     trans_invalid_error_o = 1'b0;
+
+    // ---------- VOLATILE_TEST_UNLOCKED CODE SECTION START ----------
+    // NOTE THAT THIS IS A FEATURE FOR TEST CHIPS ONLY TO MITIGATE
+    // THE RISK OF A BROKEN OTP MACRO. THIS WILL BE DISABLED VIA
+    // SecVolatileRawUnlockEn AT COMPILETIME FOR PRODUCTION DEVICES.
+    // ---------------------------------------------------------------
+    // Only enter here if volatile RAW unlock is available and enabled.
+    if (SecVolatileRawUnlockEn && volatile_raw_unlock_i && trans_cmd_i && fsm_state_i == IdleSt)
+    begin
+      // We only allow transitions from RAW -> TEST_UNLOCKED0
+      if (dec_lc_state_i != {DecLcStateNumRep{DecLcStRaw}} ||
+          trans_target_i != {DecLcStateNumRep{DecLcStTestUnlocked0}}) begin
+        trans_invalid_error_o = 1'b1;
+      end
+    end
+    // ----------- VOLATILE_TEST_UNLOCKED CODE SECTION END -----------
 
     if (fsm_state_i inside {CntIncrSt,
                             CntProgSt,
@@ -79,9 +110,15 @@ module lc_ctrl_state_transition
         default:  trans_cnt_oflw_error_o = 1'b1;
       endcase // lc_cnt_i
 
-      // In case the transition target is SCRAP, max out the counter.
+      // We always allow transitions into the SCRAP state, so the overflow error is silenced in that
+      // particular case. In that case we max out the transition counter and force the
+      // next_lc_state already into SCRAP so that the error silencing above cannot be abused. This
+      // means that when moving to SCRAP state, we program LcStScrap twice: once during the counter
+      // increment phase, and once during the actual state programming phase.
       if (trans_target_i == {DecLcStateNumRep{DecLcStScrap}}) begin
         next_lc_cnt_o = LcCnt24;
+        next_lc_state_o = LcStScrap;
+        trans_cnt_oflw_error_o = 1'b0;
       end
     end
 

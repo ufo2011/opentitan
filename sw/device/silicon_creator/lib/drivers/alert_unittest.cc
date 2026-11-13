@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,14 +7,14 @@
 #include "gtest/gtest.h"
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/base/mock_abs_mmio.h"
+#include "sw/device/lib/base/mock_crc32.h"
 #include "sw/device/silicon_creator/lib/drivers/lifecycle.h"
 #include "sw/device/silicon_creator/lib/drivers/mock_otp.h"
-#include "sw/device/silicon_creator/lib/mock_crc32.h"
 #include "sw/device/silicon_creator/testing/rom_test.h"
 
-#include "alert_handler_regs.h"
+#include "hw/top/alert_handler_regs.h"
+#include "hw/top/otp_ctrl_regs.h"
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "otp_ctrl_regs.h"
 
 namespace alert_unittest {
 namespace {
@@ -41,6 +41,13 @@ TEST_F(InitTest, AlertConfigureAlertBadClass) {
   EXPECT_EQ(
       alert_configure(0, static_cast<alert_class_t>(-1), kAlertEnableNone),
       kErrorAlertBadClass);
+}
+
+TEST_F(InitTest, LocalAlertConfigureAlertBadIndex) {
+  EXPECT_EQ(alert_local_configure(
+                ALERT_HANDLER_LOC_ALERT_CLASS_SHADOWED_MULTIREG_COUNT,
+                kAlertClassX, kAlertEnableNone),
+            kErrorAlertBadIndex);
 }
 
 TEST_F(InitTest, LocalAlertConfigureAlertBadClass) {
@@ -72,6 +79,18 @@ TEST_F(InitTest, AlertConfigureAlertClassXNoOperation) {
 
 TEST_F(InitTest, LocalAlertConfigureAlertClassXNoOperation) {
   EXPECT_EQ(alert_local_configure(0, kAlertClassX, kAlertEnableNone), kErrorOk);
+}
+
+TEST_F(InitTest, AlertConfigureNotEnable) {
+  EXPECT_ABS_WRITE32_SHADOWED(
+      base_ + ALERT_HANDLER_ALERT_CLASS_SHADOWED_0_REG_OFFSET, 0);
+  EXPECT_EQ(alert_configure(0, kAlertClassA, kAlertEnableNone), kErrorOk);
+}
+
+TEST_F(InitTest, LocalAlertConfigureNotEnable) {
+  EXPECT_ABS_WRITE32_SHADOWED(
+      base_ + ALERT_HANDLER_LOC_ALERT_CLASS_SHADOWED_0_REG_OFFSET, 0);
+  EXPECT_EQ(alert_local_configure(0, kAlertClassA, kAlertEnableNone), kErrorOk);
 }
 
 TEST_F(InitTest, AlertConfigure0AsClassA) {

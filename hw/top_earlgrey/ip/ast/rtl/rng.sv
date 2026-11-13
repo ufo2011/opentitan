@@ -1,9 +1,9 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
 // -------- W A R N I N G: A U T O - G E N E R A T E D  C O D E !! -------- //
-// PLEASE DO NOT HAND-EDIT THIS FILE. IT HAS BEEN AUTO-GENERATED.
+// PLEASE DO NOT HAND-EDIT THIS FILE. IT HAS BEEN AUTO-GENERATED (by closed source generator).
 //
 //############################################################################
 // *Name: rng
@@ -127,7 +127,7 @@ ast_pulse_sync u_rng_val_pulse_sync (
   .dst_pulse_o ( sync_rng_val )
 );
 
-// Sanple & Hold the rng_b value until the sync completes
+// Sample & Hold the rng_b value until the sync completes
 always_ff @( posedge clk_i, negedge rst_n ) begin
   if ( !rst_n ) begin
     rng_b <= {EntropyStreams{1'b0}};

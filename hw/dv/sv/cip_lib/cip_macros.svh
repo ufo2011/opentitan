@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,19 +6,22 @@
 `define __CIP_MACROS_SVH__
 
 // Declare array of alert interface, using parameter NUM_ALERTS and LIST_OF_ALERTS, and connect to
-// arrays of wires (alert_tx and alert_rx). User need to manually connect these wires to DUT
+// arrays of wires (alert_tx and alert_rx). User need to manually connect these wires to DUT.
 // Also set each alert_if to uvm_config_db to use in env.
+// When NUM_ALERTS is zero still instantiate one interface to avoid zero size
+// array warnings.
 `ifndef DV_ALERT_IF_CONNECT
 `define DV_ALERT_IF_CONNECT(CLK_ = clk, RST_N_ = rst_n) \
-  alert_esc_if alert_if[NUM_ALERTS](.clk(CLK_), .rst_n(RST_N_)); \
-  prim_alert_pkg::alert_rx_t [NUM_ALERTS-1:0] alert_rx; \
-  prim_alert_pkg::alert_tx_t [NUM_ALERTS-1:0] alert_tx; \
+  localparam uint dv_alert_if_connect_param = (NUM_ALERTS == 0) ? 1 : NUM_ALERTS; \
+  alert_if alert_if[dv_alert_if_connect_param](.clk(CLK_), .rst_n(RST_N_)); \
+  prim_alert_pkg::alert_rx_t [dv_alert_if_connect_param-1:0] alert_rx; \
+  prim_alert_pkg::alert_tx_t [dv_alert_if_connect_param-1:0] alert_tx; \
   for (genvar k = 0; k < NUM_ALERTS; k++) begin : connect_alerts_pins \
     assign alert_rx[k] = alert_if[k].alert_rx; \
     assign alert_if[k].alert_tx = alert_tx[k]; \
     initial begin \
-      uvm_config_db#(virtual alert_esc_if)::set(null, $sformatf("*.env.m_alert_agent_%0s", \
-          LIST_OF_ALERTS[k]), "vif", alert_if[k]); \
+      automatic string agent_path = $sformatf("*.env.m_alert_agent_%0s", LIST_OF_ALERTS[k]); \
+      uvm_config_db#(virtual alert_if)::set(null, agent_path, "vif", alert_if[k]); \
     end \
   end
 `endif
@@ -46,28 +49,49 @@
   end
 `endif
 
-// A macro to simplify the distribution constraint of mubi type variable
-// Don't use this macro directly, use DV_MUBI4|8|16_DIST.
-// The weights of both TRUE and FALSE are scaled by the number of other
-// values, and this uses ":=" for the distribution of other values, so they
-// are truly uniform.
-// The MAX_ argument is the maximum value that VAR_ can take, which means
-// (MAX_ - 1) is the scaling factor.
+// Macros that expand to a ternary expression giving the smaller / larger of the two values.
+//
+// These make no guarantee to only evaluate arguments once.
+`ifndef _DV_TERNARY_MIN
+`define _DV_TERNARY_MIN(a_, b_) (((a_) < (b_)) ? (a_) : (b_))
+`endif
+`ifndef _DV_TERNARY_MAX
+`define _DV_TERNARY_MAX(a_, b_) (((a_) < (b_)) ? (b_) : (a_))
+`endif
+
+// A macro that expands to a constraint giving distribution for a mubi-type variable
+// Don't use this macro directly: use DV_MUBI4|8|16_DIST instead.
+//
+// Arguments:
+//
+//  VAR_           The variable whose distribution is being constrained
+//  TRUE_          MuBi true value
+//  FALSE_         MuBi false value
+//  MAX_           The maximum value in the bit-vector range for the value
+//  T_WEIGHT_      The weight to give the "true" value
+//  F_WEIGHT_      The weight to give the "false" value
+//  OTHER_WEIGHT_  The weight spread among all other values
+//
+// This macro uses ":=" to give weights for the other cases in order that the individual values
+// won't have a weight that depends on the length of the range containing them. There are (MAX_ - 2)
+// items in these other ranges, so we scale T_WEIGHT_ and F_WEIGHT_ by that value to ensure that
+// T_WEIGHT_/F_WEIGHT_/OTHER_WEIGHT_ give the relative weights for true/false/something-else. For
+// example, if T_WEIGHT_, F_WEIGHT_ and OTHER_WEIGHT_ are all equal then the probabilities of
+// getting "true" and "false" and getting something else are all 1/3.
+//
+// Some tools generate a warning if there is a backwards range ([big:little]) in the distribution,
+// even if an if/else check ensures that it isn't used. To avoid this warning, we use a ternary
+// operator to extract the larger/smaller value.
 `ifndef _DV_MUBI_DIST
-`define _DV_MUBI_DIST(VAR_, TRUE_, FALSE_, MAX_, T_WEIGHT_, F_WEIGHT_, OTHER_WEIGHT_) \
-  if (TRUE_ > FALSE_) { \
-    VAR_ dist {TRUE_                         := (T_WEIGHT_) * ((MAX_) - 1), \
-               FALSE_                        := (F_WEIGHT_) * ((MAX_) - 1), \
-               [0 : FALSE_ - 1]              := (OTHER_WEIGHT_),            \
-               [FALSE_ + 1 : TRUE_ - 1]      := (OTHER_WEIGHT_),            \
-               [TRUE_ + 1 : (MAX_)]          := (OTHER_WEIGHT_)};           \
-  } else {                                                                  \
-    VAR_ dist {TRUE_                         := (T_WEIGHT_) * ((MAX_) - 1), \
-               FALSE_                        := (F_WEIGHT_) * ((MAX_) - 1), \
-               [0 : TRUE_ - 1]               := (OTHER_WEIGHT_),            \
-               [TRUE_ + 1 : FALSE_ - 1]      := (OTHER_WEIGHT_),            \
-               [FALSE_+ 1 : (MAX_)]          := (OTHER_WEIGHT_)};           \
-  }
+`define _DV_MUBI_DIST(VAR_, TRUE_, FALSE_, MAX_, T_WEIGHT_, F_WEIGHT_, OTHER_WEIGHT_)  \
+  VAR_ dist {                                                                          \
+    TRUE_                                        := (T_WEIGHT_) * ((MAX_) - 1),        \
+    FALSE_                                       := (F_WEIGHT_) * ((MAX_) - 1),        \
+    [0 : `_DV_TERNARY_MIN(TRUE_, FALSE_)-1]      := (OTHER_WEIGHT_),                   \
+    [(`_DV_TERNARY_MIN(TRUE_, FALSE_)+1) :                                             \
+     (`_DV_TERNARY_MAX(TRUE_, FALSE_)-1)]        := (OTHER_WEIGHT_),                   \
+    [(`_DV_TERNARY_MAX(TRUE_, FALSE_)+1):(MAX_)] := (OTHER_WEIGHT_)                    \
+  };
 `endif
 
 // inputs of these macros

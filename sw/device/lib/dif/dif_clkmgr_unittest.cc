@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,13 +11,37 @@
 #include "sw/device/lib/dif/dif_test_base.h"
 
 // Generated.
-#include "clkmgr_regs.h"
+#include "hw/top/clkmgr_regs.h"
 
 namespace dif_clkmgr_unittest {
 namespace {
 using mock_mmio::MmioTest;
 using mock_mmio::MockDevice;
 using testing::Test;
+
+// Matches the Earlgrey layout.
+enum {
+  /**
+   * The Io clock.
+   */
+  kDifClkmgrMeasureClockIo,
+  /**
+   * The Io div4 clock.
+   */
+  kDifClkmgrMeasureClockIoDiv4,
+  /**
+   * The Main clock.
+   */
+  kDifClkmgrMeasureClockMain,
+  /**
+   * The Usb clock.
+   */
+  kDifClkmgrMeasureClockUsb,
+  /**
+   * Total number of clock measurements.
+   */
+  kDifClkmgrMeasureClockCount,
+};
 
 const dif_clkmgr_measure_clock_t kBadMeasClock =
     static_cast<dif_clkmgr_measure_clock_t>(27);
@@ -27,23 +51,70 @@ class ClkMgrTest : public Test, public MmioTest {
   dif_clkmgr_t clkmgr_ = {.base_addr = dev().region()};
 };
 
+class JitterRegwenTest : public ClkMgrTest {};
+
+TEST_F(JitterRegwenTest, GetLocked) {
+  // Get regwen locked
+  {
+    bool locked = false;
+    EXPECT_READ32(CLKMGR_JITTER_REGWEN_REG_OFFSET, 0);
+    EXPECT_DIF_OK(dif_clkmgr_jitter_enable_is_locked(&clkmgr_, &locked));
+    EXPECT_EQ(locked, true);
+  }
+  // Get regwen unlocked
+  {
+    bool locked = true;
+    EXPECT_READ32(CLKMGR_JITTER_REGWEN_REG_OFFSET, 1);
+    EXPECT_DIF_OK(dif_clkmgr_jitter_enable_is_locked(&clkmgr_, &locked));
+    EXPECT_EQ(locked, false);
+  }
+}
+
+TEST_F(JitterRegwenTest, GetLockedError) {
+  bool locked;
+  EXPECT_DIF_BADARG(dif_clkmgr_jitter_enable_is_locked(nullptr, nullptr));
+  EXPECT_DIF_BADARG(dif_clkmgr_jitter_enable_is_locked(nullptr, &locked));
+  EXPECT_DIF_BADARG(dif_clkmgr_jitter_enable_is_locked(&clkmgr_, nullptr));
+}
+
+TEST_F(JitterRegwenTest, SetLocked) {
+  EXPECT_WRITE32(CLKMGR_JITTER_REGWEN_REG_OFFSET, 0);
+  EXPECT_DIF_OK(dif_clkmgr_lock_jitter_enable(&clkmgr_));
+  // There is no support for unlock in the hardware.
+}
+
+TEST_F(JitterRegwenTest, SetLockedError) {
+  EXPECT_DIF_BADARG(dif_clkmgr_lock_jitter_enable(nullptr));
+}
+
 class JitterEnableTest : public ClkMgrTest {};
 
 // SetEnabled uses EXPECT_WRITE32 instead of EXPECT_MASK32 because
 // dif_clkmgr_jitter_set_enabled doesn't perform a read, just a write.
 TEST_F(JitterEnableTest, SetEnabled) {
-  // Disable jitter.
-  EXPECT_WRITE32(CLKMGR_JITTER_ENABLE_REG_OFFSET, kMultiBitBool4False);
-  EXPECT_DIF_OK(dif_clkmgr_jitter_set_enabled(&clkmgr_, kDifToggleDisabled));
-
-  // Enable jitter.
-  EXPECT_WRITE32(CLKMGR_JITTER_ENABLE_REG_OFFSET, kMultiBitBool4True);
-  EXPECT_DIF_OK(dif_clkmgr_jitter_set_enabled(&clkmgr_, kDifToggleEnabled));
+  // Disable jitter with jitter unlocked.
+  {
+    EXPECT_READ32(CLKMGR_JITTER_REGWEN_REG_OFFSET, 1);
+    EXPECT_WRITE32(CLKMGR_JITTER_ENABLE_REG_OFFSET, kMultiBitBool4False);
+    EXPECT_DIF_OK(dif_clkmgr_jitter_set_enabled(&clkmgr_, kDifToggleDisabled));
+  }
+  // Enable jitter with jitter unlocked.
+  {
+    EXPECT_READ32(CLKMGR_JITTER_REGWEN_REG_OFFSET, 1);
+    EXPECT_WRITE32(CLKMGR_JITTER_ENABLE_REG_OFFSET, kMultiBitBool4True);
+    EXPECT_DIF_OK(dif_clkmgr_jitter_set_enabled(&clkmgr_, kDifToggleEnabled));
+  }
 }
 
 TEST_F(JitterEnableTest, SetEnabledError) {
   // Null handle.
   EXPECT_DIF_BADARG(dif_clkmgr_jitter_set_enabled(nullptr, kDifToggleEnabled));
+}
+
+TEST_F(JitterEnableTest, SetEnabledLocked) {
+  // Lock the register via regwen, and check no change occurs.
+  EXPECT_READ32(CLKMGR_JITTER_REGWEN_REG_OFFSET, 0);
+  EXPECT_DIF_LOCKED(dif_clkmgr_jitter_set_enabled(&clkmgr_, kDifToggleEnabled));
 }
 
 TEST_F(JitterEnableTest, GetEnabled) {
@@ -256,6 +327,104 @@ TEST_F(HintableClockTest, GetEnabledError) {
       &clkmgr_, CLKMGR_PARAM_NUM_HINTABLE_CLOCKS, &state));
 }
 
+class ExternalClkRegwenTest : public ClkMgrTest {};
+
+TEST_F(ExternalClkRegwenTest, GetLocked) {
+  // Get regwen locked
+  {
+    bool locked = false;
+    EXPECT_READ32(CLKMGR_EXTCLK_CTRL_REGWEN_REG_OFFSET, 0);
+    EXPECT_DIF_OK(
+        dif_clkmgr_external_clock_control_is_locked(&clkmgr_, &locked));
+    EXPECT_EQ(locked, true);
+  }
+  // Get regwen unlocked
+  {
+    bool locked = true;
+    EXPECT_READ32(CLKMGR_EXTCLK_CTRL_REGWEN_REG_OFFSET, 1);
+    EXPECT_DIF_OK(
+        dif_clkmgr_external_clock_control_is_locked(&clkmgr_, &locked));
+    EXPECT_EQ(locked, false);
+  }
+}
+
+TEST_F(ExternalClkRegwenTest, GetLockedError) {
+  bool locked;
+  EXPECT_DIF_BADARG(
+      dif_clkmgr_external_clock_control_is_locked(nullptr, nullptr));
+  EXPECT_DIF_BADARG(
+      dif_clkmgr_external_clock_control_is_locked(nullptr, &locked));
+  EXPECT_DIF_BADARG(
+      dif_clkmgr_external_clock_control_is_locked(&clkmgr_, nullptr));
+}
+
+TEST_F(ExternalClkRegwenTest, SetLocked) {
+  EXPECT_WRITE32(CLKMGR_EXTCLK_CTRL_REGWEN_REG_OFFSET, 0);
+  EXPECT_DIF_OK(dif_clkmgr_lock_external_clock_control(&clkmgr_));
+  // There is no support for unlock in the hardware.
+}
+
+TEST_F(ExternalClkRegwenTest, SetLockedError) {
+  EXPECT_DIF_BADARG(dif_clkmgr_lock_external_clock_control(nullptr));
+}
+
+class ExternalClkTest : public ClkMgrTest {};
+
+TEST_F(ExternalClkTest, EnableError) {
+  EXPECT_DIF_BADARG(dif_clkmgr_external_clock_set_enabled(nullptr, true));
+  EXPECT_DIF_BADARG(dif_clkmgr_external_clock_set_enabled(nullptr, false));
+}
+
+TEST_F(ExternalClkTest, DisableError) {
+  EXPECT_DIF_BADARG(dif_clkmgr_external_clock_set_disabled(nullptr));
+}
+
+TEST_F(ExternalClkTest, Enable) {
+#define EXTCLK_CTRL_REG_VALUE(enable_, low_speed_)                    \
+  {                                                                   \
+    {                                                                 \
+        .offset = CLKMGR_EXTCLK_CTRL_SEL_OFFSET,                      \
+        .value = enable_ ? kMultiBitBool4True : kMultiBitBool4False,  \
+    },                                                                \
+    {                                                                 \
+      .offset = CLKMGR_EXTCLK_CTRL_HI_SPEED_SEL_OFFSET,               \
+      .value = low_speed_ ? kMultiBitBool4False : kMultiBitBool4True, \
+    }                                                                 \
+  }
+  {  // low speed with control unlocked
+    EXPECT_READ32(CLKMGR_EXTCLK_CTRL_REGWEN_REG_OFFSET, 1);
+    EXPECT_WRITE32(CLKMGR_EXTCLK_CTRL_REG_OFFSET,
+                   EXTCLK_CTRL_REG_VALUE(true, true));
+    EXPECT_DIF_OK(dif_clkmgr_external_clock_set_enabled(&clkmgr_, true));
+  }
+  {  // high speed with control unlocked
+    EXPECT_READ32(CLKMGR_EXTCLK_CTRL_REGWEN_REG_OFFSET, 1);
+    EXPECT_WRITE32(CLKMGR_EXTCLK_CTRL_REG_OFFSET,
+                   EXTCLK_CTRL_REG_VALUE(true, false));
+    EXPECT_DIF_OK(dif_clkmgr_external_clock_set_enabled(&clkmgr_, false));
+  }
+}
+
+TEST_F(ExternalClkTest, Disable) {
+  // disable with control unlocked
+  EXPECT_READ32(CLKMGR_EXTCLK_CTRL_REGWEN_REG_OFFSET, 1);
+  EXPECT_WRITE32(CLKMGR_EXTCLK_CTRL_REG_OFFSET,
+                 EXTCLK_CTRL_REG_VALUE(false, false));
+  EXPECT_DIF_OK(dif_clkmgr_external_clock_set_disabled(&clkmgr_));
+}
+#undef EXTCLK_CTRL_REG_VALUE
+
+TEST_F(ExternalClkTest, Switch) {
+  EXPECT_READ32(CLKMGR_EXTCLK_STATUS_REG_OFFSET, kMultiBitBool4False);
+  EXPECT_READ32(CLKMGR_EXTCLK_STATUS_REG_OFFSET, kMultiBitBool4False);
+  EXPECT_READ32(CLKMGR_EXTCLK_STATUS_REG_OFFSET, kMultiBitBool4True);
+  EXPECT_DIF_OK(dif_clkmgr_wait_for_ext_clk_switch(&clkmgr_));
+}
+
+TEST_F(ExternalClkTest, SwitchError) {
+  EXPECT_DIF_BADARG(dif_clkmgr_wait_for_ext_clk_switch(nullptr));
+}
+
 class MeasureCtrlTest : public ClkMgrTest {};
 
 TEST_F(MeasureCtrlTest, Disable) {
@@ -301,7 +470,7 @@ TEST_F(MeasureCountTest, EnableBadArgs) {
   EXPECT_DIF_BADARG(
       dif_clkmgr_enable_measure_counts(&clkmgr_, kBadMeasClock, 2, 3));
   EXPECT_DIF_BADARG(dif_clkmgr_enable_measure_counts(
-      nullptr, kDifClkmgrMeasureClockIoDiv2, 2, 3));
+      nullptr, kDifClkmgrMeasureClockIoDiv4, 2, 3));
   // regwen on
   EXPECT_READ32(CLKMGR_MEASURE_CTRL_REGWEN_REG_OFFSET, 1);
   EXPECT_DIF_BADARG(
@@ -312,7 +481,7 @@ TEST_F(MeasureCountTest, EnableLocked) {
   // regwen off
   EXPECT_READ32(CLKMGR_MEASURE_CTRL_REGWEN_REG_OFFSET, 0);
   EXPECT_EQ(dif_clkmgr_enable_measure_counts(
-                &clkmgr_, kDifClkmgrMeasureClockIoDiv2, 2, 3),
+                &clkmgr_, kDifClkmgrMeasureClockIoDiv4, 2, 3),
             kDifLocked);
 }
 
@@ -325,7 +494,7 @@ TEST_F(MeasureCountTest, Enable) {
   bitfield_field32_t lo_field;
   bitfield_field32_t hi_field;
 
-  for (int i = kDifClkmgrMeasureClockIo; i <= kDifClkmgrMeasureClockUsb; ++i) {
+  for (int i = 0; i < kDifClkmgrMeasureClockCount; ++i) {
     dif_clkmgr_measure_clock_t clk = (dif_clkmgr_measure_clock_t)i;
     switch (clk) {
 #define PICK_COUNT_CTRL_FIELDS(kind_)                          \
@@ -336,8 +505,6 @@ TEST_F(MeasureCountTest, Enable) {
   break  // No semicolon to force semicolon below.
       case kDifClkmgrMeasureClockIo:
         PICK_COUNT_CTRL_FIELDS(IO);
-      case kDifClkmgrMeasureClockIoDiv2:
-        PICK_COUNT_CTRL_FIELDS(IO_DIV2);
       case kDifClkmgrMeasureClockIoDiv4:
         PICK_COUNT_CTRL_FIELDS(IO_DIV4);
       case kDifClkmgrMeasureClockMain:
@@ -348,7 +515,6 @@ TEST_F(MeasureCountTest, Enable) {
 #undef PICK_COUNT_CTRL_FIELDS
     }
     EXPECT_READ32(CLKMGR_MEASURE_CTRL_REGWEN_REG_OFFSET, 1);
-    EXPECT_WRITE32(en_offset, kMultiBitBool4True);
     std::vector<mock_mmio::BitField> thresholds_val = {
         {
             .offset = (uintptr_t)lo_field.index,
@@ -360,6 +526,7 @@ TEST_F(MeasureCountTest, Enable) {
         }};
     EXPECT_WRITE32(reg_offset, thresholds_val);
     EXPECT_WRITE32(reg_offset, thresholds_val);
+    EXPECT_WRITE32(en_offset, kMultiBitBool4True);
     EXPECT_DIF_OK(
         dif_clkmgr_enable_measure_counts(&clkmgr_, clk, lo_val, hi_val));
   }
@@ -371,11 +538,11 @@ TEST_F(MeasureCountTest, DisableBadArgs) {
   EXPECT_READ32(CLKMGR_MEASURE_CTRL_REGWEN_REG_OFFSET, 1);
   EXPECT_DIF_BADARG(dif_clkmgr_disable_measure_counts(&clkmgr_, kBadMeasClock));
   EXPECT_DIF_BADARG(
-      dif_clkmgr_disable_measure_counts(nullptr, kDifClkmgrMeasureClockIoDiv2));
+      dif_clkmgr_disable_measure_counts(nullptr, kDifClkmgrMeasureClockIoDiv4));
   // regwen off
   EXPECT_READ32(CLKMGR_MEASURE_CTRL_REGWEN_REG_OFFSET, 0);
   EXPECT_EQ(
-      dif_clkmgr_disable_measure_counts(&clkmgr_, kDifClkmgrMeasureClockIoDiv2),
+      dif_clkmgr_disable_measure_counts(&clkmgr_, kDifClkmgrMeasureClockIoDiv4),
       kDifLocked);
 }
 
@@ -383,14 +550,14 @@ TEST_F(MeasureCountTest, DisableLocked) {
   // regwen off
   EXPECT_READ32(CLKMGR_MEASURE_CTRL_REGWEN_REG_OFFSET, 0);
   EXPECT_EQ(
-      dif_clkmgr_disable_measure_counts(&clkmgr_, kDifClkmgrMeasureClockIoDiv2),
+      dif_clkmgr_disable_measure_counts(&clkmgr_, kDifClkmgrMeasureClockIoDiv4),
       kDifLocked);
 }
 
 TEST_F(MeasureCountTest, Disable) {
   uint32_t en_offset;
 
-  for (int i = kDifClkmgrMeasureClockIo; i <= kDifClkmgrMeasureClockUsb; ++i) {
+  for (int i = 0; i < kDifClkmgrMeasureClockCount; ++i) {
     dif_clkmgr_measure_clock_t clk = (dif_clkmgr_measure_clock_t)i;
     switch (clk) {
 #define PICK_COUNT_CTRL_FIELDS(kind_)                   \
@@ -398,8 +565,6 @@ TEST_F(MeasureCountTest, Disable) {
   break  // No semicolon to force semicolon below.
       case kDifClkmgrMeasureClockIo:
         PICK_COUNT_CTRL_FIELDS(IO);
-      case kDifClkmgrMeasureClockIoDiv2:
-        PICK_COUNT_CTRL_FIELDS(IO_DIV2);
       case kDifClkmgrMeasureClockIoDiv4:
         PICK_COUNT_CTRL_FIELDS(IO_DIV4);
       case kDifClkmgrMeasureClockMain:
@@ -422,13 +587,13 @@ TEST_F(MeasureCountTest, GetEnableBadArgs) {
   EXPECT_DIF_BADARG(
       dif_clkmgr_measure_counts_get_enable(&clkmgr_, kBadMeasClock, nullptr));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_enable(
-      nullptr, kDifClkmgrMeasureClockIoDiv2, nullptr));
+      nullptr, kDifClkmgrMeasureClockIoDiv4, nullptr));
   EXPECT_DIF_BADARG(
       dif_clkmgr_measure_counts_get_enable(nullptr, kBadMeasClock, &state));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_enable(
-      &clkmgr_, kDifClkmgrMeasureClockIoDiv2, nullptr));
+      &clkmgr_, kDifClkmgrMeasureClockIoDiv4, nullptr));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_enable(
-      nullptr, kDifClkmgrMeasureClockIoDiv2, &state));
+      nullptr, kDifClkmgrMeasureClockIoDiv4, &state));
   EXPECT_DIF_BADARG(
       dif_clkmgr_measure_counts_get_enable(&clkmgr_, kBadMeasClock, &state));
 }
@@ -436,7 +601,7 @@ TEST_F(MeasureCountTest, GetEnableBadArgs) {
 TEST_F(MeasureCountTest, GetEnable) {
   uint32_t en_offset;
 
-  for (int i = kDifClkmgrMeasureClockIo; i <= kDifClkmgrMeasureClockUsb; ++i) {
+  for (int i = 0; i < kDifClkmgrMeasureClockCount; ++i) {
     dif_clkmgr_measure_clock_t clk = (dif_clkmgr_measure_clock_t)i;
     switch (clk) {
 #define PICK_COUNT_CTRL_FIELDS(kind_)                   \
@@ -444,8 +609,6 @@ TEST_F(MeasureCountTest, GetEnable) {
   break  // No semicolon to force semicolon below.
       case kDifClkmgrMeasureClockIo:
         PICK_COUNT_CTRL_FIELDS(IO);
-      case kDifClkmgrMeasureClockIoDiv2:
-        PICK_COUNT_CTRL_FIELDS(IO_DIV2);
       case kDifClkmgrMeasureClockIoDiv4:
         PICK_COUNT_CTRL_FIELDS(IO_DIV4);
       case kDifClkmgrMeasureClockMain:
@@ -470,33 +633,33 @@ TEST_F(MeasureCountTest, GetThresholdsBadArgs) {
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
       &clkmgr_, kBadMeasClock, nullptr, nullptr));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
-      nullptr, kDifClkmgrMeasureClockIoDiv2, nullptr, nullptr));
+      nullptr, kDifClkmgrMeasureClockIoDiv4, nullptr, nullptr));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
       nullptr, kBadMeasClock, &lo, nullptr));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
       nullptr, kBadMeasClock, nullptr, &hi));
   // Two bar args.
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
-      nullptr, kDifClkmgrMeasureClockIoDiv2, &lo, nullptr));
+      nullptr, kDifClkmgrMeasureClockIoDiv4, &lo, nullptr));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
-      nullptr, kDifClkmgrMeasureClockIoDiv2, nullptr, &hi));
+      nullptr, kDifClkmgrMeasureClockIoDiv4, nullptr, &hi));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
       nullptr, kBadMeasClock, &lo, &hi));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
-      &clkmgr_, kDifClkmgrMeasureClockIoDiv2, nullptr, nullptr));
+      &clkmgr_, kDifClkmgrMeasureClockIoDiv4, nullptr, nullptr));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
       &clkmgr_, kBadMeasClock, nullptr, &hi));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
       &clkmgr_, kBadMeasClock, &lo, nullptr));
   // One bad args.
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
-      &clkmgr_, kDifClkmgrMeasureClockIoDiv2, &lo, nullptr));
+      &clkmgr_, kDifClkmgrMeasureClockIoDiv4, &lo, nullptr));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
-      &clkmgr_, kDifClkmgrMeasureClockIoDiv2, nullptr, &hi));
+      &clkmgr_, kDifClkmgrMeasureClockIoDiv4, nullptr, &hi));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
       &clkmgr_, kBadMeasClock, &lo, &hi));
   EXPECT_DIF_BADARG(dif_clkmgr_measure_counts_get_thresholds(
-      nullptr, kDifClkmgrMeasureClockIoDiv2, &lo, &hi));
+      nullptr, kDifClkmgrMeasureClockIoDiv4, &lo, &hi));
 }
 
 TEST_F(MeasureCountTest, GetThresholds) {
@@ -504,7 +667,7 @@ TEST_F(MeasureCountTest, GetThresholds) {
   bitfield_field32_t lo_field;
   bitfield_field32_t hi_field;
 
-  for (int i = kDifClkmgrMeasureClockIo; i <= kDifClkmgrMeasureClockUsb; ++i) {
+  for (int i = 0; i < kDifClkmgrMeasureClockCount; ++i) {
     dif_clkmgr_measure_clock_t clk = (dif_clkmgr_measure_clock_t)i;
     switch (clk) {
 #define PICK_COUNT_CTRL_FIELDS(kind_)                          \
@@ -514,8 +677,6 @@ TEST_F(MeasureCountTest, GetThresholds) {
   break  // No semicolon to force semicolon below.
       case kDifClkmgrMeasureClockIo:
         PICK_COUNT_CTRL_FIELDS(IO);
-      case kDifClkmgrMeasureClockIoDiv2:
-        PICK_COUNT_CTRL_FIELDS(IO_DIV2);
       case kDifClkmgrMeasureClockIoDiv4:
         PICK_COUNT_CTRL_FIELDS(IO_DIV4);
       case kDifClkmgrMeasureClockMain:

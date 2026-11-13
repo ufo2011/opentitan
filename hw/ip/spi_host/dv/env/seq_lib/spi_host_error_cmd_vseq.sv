@@ -1,10 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 // error_cmd test vseq
 // test tries to capture error interrupt when cmd invalid condition appears
-// cmd invalid is created when cmd sent and host isnt ready
+// cmd invalid is created when cmd sent and host isn't ready
 class spi_host_error_cmd_vseq extends spi_host_tx_rx_vseq;
   `uvm_object_utils(spi_host_error_cmd_vseq)
   `uvm_object_new
@@ -26,7 +26,6 @@ class spi_host_error_cmd_vseq extends spi_host_tx_rx_vseq;
 
   virtual task send_cmd();
     generate_transaction();
-    segment = new();
     while (transaction.segments.size() > 0) begin
       segment = transaction.segments.pop_back();
       if (segment.command_reg.direction != RxOnly) begin

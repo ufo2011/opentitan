@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,7 @@ int otbn_stack_element_peek(int index, svBitVecVal *val);
 #define CMD_EXECUTE 0xD8
 #define CMD_SECWIPE_DMEM 0xC3
 #define CMD_SECWIPE_IMEM 0x1E
+#define CMD_RESUME 0xA6
 
 // Values of the `STATUS` register, as defined in `otbn.hjson`.
 #define STATUS_IDLE 0x00
@@ -38,6 +39,7 @@ int otbn_stack_element_peek(int index, svBitVecVal *val);
 #define STATUS_BUSY_SEC_WIPE_DMEM 0x02
 #define STATUS_BUSY_SEC_WIPE_IMEM 0x03
 #define STATUS_BUSY_SEC_WIPE_INT 0x04
+#define STATUS_PAUSED 0x05
 #define STATUS_LOCKED 0xFF
 
 // Read (the start of) the contents of a file at path as a vector of bytes.
@@ -226,6 +228,16 @@ int OtbnModel::take_loop_warps(const OtbnMemUtil &memutil) {
   return 0;
 }
 
+void OtbnModel::send_mem_to_iss(ISSWrapper *iss, bool is_imem) {
+  std::string dfname(iss->make_tmp_path(is_imem ? "imem" : "dmem"));
+  write_words_to_file(dfname, get_sim_memory(is_imem));
+  if (is_imem) {
+    iss->load_i(dfname);
+  } else {
+    iss->load_d(dfname);
+  }
+}
+
 int OtbnModel::start_operation(command_t command) {
   ISSWrapper *iss = ensure_wrapper();
   if (!iss)
@@ -239,14 +251,8 @@ int OtbnModel::start_operation(command_t command) {
         cmd_desc = "execute";
         iss_command = ISSWrapper::Execute;
 
-        std::string dfname(iss->make_tmp_path("dmem"));
-        std::string ifname(iss->make_tmp_path("imem"));
-
-        write_words_to_file(dfname, get_sim_memory(false));
-        write_words_to_file(ifname, get_sim_memory(true));
-
-        iss->load_d(dfname);
-        iss->load_i(ifname);
+        send_mem_to_iss(iss, true);
+        send_mem_to_iss(iss, false);
       } break;
 
       case DmemWipe:
@@ -368,15 +374,15 @@ int OtbnModel::otp_key_cdc_done() {
   return 0;
 }
 
-int OtbnModel::set_keymgr_value(svLogicVecVal *key0 /* logic [383:0] */,
-                                svLogicVecVal *key1 /* logic [383:0] */,
+int OtbnModel::set_keymgr_value(svLogicVecVal *key0 /* logic [511:0] */,
+                                svLogicVecVal *key1 /* logic [511:0] */,
                                 unsigned char valid) {
   ISSWrapper *iss = ensure_wrapper();
 
-  std::array<uint32_t, 12> key0_arr;
-  std::array<uint32_t, 12> key1_arr;
+  std::array<uint32_t, 16> key0_arr;
+  std::array<uint32_t, 16> key1_arr;
   assert(valid == 0 || valid == 1);
-  for (int i = 0; i < 12; i++) {
+  for (int i = 0; i < 16; i++) {
     key0_arr[i] = key0[i].aval;
     key1_arr[i] = key1[i].aval;
   }
@@ -402,6 +408,8 @@ int OtbnModel::step(svBitVecVal *status /* bit [7:0] */,
   if (!iss)
     return -1;
 
+  bool finished = false;
+
   try {
     switch (iss->step(has_rtl())) {
       case -1:
@@ -421,7 +429,8 @@ int OtbnModel::step(svBitVecVal *status /* bit [7:0] */,
         set_sv_u32(insn_cnt, iss->get_mirrored().insn_cnt);
         set_sv_u32(err_bits, iss->get_mirrored().err_bits);
         set_sv_u32(stop_pc, iss->get_mirrored().stop_pc);
-        return 1;
+        finished = true;
+        break;
 
       case 0:
         // The simulation is still running. Update status, rnd_req and insn_cnt.
@@ -431,7 +440,7 @@ int OtbnModel::step(svBitVecVal *status /* bit [7:0] */,
         set_sv_u8(status, iss->get_mirrored().status);
         svPutBitselBit(rnd_req, 0, (iss->get_mirrored().rnd_req & 1));
         set_sv_u32(insn_cnt, iss->get_mirrored().insn_cnt);
-        return 0;
+        break;
 
       default:
         // This shouldn't happen
@@ -441,6 +450,8 @@ int OtbnModel::step(svBitVecVal *status /* bit [7:0] */,
     std::cerr << "Error when stepping ISS: " << err.what() << "\n";
     return -1;
   }
+
+  return finished ? 1 : 0;
 }
 
 int OtbnModel::check() const {
@@ -556,15 +567,65 @@ int OtbnModel::set_software_errs_fatal(unsigned char new_val) {
   return 0;
 }
 
-int OtbnModel::set_no_sec_wipe_chk() {
-  OtbnTraceChecker::get().set_no_sec_wipe_chk();
+int OtbnModel::set_wfi_enabled(unsigned char new_val) {
+  ISSWrapper *iss = ensure_wrapper();
+  if (!iss)
+    return -1;
+
+  try {
+    iss->set_wfi_enabled(new_val);
+  } catch (const std::exception &err) {
+    std::cerr << "Error when setting wfi_enabled bit in ISS: " << err.what()
+              << "\n";
+    return -1;
+  }
+
   return 0;
 }
 
-int OtbnModel::disable_stack_check() {
-  stack_check_enabled_ = false;
+int OtbnModel::set_urnd_ctrl_enabled(unsigned char new_val) {
+  ISSWrapper *iss = ensure_wrapper();
+  if (!iss)
+    return -1;
+
+  try {
+    iss->set_urnd_ctrl_enabled(new_val);
+  } catch (const std::exception &err) {
+    std::cerr << "Error when setting urnd_ctrl_enabled bit in ISS: "
+              << err.what() << "\n";
+    return -1;
+  }
+
   return 0;
 }
+
+int OtbnModel::wfi_resume() {
+  ISSWrapper *iss = ensure_wrapper();
+  if (!iss)
+    return -1;
+
+  try {
+    // The host may have written DMEM while OTBN was paused, so re-load the
+    // DMEM into the ISS before resuming.
+    send_mem_to_iss(iss, false);
+    iss->wfi_resume();
+  } catch (const std::exception &err) {
+    std::cerr << "Error when resuming ISS: " << err.what() << "\n";
+    return -1;
+  }
+
+  return 0;
+}
+
+void OtbnModel::tolerate_result_mismatch(unsigned int num_checks) {
+  OtbnTraceChecker::get().TolerateResultMismatch(num_checks);
+}
+
+void OtbnModel::set_no_sec_wipe_chk() {
+  OtbnTraceChecker::get().set_no_sec_wipe_chk();
+}
+
+void OtbnModel::disable_stack_check() { stack_check_enabled_ = false; }
 
 int OtbnModel::step_crc(const svBitVecVal *item /* bit [47:0] */,
                         svBitVecVal *state /* bit [31:0] */) {
@@ -633,13 +694,29 @@ int OtbnModel::send_err_escalation(svBitVecVal *err_val /* bit [31:0] */,
   return 0;
 }
 
-int OtbnModel::send_rma_req() {
+int OtbnModel::send_stall_request(svBit enforced) {
   ISSWrapper *iss = ensure_wrapper();
   if (!iss)
     return -1;
 
   try {
-    iss->send_rma_req();
+    iss->send_stall_request(enforced);
+  } catch (const std::exception &err) {
+    std::cerr << "Error when sending stall request to ISS: " << err.what()
+              << "\n";
+    return -1;
+  }
+
+  return 0;
+}
+
+int OtbnModel::set_rma_req(svBitVecVal *rma_req /* bit [3:0] */) {
+  ISSWrapper *iss = ensure_wrapper();
+  if (!iss)
+    return -1;
+
+  try {
+    iss->set_rma_req(rma_req[0] & 0xf);
   } catch (const std::exception &err) {
     std::cerr << "Error when sending RMA req to ISS: " << err.what() << "\n";
     return -1;
@@ -936,6 +1013,8 @@ unsigned otbn_model_step(OtbnModel *model, unsigned model_state,
         new_state_bits = RUNNING_BIT;
         break;
     }
+  } else if (*status == STATUS_PAUSED && *cmd == CMD_RESUME) {
+    result = model->wfi_resume();
   }
 
   switch (result) {
@@ -1024,14 +1103,30 @@ int otbn_model_set_software_errs_fatal(OtbnModel *model,
   return model->set_software_errs_fatal(new_val);
 }
 
-int otbn_set_no_sec_wipe_chk(OtbnModel *model) {
+int otbn_model_set_wfi_enabled(OtbnModel *model, unsigned char new_val) {
   assert(model);
-  return model->set_no_sec_wipe_chk();
+  return model->set_wfi_enabled(new_val);
 }
 
-int otbn_disable_stack_check(OtbnModel *model) {
+int otbn_model_set_urnd_ctrl_enabled(OtbnModel *model, unsigned char new_val) {
   assert(model);
-  return model->disable_stack_check();
+  return model->set_urnd_ctrl_enabled(new_val);
+}
+
+void otbn_model_tolerate_result_mismatch(OtbnModel *model,
+                                         unsigned int num_checks) {
+  assert(model);
+  model->tolerate_result_mismatch(num_checks);
+}
+
+void otbn_set_no_sec_wipe_chk(OtbnModel *model) {
+  assert(model);
+  model->set_no_sec_wipe_chk();
+}
+
+void otbn_disable_stack_check(OtbnModel *model) {
+  assert(model);
+  model->disable_stack_check();
 }
 
 int otbn_model_step_crc(OtbnModel *model, svBitVecVal *item /* bit [47:0] */,
@@ -1056,9 +1151,15 @@ int otbn_model_send_err_escalation(OtbnModel *model,
   return model->send_err_escalation(err_val, lock_immediately);
 }
 
-int otbn_model_send_rma_req(OtbnModel *model) {
+int otbn_model_send_stall_request(OtbnModel *model, svBit enforced) {
   assert(model);
-  return model->send_rma_req();
+  return model->send_stall_request(enforced);
+}
+
+int otbn_model_set_rma_req(OtbnModel *model,
+                           svBitVecVal *rma_req /* bit [3:0] */) {
+  assert(model);
+  return model->set_rma_req(rma_req);
 }
 
 int otbn_model_initial_secure_wipe(OtbnModel *model) {

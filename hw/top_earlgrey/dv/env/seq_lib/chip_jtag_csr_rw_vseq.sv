@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ class chip_jtag_csr_rw_vseq extends chip_common_vseq;
   `uvm_object_new
 
   virtual task pre_start();
-    cfg.chip_vif.tap_straps_if.drive(JtagTapRvDm);
+    select_jtag = JtagTapRvDm;
     cfg.m_jtag_riscv_agent_cfg.is_rv_dm = 1;
     super.pre_start();
   endtask

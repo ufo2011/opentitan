@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,8 +22,8 @@
 #include "sw/device/lib/testing/autogen/isr_testutils.h"
 
 // TODO #14111, remove it once pinout configuration is provided
-#include "i2c_regs.h"
-#include "pinmux_regs.h"
+#include "hw/top/i2c_regs.h"
+#include "hw/top/pinmux_regs.h"
 
 static dif_i2c_t i2c;
 static dif_pinmux_t pinmux;
@@ -74,7 +74,7 @@ static volatile bool cmd_complete_irq_seen = false;
  * This constant indicates the number of interrupt requests.
  */
 enum {
-  kNumI2cIrqs = 6,
+  kNumI2cIrqs = 5,
 };
 
 typedef struct i2c_conf {
@@ -88,24 +88,21 @@ const i2c_conf_t i2c_configuration[] = {
      .i2c_irq_fmt_threshold_id = kTopEarlgreyPlicIrqIdI2c0FmtThreshold,
      .plic_irqs = {kTopEarlgreyPlicIrqIdI2c0CmdComplete,
                    kTopEarlgreyPlicIrqIdI2c0TxStretch,
-                   kTopEarlgreyPlicIrqIdI2c0TxOverflow,
-                   kTopEarlgreyPlicIrqIdI2c0AcqFull,
+                   kTopEarlgreyPlicIrqIdI2c0AcqStretch,
                    kTopEarlgreyPlicIrqIdI2c0UnexpStop,
                    kTopEarlgreyPlicIrqIdI2c0HostTimeout}},
     {.base_addr = TOP_EARLGREY_I2C1_BASE_ADDR,
      .i2c_irq_fmt_threshold_id = kTopEarlgreyPlicIrqIdI2c1FmtThreshold,
      .plic_irqs = {kTopEarlgreyPlicIrqIdI2c1CmdComplete,
                    kTopEarlgreyPlicIrqIdI2c1TxStretch,
-                   kTopEarlgreyPlicIrqIdI2c1TxOverflow,
-                   kTopEarlgreyPlicIrqIdI2c1AcqFull,
+                   kTopEarlgreyPlicIrqIdI2c1AcqStretch,
                    kTopEarlgreyPlicIrqIdI2c1UnexpStop,
                    kTopEarlgreyPlicIrqIdI2c1HostTimeout}},
     {.base_addr = TOP_EARLGREY_I2C2_BASE_ADDR,
      .i2c_irq_fmt_threshold_id = kTopEarlgreyPlicIrqIdI2c2FmtThreshold,
      .plic_irqs = {kTopEarlgreyPlicIrqIdI2c2CmdComplete,
                    kTopEarlgreyPlicIrqIdI2c2TxStretch,
-                   kTopEarlgreyPlicIrqIdI2c2TxOverflow,
-                   kTopEarlgreyPlicIrqIdI2c2AcqFull,
+                   kTopEarlgreyPlicIrqIdI2c2AcqStretch,
                    kTopEarlgreyPlicIrqIdI2c2UnexpStop,
                    kTopEarlgreyPlicIrqIdI2c2HostTimeout}}};
 
@@ -114,9 +111,7 @@ const i2c_conf_t i2c_configuration[] = {
  *
  * This function overrides the default OTTF external ISR.
  */
-void ottf_external_isr(void) {
-  uint32_t i2c_irq_fmt_threshold_id;
-
+void ottf_external_isr(uint32_t *exc_info) {
   plic_isr_ctx_t plic_ctx = {.rv_plic = &plic,
                              .hart_id = kTopEarlgreyPlicTargetIbex0};
 
@@ -129,7 +124,7 @@ void ottf_external_isr(void) {
 
   top_earlgrey_plic_peripheral_t peripheral;
   dif_i2c_irq_t i2c_irq;
-  isr_testutils_i2c_isr(plic_ctx, i2c_ctx, &peripheral, &i2c_irq);
+  isr_testutils_i2c_isr(plic_ctx, i2c_ctx, false, &peripheral, &i2c_irq);
 
   switch (i2c_irq) {
     case kDifI2cIrqTxStretch:
@@ -165,12 +160,13 @@ bool test_main(void) {
       mmio_region_from_addr(i2c_configuration[kI2cIdx].base_addr), &i2c));
 
   CHECK_DIF_OK(dif_pinmux_init(
-      mmio_region_from_addr(TOP_EARLGREY_PINMUX_AON_BASE_ADDR), &pinmux));
+      mmio_region_from_addr(TOP_EARLGREY_PINMUX_BASE_ADDR), &pinmux));
 
   CHECK_DIF_OK(dif_rv_plic_init(
       mmio_region_from_addr(TOP_EARLGREY_RV_PLIC_BASE_ADDR), &plic));
 
-  i2c_testutils_connect_i2c_to_pinmux_pins(&pinmux, kI2cIdx);
+  CHECK_STATUS_OK(
+      i2c_testutils_select_pinmux(&pinmux, kI2cIdx, I2cPinmuxPlatformIdDvsim));
 
   // Enable functional interrupts as well as error interrupts to make sure
   // everything is behaving as expected.
@@ -220,18 +216,19 @@ bool test_main(void) {
   // Controlling the randomization from C side is a bit slow, but might be
   // easier for portability to a different setup later.
   for (uint32_t i = 0; i < kI2cByteCount; ++i) {
-    expected_data[i] = rand_testutils_gen32_range(0, 0xff);
+    expected_data[i] = (uint8_t)rand_testutils_gen32_range(0, 0xff);
   };
 
-  uint8_t tx_fifo_lvl;
+  dif_i2c_level_t tx_fifo_lvl;
   CHECK_DIF_OK(dif_i2c_get_fifo_levels(&i2c, NULL, NULL, &tx_fifo_lvl, NULL));
   IBEX_SPIN_FOR(!(tx_fifo_lvl > 0 && tx_empty_irq_seen == false), 100);
-  i2c_testutils_target_rd(&i2c, kI2cByteCount, expected_data);
+  CHECK_STATUS_OK(
+      i2c_testutils_target_read(&i2c, kI2cByteCount, expected_data));
   tx_empty_irq_seen = false;
 
   LOG_INFO("Data written to fifo");
 
-  uint8_t acq_fifo_lvl;
+  dif_i2c_level_t acq_fifo_lvl;
   do {
     CHECK_DIF_OK(
         dif_i2c_get_fifo_levels(&i2c, NULL, NULL, &tx_fifo_lvl, &acq_fifo_lvl));
@@ -240,11 +237,11 @@ bool test_main(void) {
   CHECK(tx_fifo_lvl == 0);
 
   uint8_t addr;
-  i2c_testutils_target_check_rd(&i2c, &addr, NULL);
+  CHECK_STATUS_OK(i2c_testutils_target_check_read(&i2c, &addr, NULL));
   check_addr(addr, id0, id1);
 
   // Read data from i2c device.
-  i2c_testutils_target_wr(&i2c, kI2cByteCount);
+  CHECK_STATUS_OK(i2c_testutils_target_write(&i2c, kI2cByteCount));
   do {
     CHECK_DIF_OK(
         dif_i2c_get_fifo_levels(&i2c, NULL, NULL, &tx_fifo_lvl, &acq_fifo_lvl));
@@ -252,8 +249,8 @@ bool test_main(void) {
                                                // junk
 
   uint8_t received_data[kI2cByteCount];
-  i2c_testutils_target_check_wr(&i2c, kI2cByteCount, &addr, received_data,
-                                NULL);
+  CHECK_STATUS_OK(i2c_testutils_target_check_write(&i2c, kI2cByteCount, &addr,
+                                                   received_data, NULL));
   check_addr(addr, id0, id1);
 
   for (uint8_t i = 0; i < kI2cByteCount; ++i) {

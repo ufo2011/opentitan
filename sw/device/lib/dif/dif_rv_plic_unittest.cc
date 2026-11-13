@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include "sw/device/lib/base/mock_mmio.h"
 #include "sw/device/lib/dif/dif_test_base.h"
 
-#include "rv_plic_regs.h"  // Generated.
+#include "hw/top/rv_plic_regs.h"  // Generated.
 
 namespace dif_rv_plic_unittest {
 namespace {
@@ -21,7 +21,7 @@ using testing::Test;
 
 // If either of these static assertions fail, then the unit-tests for related
 // API should be revisited.
-static_assert(RV_PLIC_PARAM_NUM_SRC == 185,
+static_assert(RV_PLIC_PARAM_NUM_SRC == 222,
               "PLIC instantiation parameters have changed.");
 static_assert(RV_PLIC_PARAM_NUM_TARGET == 1,
               "PLIC instantiation parameters have changed.");
@@ -39,7 +39,7 @@ class ResetTest : public PlicTest {
   void ExpectReset() {
     // Priority registers.
     for (int i = 0; i < RV_PLIC_PARAM_NUM_SRC; ++i) {
-      ptrdiff_t offset = RV_PLIC_PRIO0_REG_OFFSET + (sizeof(uint32_t) * i);
+      ptrdiff_t offset = RV_PLIC_PRIO_0_REG_OFFSET + (sizeof(uint32_t) * i);
       EXPECT_WRITE32(offset, 0);
     }
 
@@ -50,6 +50,7 @@ class ResetTest : public PlicTest {
     EXPECT_WRITE32(RV_PLIC_IE0_3_REG_OFFSET, 0);
     EXPECT_WRITE32(RV_PLIC_IE0_4_REG_OFFSET, 0);
     EXPECT_WRITE32(RV_PLIC_IE0_5_REG_OFFSET, 0);
+    EXPECT_WRITE32(RV_PLIC_IE0_6_REG_OFFSET, 0);
 
     // Target threshold registers.
     EXPECT_WRITE32(RV_PLIC_THRESHOLD0_REG_OFFSET, 0);
@@ -100,7 +101,8 @@ class IrqTest : public PlicTest {
           {RV_PLIC_IE0_2_REG_OFFSET, RV_PLIC_IE0_2_E_95_BIT},
           {RV_PLIC_IE0_3_REG_OFFSET, RV_PLIC_IE0_3_E_127_BIT},
           {RV_PLIC_IE0_4_REG_OFFSET, RV_PLIC_IE0_4_E_159_BIT},
-          {RV_PLIC_IE0_5_REG_OFFSET, RV_PLIC_IE0_5_E_184_BIT},
+          {RV_PLIC_IE0_5_REG_OFFSET, RV_PLIC_IE0_5_E_191_BIT},
+          {RV_PLIC_IE0_6_REG_OFFSET, RV_PLIC_IE0_6_E_221_BIT},
       }};
   static constexpr std::array<Register, RV_PLIC_IP_MULTIREG_COUNT>
       kPendingRegisters{{
@@ -109,7 +111,8 @@ class IrqTest : public PlicTest {
           {RV_PLIC_IP_2_REG_OFFSET, RV_PLIC_IP_2_P_95_BIT},
           {RV_PLIC_IP_3_REG_OFFSET, RV_PLIC_IP_3_P_127_BIT},
           {RV_PLIC_IP_4_REG_OFFSET, RV_PLIC_IP_4_P_159_BIT},
-          {RV_PLIC_IP_5_REG_OFFSET, RV_PLIC_IP_5_P_184_BIT},
+          {RV_PLIC_IP_5_REG_OFFSET, RV_PLIC_IP_5_P_191_BIT},
+          {RV_PLIC_IP_6_REG_OFFSET, RV_PLIC_IP_6_P_221_BIT},
       }};
 
   // Set enable/disable multireg expectations, one bit per call.
@@ -146,8 +149,8 @@ constexpr std::array<IrqTest::Register, RV_PLIC_IP_MULTIREG_COUNT>
 class IrqEnableSetTest : public IrqTest {};
 
 TEST_F(IrqEnableSetTest, NullArgs) {
-  EXPECT_DIF_BADARG(dif_rv_plic_irq_set_enabled(nullptr, kFirstIrq, kTarget0,
-                                                kDifToggleEnabled));
+  EXPECT_DIF_BADARG(dif_rv_plic_irq_set_enabled(
+      nullptr, (dif_rv_plic_irq_id_t)kFirstIrq, kTarget0, kDifToggleEnabled));
 }
 
 TEST_F(IrqEnableSetTest, Target0Enable) {
@@ -155,8 +158,8 @@ TEST_F(IrqEnableSetTest, Target0Enable) {
 
   // Enable every IRQ, one at a time.
   for (int i = 0; i < RV_PLIC_PARAM_NUM_SRC; ++i) {
-    EXPECT_DIF_OK(
-        dif_rv_plic_irq_set_enabled(&plic_, i, kTarget0, kDifToggleEnabled));
+    EXPECT_DIF_OK(dif_rv_plic_irq_set_enabled(&plic_, (dif_rv_plic_irq_id_t)i,
+                                              kTarget0, kDifToggleEnabled));
   }
 }
 
@@ -165,31 +168,31 @@ TEST_F(IrqEnableSetTest, Target0Disable) {
 
   // Disable every bit, one at a time.
   for (int i = 0; i < RV_PLIC_PARAM_NUM_SRC; ++i) {
-    EXPECT_DIF_OK(
-        dif_rv_plic_irq_set_enabled(&plic_, i, kTarget0, kDifToggleDisabled));
+    EXPECT_DIF_OK(dif_rv_plic_irq_set_enabled(&plic_, (dif_rv_plic_irq_id_t)i,
+                                              kTarget0, kDifToggleDisabled));
   }
 }
 
 class IrqPrioritySetTest : public PlicTest {};
 
 TEST_F(IrqPrioritySetTest, NullArgs) {
-  EXPECT_DIF_BADARG(
-      dif_rv_plic_irq_set_priority(nullptr, kFirstIrq, kDifRvPlicMaxPriority));
+  EXPECT_DIF_BADARG(dif_rv_plic_irq_set_priority(
+      nullptr, (dif_rv_plic_irq_id_t)kFirstIrq, kDifRvPlicMaxPriority));
 }
 
 TEST_F(IrqPrioritySetTest, PriorityInvalid) {
-  EXPECT_DIF_BADARG(dif_rv_plic_irq_set_priority(nullptr, kFirstIrq,
-                                                 kDifRvPlicMaxPriority + 1));
+  EXPECT_DIF_BADARG(dif_rv_plic_irq_set_priority(
+      nullptr, (dif_rv_plic_irq_id_t)kFirstIrq, kDifRvPlicMaxPriority + 1));
 }
 
 TEST_F(IrqPrioritySetTest, Success) {
   for (int i = 0; i < RV_PLIC_PARAM_NUM_SRC; ++i) {
     // Set expectations for every priority set call.
-    ptrdiff_t offset = RV_PLIC_PRIO0_REG_OFFSET + (sizeof(uint32_t) * i);
+    ptrdiff_t offset = RV_PLIC_PRIO_0_REG_OFFSET + (sizeof(uint32_t) * i);
     EXPECT_WRITE32(offset, kDifRvPlicMaxPriority);
 
-    EXPECT_DIF_OK(
-        dif_rv_plic_irq_set_priority(&plic_, i, kDifRvPlicMaxPriority));
+    EXPECT_DIF_OK(dif_rv_plic_irq_set_priority(&plic_, (dif_rv_plic_irq_id_t)i,
+                                               kDifRvPlicMaxPriority));
   }
 }
 
@@ -216,13 +219,16 @@ class IrqPendingStatusGetTest : public IrqTest {};
 
 TEST_F(IrqPendingStatusGetTest, NullArgs) {
   bool status;
-  dif_result_t result = dif_rv_plic_irq_is_pending(nullptr, kFirstIrq, &status);
+  dif_result_t result = dif_rv_plic_irq_is_pending(
+      nullptr, (dif_rv_plic_irq_id_t)kFirstIrq, &status);
   EXPECT_DIF_BADARG(result);
 
-  result = dif_rv_plic_irq_is_pending(&plic_, kFirstIrq, nullptr);
+  result = dif_rv_plic_irq_is_pending(&plic_, (dif_rv_plic_irq_id_t)kFirstIrq,
+                                      nullptr);
   EXPECT_DIF_BADARG(result);
 
-  result = dif_rv_plic_irq_is_pending(nullptr, kFirstIrq, nullptr);
+  result = dif_rv_plic_irq_is_pending(nullptr, (dif_rv_plic_irq_id_t)kFirstIrq,
+                                      nullptr);
   EXPECT_DIF_BADARG(result);
 }
 
@@ -232,7 +238,8 @@ TEST_F(IrqPendingStatusGetTest, Enabled) {
   // Get status of every IRQ, one at a time.
   for (int i = 0; i < RV_PLIC_PARAM_NUM_SRC; ++i) {
     bool status;
-    dif_result_t result = dif_rv_plic_irq_is_pending(&plic_, i, &status);
+    dif_result_t result =
+        dif_rv_plic_irq_is_pending(&plic_, (dif_rv_plic_irq_id_t)i, &status);
     EXPECT_DIF_OK(result);
     EXPECT_TRUE(status);
   }
@@ -244,7 +251,8 @@ TEST_F(IrqPendingStatusGetTest, Disabled) {
   // Get status of every IRQ, one at a time.
   for (int i = 0; i < RV_PLIC_PARAM_NUM_SRC; ++i) {
     bool status;
-    dif_result_t result = dif_rv_plic_irq_is_pending(&plic_, i, &status);
+    dif_result_t result =
+        dif_rv_plic_irq_is_pending(&plic_, (dif_rv_plic_irq_id_t)i, &status);
     EXPECT_DIF_OK(result);
     EXPECT_FALSE(status);
   }
@@ -282,7 +290,8 @@ class IrqCompleteTest : public PlicTest {
 };
 
 TEST_F(IrqCompleteTest, NullArgs) {
-  EXPECT_DIF_BADARG(dif_rv_plic_irq_complete(nullptr, kTarget0, 0));
+  EXPECT_DIF_BADARG(
+      dif_rv_plic_irq_complete(nullptr, kTarget0, (dif_rv_plic_irq_id_t)0));
 }
 
 TEST_F(IrqCompleteTest, Target0Success) {
@@ -293,7 +302,8 @@ TEST_F(IrqCompleteTest, Target0Success) {
 
   // Complete all of the IRQs.
   for (int i = 0; i < RV_PLIC_PARAM_NUM_SRC; ++i) {
-    EXPECT_DIF_OK(dif_rv_plic_irq_complete(&plic_, kTarget0, i));
+    EXPECT_DIF_OK(
+        dif_rv_plic_irq_complete(&plic_, kTarget0, (dif_rv_plic_irq_id_t)i));
   }
 }
 

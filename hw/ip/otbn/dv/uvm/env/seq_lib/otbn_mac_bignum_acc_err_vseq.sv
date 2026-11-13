@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,16 +8,21 @@
 class otbn_mac_bignum_acc_err_vseq extends otbn_intg_err_vseq;
   `uvm_object_utils(otbn_mac_bignum_acc_err_vseq)
 
-  `uvm_object_new
+  // TODO: Replaced the macro `uvm_object_new with the effective constructor to be able to
+  //       overwrite expect_delayed_escalation. There is probably a smarter way?
+  function new (string name="");
+      super.new(name);
+      expect_delayed_escalation = 1;
+    endfunction : new
 
-  task await_use(output bit [otbn_pkg::BaseWordsPerWLEN-1:0] used_words);
+  protected task await_use(output bit [otbn_pkg::BaseWordsPerWLEN-1:0] used_words);
     used_words = '0;
     `uvm_info(`gfn, "Waiting for `acc_intg_q` to be used", UVM_LOW)
     cfg.mac_bignum_vif.wait_for_acc_used(200, used_words);
   endtask
 
-  task inject_errors(input  bit [otbn_pkg::BaseWordsPerWLEN-1:0] used_words,
-                     output bit [otbn_pkg::BaseWordsPerWLEN-1:0] corrupted_words);
+  protected task inject_errors(input  bit [otbn_pkg::BaseWordsPerWLEN-1:0] used_words,
+                               output bit [otbn_pkg::BaseWordsPerWLEN-1:0] corrupted_words);
     bit [otbn_pkg::ExtWLEN-1:0] new_data = corrupt_data(cfg.mac_bignum_vif.acc_intg_q,
                                                         '{default: 50},
                                                         corrupted_words);
@@ -29,7 +34,7 @@ class otbn_mac_bignum_acc_err_vseq extends otbn_intg_err_vseq;
     end
   endtask
 
-  task release_force();
+  protected task release_force();
     cfg.mac_bignum_vif.release_acc_intg_q();
   endtask
 

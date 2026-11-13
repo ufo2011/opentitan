@@ -1,5 +1,5 @@
 CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 name: "lowrisc:dv:spi_host_env:0.1"
@@ -10,6 +10,7 @@ filesets:
       - lowrisc:dv:ralgen
       - lowrisc:dv:cip_lib
       - lowrisc:dv:spi_agent
+      - lowrisc:dv:spi_host_env_cfg_pkg
       - lowrisc:ip:spi_host
     files:
       - spi_host_env_pkg.sv
@@ -28,6 +29,7 @@ filesets:
       - seq_lib/spi_host_common_vseq.sv: {is_include_file: true}
       - seq_lib/spi_host_smoke_vseq.sv: {is_include_file: true}
       - seq_lib/spi_host_speed_vseq.sv: {is_include_file: true}
+      - seq_lib/spi_host_upper_range_clkdiv_vseq.sv: {is_include_file: true}
       - seq_lib/spi_host_event_vseq.sv: {is_include_file: true}
       - seq_lib/spi_host_performance_vseq.sv: {is_include_file: true}
       - seq_lib/spi_host_sw_reset_vseq.sv: {is_include_file: true}
@@ -46,10 +48,11 @@ generate:
     parameters:
       name: spi_host
       ip_hjson: ../../data/spi_host.hjson
+    position: prepend
 
 targets:
   default:
     filesets:
       - files_dv
     generate:
-      - ral
+      - "!chip_level ? (ral)"

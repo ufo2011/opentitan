@@ -1,11 +1,19 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-load("//rules:splice.bzl", "bitstream_splice")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_files")
 load("//rules:otp.bzl", "get_otp_images")
+load("//rules:const.bzl", "KEY_AUTHENTICITY")
+load("//rules:bitstreams.bzl", "bitstream_fragment_from_manifest")
 
 package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "doc_files",
+    srcs = glob(["**/*.md"]),
+)
 
 # By default, targets in this file will use cached artifacts from the GCP bucket
 # instead of building them from scratch.
@@ -24,12 +32,18 @@ package(default_visibility = ["//visibility:public"])
 #   Vivado. You'll need to have Xilinx Vivado installed and have properly
 #   configured access to a license or license server.
 #
-# * `--define bitstream=gcp_splice` causes these targets to use a cached
-#   bitstream, but splice in a locally-built ROM image or OTP.
+# * `--define bitstream=gcp` causes these targets to use a cached bitstream.
+#
+# * `--define bitstream=X` causes the bitstream cache to select entry named X
+#   instead of the cache entry normally selected by the bitstream cache script.
+#   This can be useful when using a custom bitstream cache, see
+#   rules/scripts/bitstreams_workspace.py for more details. The full list of
+#   available bitstreams in the cache can be obtained by running bazel using
+#   the environment variable BITSTREAM="--list"
 #
 # Downstream targets will see the effects of this caching logic. For example,
 # specifying `--define bitstream=vivado` when testing
-# //sw/device/silicon_creator/lib/drivers:hmac_functest_fpga_cw310 will turn
+# //sw/device/silicon_creator/lib/drivers:hmac_functest_fpga_cw* will turn
 # `:test_rom` into a full Vivado bitstream build.
 
 config_setting(
@@ -47,108 +61,30 @@ config_setting(
 )
 
 config_setting(
-    name = "bitstream_gcp_splice",
+    name = "bitstream_gcp",
     define_values = {
-        "bitstream": "gcp_splice",
+        "bitstream": "gcp",
     },
 )
 
-filegroup(
-    name = "test_rom",
+bitstream_fragment_from_manifest(
+    name = "chip_earlgrey_cw340_cached_fragment",
     testonly = True,
-    srcs = select({
-        "bitstream_skip": ["skip.bit"],
-        "bitstream_vivado": ["//hw/bitstream/vivado:fpga_cw310_test_rom"],
-        "bitstream_gcp_splice": [":gcp_spliced_test_rom"],
-        "//conditions:default": [":gcp_spliced_test_rom"],
-    }),
+    srcs = [
+        "@bitstreams//:chip_earlgrey_cw340_bitstream",
+        "@bitstreams//:chip_earlgrey_cw340_mmi",
+    ],
+    design = "chip_earlgrey_cw340",
+    manifest = "@bitstreams//:manifest",
     tags = ["manual"],
 )
 
-filegroup(
-    name = "rom",
+pkg_tar(
+    name = "chip_earlgrey_cw340_cached_archive",
     testonly = True,
-    srcs = select({
-        "bitstream_skip": ["skip.bit"],
-        "bitstream_vivado": ["//hw/bitstream/vivado:fpga_cw310_rom"],
-        "bitstream_gcp_splice": [":gcp_spliced_rom"],
-        "//conditions:default": [":gcp_spliced_rom"],
-    }),
+    srcs = [":chip_earlgrey_cw340_cached_fragment"],
+    mode = "0444",
+    package_dir = "build-bin/hw/top_earlgrey/chip_earlgrey_cw340",
+    strip_prefix = "/hw/bitstream/chip_earlgrey_cw340_cached_fragment",
     tags = ["manual"],
 )
-
-filegroup(
-    name = "rom_mmi",
-    testonly = True,
-    srcs = select({
-        "bitstream_skip": ["skip.bit"],
-        "bitstream_vivado": ["//hw/bitstream/vivado:rom_mmi"],
-        "//conditions:default": ["@bitstreams//:chip_earlgrey_cw310_rom_mmi"],
-    }),
-    tags = ["manual"],
-)
-
-filegroup(
-    name = "otp_mmi",
-    testonly = True,
-    srcs = select({
-        "bitstream_skip": ["skip.bit"],
-        "bitstream_vivado": ["//hw/bitstream/vivado:otp_mmi"],
-        "//conditions:default": ["@bitstreams//:chip_earlgrey_cw310_otp_mmi"],
-    }),
-    tags = ["manual"],
-)
-
-[
-    filegroup(
-        name = "rom_otp_" + otp_name,
-        testonly = True,
-        srcs = select({
-            "bitstream_skip": ["skip.bit"],
-            "bitstream_vivado": ["//hw/bitstream/vivado:fpga_cw310_rom_otp_" + otp_name],
-            "bitstream_gcp_splice": [":gcp_spliced_rom_otp_" + otp_name],
-            "//conditions:default": [":gcp_spliced_rom_otp_" + otp_name],
-        }),
-        tags = ["manual"],
-    )
-    for (otp_name, _) in get_otp_images()
-]
-
-# Build the Test ROM and splice it into a cached bitstream.
-bitstream_splice(
-    name = "gcp_spliced_test_rom",
-    testonly = True,
-    src = "@bitstreams//:chip_earlgrey_cw310_bitstream",
-    data = "//sw/device/lib/testing/test_rom:test_rom_fpga_cw310_scr_vmem",
-    meminfo = ":rom_mmi",
-    tags = ["manual"],
-    update_usr_access = True,
-    visibility = ["//visibility:private"],
-)
-
-# Build the ROM and splice it into a cached bitstream.
-bitstream_splice(
-    name = "gcp_spliced_rom",
-    testonly = True,
-    src = "@bitstreams//:chip_earlgrey_cw310_bitstream",
-    data = "//sw/device/silicon_creator/rom:rom_with_fake_keys_fpga_cw310_scr_vmem",
-    meminfo = ":rom_mmi",
-    tags = ["manual"],
-    update_usr_access = True,
-    visibility = ["//visibility:private"],
-)
-
-# Splice OTP images into the locally-spliced ROM bitstream.
-[
-    bitstream_splice(
-        name = "gcp_spliced_rom_otp_" + otp_name,
-        testonly = True,
-        src = ":gcp_spliced_rom",
-        data = img_target,
-        meminfo = ":otp_mmi",
-        tags = ["manual"],
-        update_usr_access = True,
-        visibility = ["//visibility:private"],
-    )
-    for (otp_name, img_target) in get_otp_images()
-]

@@ -1,10 +1,11 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <assert.h>
 #include <stdbool.h>
 
+#include "hw/top/dt/otp_ctrl.h"
 #include "sw/device/lib/base/bitfield.h"
 #include "sw/device/lib/base/macros.h"
 #include "sw/device/lib/base/memory.h"
@@ -14,13 +15,16 @@
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-
 static dif_otp_ctrl_t otp;
 
 static const char kTestData[] = "abcdefghijklmno";
 static_assert(ARRAYSIZE(kTestData) % sizeof(uint32_t) == 0,
               "kTestData must be a word array");
+
+static_assert(kDtOtpCtrlCount >= 1,
+              "This test requires at least one OTP Control instance");
+
+static dt_otp_ctrl_t kTestOtpCtrl = (dt_otp_ctrl_t)0;
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -29,8 +33,7 @@ OTTF_DEFINE_TEST_CONFIG();
  * value can then be read out exactly through the blocking read interface.
  */
 bool test_main(void) {
-  CHECK_DIF_OK(dif_otp_ctrl_init(
-      mmio_region_from_addr(TOP_EARLGREY_OTP_CTRL_CORE_BASE_ADDR), &otp));
+  CHECK_DIF_OK(dif_otp_ctrl_init_from_dt(kTestOtpCtrl, &otp));
 
   dif_otp_ctrl_config_t config = {
       .check_timeout = 100000,
@@ -39,15 +42,16 @@ bool test_main(void) {
   };
   CHECK_DIF_OK(dif_otp_ctrl_configure(&otp, config));
 
-  for (int i = 0; i < ARRAYSIZE(kTestData); i += sizeof(uint32_t)) {
+  for (uint32_t i = 0; i < ARRAYSIZE(kTestData); i += sizeof(uint32_t)) {
     uint32_t word;
     memcpy(&word, &kTestData[i], sizeof(word));
 
-    otp_ctrl_testutils_wait_for_dai(&otp);
+    CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(&otp));
     CHECK_DIF_OK(dif_otp_ctrl_dai_program32(
                      &otp, kDifOtpCtrlPartitionVendorTest, 0x10 + i, word),
                  "Failed to program word kTestData[%d] = 0x%08x.", i, word);
   }
+  CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(&otp));
 
   uint32_t readout[ARRAYSIZE(kTestData) / sizeof(uint32_t)] = {0};
   CHECK_DIF_OK(dif_otp_ctrl_read_blocking(&otp, kDifOtpCtrlPartitionVendorTest,

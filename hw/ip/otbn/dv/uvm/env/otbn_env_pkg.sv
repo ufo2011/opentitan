@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@ package otbn_env_pkg;
   import top_pkg::*;
   import dv_utils_pkg::*;
   import csr_utils_pkg::*;
+  import dv_base_agent_pkg::*;
   import dv_lib_pkg::*;
   import dv_base_reg_pkg::*;
   import tl_agent_pkg::*;
@@ -15,7 +16,7 @@ package otbn_env_pkg;
   import push_pull_agent_pkg::*;
   import otbn_model_agent_pkg::*;
   import otbn_memutil_pkg::*;
-  import mem_bkdr_util_pkg::mem_bkdr_util;
+  import sram_ctrl_bkdr_util_pkg::sram_ctrl_bkdr_util;
   import prim_util_pkg::vbits;
   import prim_mubi_pkg::*;
   import key_sideload_agent_pkg::*;
@@ -45,22 +46,47 @@ package otbn_env_pkg;
   import "DPI-C" function string OtbnTestHelperGetFilePath(chandle helper, int index);
 
   // parameters
-  parameter string LIST_OF_ALERTS[] = {"fatal", "recov"};
   parameter uint NUM_ALERTS = otbn_reg_pkg::NumAlerts;
+  parameter string LIST_OF_ALERTS[NUM_ALERTS] = {"fatal", "recov"};
   parameter uint NUM_EDN = 2;
 
   // Number of bits in the otp_ctrl_pkg::otbn_otp_key_rsp_t struct:
   parameter int KEY_RSP_DATA_SIZE = $bits(otp_ctrl_pkg::otbn_otp_key_rsp_t);
 
   // typedefs
+  typedef virtual otbn_ssctrl_if   ssctrl_vif;
   typedef virtual otbn_escalate_if escalate_vif;
   typedef logic [TL_AIW-1:0]       tl_source_t;
-  typedef key_sideload_agent#(keymgr_pkg::otbn_key_req_t) otbn_sideload_agent;
-  typedef key_sideload_agent_cfg#(keymgr_pkg::otbn_key_req_t) otbn_sideload_agent_cfg;
+  typedef key_sideload_agent#(keymgr_dpe_pkg::wide_hw_key_req_t) otbn_sideload_agent;
+  typedef key_sideload_agent_cfg#(keymgr_dpe_pkg::wide_hw_key_req_t) otbn_sideload_agent_cfg;
 
   typedef push_pull_agent#(.DeviceDataWidth(KEY_RSP_DATA_SIZE)) otp_key_agent;
   typedef push_pull_agent_cfg#(.DeviceDataWidth(KEY_RSP_DATA_SIZE)) otp_key_agent_cfg;
   typedef virtual push_pull_if#(.DeviceDataWidth(KEY_RSP_DATA_SIZE)) otp_key_vif;
+
+  // The layout of the ERR_BITS register (see otbn.hjson). Anything that talks to the model in terms
+  // of ERR_BITS expects this layout.
+  typedef struct packed {
+    logic [7:0] reserved2;
+    logic       fatal_software;
+    logic       lifecycle_escalation;
+    logic       illegal_bus_access;
+    logic       bad_internal_state;
+    logic       bus_intg_violation;
+    logic       reg_intg_violation;
+    logic       dmem_intg_violation;
+    logic       imem_intg_violation;
+    logic [6:0] reserved1;
+    logic       mai_software_error;
+    logic       rnd_fips_chk_fail;
+    logic       rnd_rep_chk_fail;
+    logic       key_invalid;
+    logic       loop;
+    logic       illegal_insn;
+    logic       call_stack;
+    logic       bad_insn_addr;
+    logic       bad_data_addr;
+  } err_bits_reg_t;
 
   // Expected data for a pending read (see exp_read_values in otbn_scoreboard.sv)
   typedef struct packed {

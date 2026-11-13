@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -14,153 +14,12 @@
     {
       name: smoke
       desc: '''
-            Use default SRAM fifo setting. Seq:
-            - Write a word data to TX memory and update wptr
-            - Send a word SPI transfer
-            - Read a word data from RX memory and update rptr
-            - Compare the data and check no pending data in SRAM FIFO
-            - Repeat above steps'''
+            Configures Flash/Passthrough modes as well as TPM and drive reads/writes
+            through SPI alternating between TPM and SPI commands.
+            Sequences spi_device_flash_all_vseq and spi_device_tpm_all_vseq are
+            launched in parallel'''
       stage: V1
-      tests: ["spi_device_smoke"]
-    }
-    {
-      name: base_random_seq
-      desc: '''
-            Create 3 parallel threads
-            - Write random data to TX memory unless fifo is full
-            - Send SPI transfer unless TX is empty or RX is full
-            - Read RX memory unless RX is empty'''
-      stage: V2
-      tests: ["spi_device_txrx"]
-    }
-    {
-      name: fifo_full
-      desc: '''
-            Increase the chance to have fifo full by following
-            - Reduce delay to write TX memory
-            - Increase delay to read RX memory'''
-      stage: V2
-      tests: ["spi_device_fifo_full"]
-    }
-    {
-      name: fifo_underflow_overflow
-      desc: '''
-            Override spi_device_txrx_vseq to send SPI transfer without checking TX/RX fifo, note:
-            - When TX is underflow, SW shouldn't update wptr if spi isn't idle, otherwise, spi may
-              send mis-aligned data
-            - When RX is overflow, data will be lost and if SW update rptr, received data may be
-              mis-aligned
-            - Ensure underflow/overflow is triggered correctly'''
-      stage: V2
-      tests: ["spi_device_fifo_underflow_overflow"]
-    }
-    {
-      name: dummy_sck_and_dummy_csb
-      desc: '''
-            Drive dummy sck without csb or drive dummy csb without sck, and test no impact on the
-            design'''
-      stage: V2
-      tests: ["spi_device_dummy_item_extra_dly"]
-    }
-    {
-      name: extra_delay_on_spi
-      desc: '''
-            Add extra delay between spi clock edge or extra delay between 2 words data
-            This is to test host pause transfer for a while without turning off csb and then stream
-            in data again'''
-      stage: V2
-      tests: ["spi_device_dummy_item_extra_dly"]
-    }
-    {
-      name: tx_async_fifo_reset
-      desc: '''
-            Reset TX async fifo when SPI interface is idle
-
-            - Fill TX SRAM FIFO with some data, which will be transfered to TX async FIFO
-            - Write 0 into read and write point of TX SRAM FIFO
-            - Program `rst_txfifo` to reset the async FIFO
-            - Check `async_fifo_level.txlvl` is 0
-            - Fill TX SRAM FIFO with some other data and enable SPI transfer
-            - Check SPI device sends and receives the correct data
-            '''
-      stage: V2
-      tests: ["spi_device_tx_async_fifo_reset"]
-    }
-    {
-      name: rx_async_fifo_reset
-      desc: '''
-            Reset RX async fifo when SPI interface is idle
-
-            - Configure RX SRAM FIFO with a small size, so that it's easy to fill up
-            - Start SPI transfers to fill up the RX SRAM FIFO and at least part of the RX async
-              FIFO
-            - Program `rst_rxfifo` to reset the async FIFO
-            - Check `async_fifo_level.rxlvl` is 0
-            - Write 0 into read and write point of RX SRAM FIFO
-            - Fill TX SRAM FIFO with some other data and start another SPI transfers
-            - Check SPI device sends and receives the correct data
-            '''
-      stage: V2
-      tests: ["spi_device_rx_async_fifo_reset"]
-    }
-    {
-      name: interrupts
-      desc: '''
-            Test all supported interrupts:
-            - tx/rx lvl
-            - rx full
-            - rx error
-            - overflow/underflow'''
-      stage: V2
-      tests: ["spi_device_intr"]
-    }
-    {
-      name: abort
-      desc: '''
-            - Fill TX FIFO without host traffic
-            - Issue Abort to control register
-            - Poll until abort_done in status register
-            - TBD additional checking
-            '''
-      stage: V2
-      tests: ["spi_device_abort"]
-    }
-    {
-      name: byte_transfer_on_spi
-      desc: '''send spi transfer on byte granularity, and make sure the timer never expires'''
-      stage: V2
-      tests: ["spi_device_byte_transfer"]
-    }
-    {
-      name: rx_timeout
-      desc: '''
-            - Send spi transfer on byte granularity, and timer may expires
-            - Only check data in sequence level when timer expires. Monitor and scoreboard don't
-              model the timer feature
-            - Note: Timeout only for RX'''
-      stage: V2
-      tests: ["spi_device_rx_timeout"]
-    }
-    {
-      name: bit_transfer_on_spi
-      desc: '''
-            Send spi transfer on bit granularity
-            - If TX drives < 7 bits, this byte will be sent in next CSB.
-            - If TX drives 7 bits and set CSB to high, this byte won't be sent in next CSB'''
-      stage: V2
-      tests: ["spi_device_bit_transfer"]
-    }
-    {
-      name: extreme_fifo_setting
-      desc: '''Set fifo size to 4 bytes(minimum), 2k-4bytes(maximum) and others'''
-      stage: V2
-      tests: ["spi_device_extreme_fifo_size"]
-    }
-    {
-      name: perf
-      desc: '''Run spi_device_fifi_full_vseq with very small delays'''
-      stage: V2
-      tests: ["spi_device_perf"]
+      tests: ["spi_device_flash_and_tpm"]
     }
     {
       name: csb_read
@@ -182,9 +41,14 @@
     }
     {
       name: mem_cfg
-      desc: '''Test cfg_i connectivity between spi_device and prim_ram_2p.
+      desc: '''Test ram_cfg connectivity between spi_device and the backing RAM.
 
-               Randomly set dut.ram_cfg_i and check this value is propagated to prim_mem_2p.'''
+
+               Randomly set dut.ram_cfg_sys2spi_i and dut.ram_cfg_spi2sys_i and check these values
+               are propagated to the memory itself.
+               For the 1r1w implementation, where the RAM is split into ingress and egress portions,
+               check that the configuration makes it to both sides.'''
+
       stage: V2
       tests: ["spi_device_ram_cfg"]
     }
@@ -198,7 +62,7 @@
             - Check TPM_CMD_ADDR.
             - Confirm FIFO behaviour dictated by TPM_CFG.tpm_mode.
             - Check TPM_STATUS.cmdaddr_notempty and INTR_STATE.tpm_header_notempty, they should be asserted if hw_reg_dis == 0.
-            - If hw_reg_dis == 0, the data is returned to the host via return-by-HW register, else the data is returned via read FIFO.
+            - If hw_reg_dis == 0, the data is returned to the host via return-by-HW register, else the data is returned via read TPM FIFO in SRAM.
             - Confirm that the TPM submodule sends WAIT until the read FIFO is available.
             - Check the read FIFO.
             - When available, confirm that the TPM submodule sends START followed by the register value.
@@ -346,6 +210,17 @@
       tests: ["spi_device_intercept", "spi_device_flash_all"]
     }
     {
+      name: cmd_read_pipeline
+      desc: '''
+            - Configure proper fast read command info slot with the read data pipeline feature.
+            - Issue fast read command.
+            - Check propagation of fast read command, including dummy cycles for read data pipeline.
+            - Initiate response to the fast read.
+            - Check proper reception of response.'''
+      stage: V2
+      tests: ["spi_device_intercept", "spi_device_flash_all"]
+    }
+    {
       name: flash_cmd_upload
       desc: '''
             - Configure spi_device on flash or passthrough mode.
@@ -463,6 +338,19 @@
       tests: ["spi_device_cfg_cmd"]
     }
     {
+      name: flash_mode_ignore_cmds
+      desc: '''
+            - Set the device busy bit.
+            - Constrain the issued opcode to commands the spec requires to be ignored while
+              busy: WREN, WRDI, EN4B, EX4B, and upload commands with the busy bit set in
+              their cmd_info slot.
+            - Issue commands immediately without waiting for busy to de-assert.
+            - Check that the DUT discards each command without modifying flash status,
+              address-mode state or the upload FIFO.'''
+      stage: V2
+      tests: ["spi_device_flash_mode_ignore_cmds"]
+    }
+    {
       name: TPM_with_flash_or_passthrough_mode
       desc: '''
             - Enable TPM mode.
@@ -498,28 +386,6 @@
             Cover every combination of all possible modes:
             - FW mode, passthrough mode and flash mode.
             Cover passthrough mode and flash mode with TPM mode enabled.'''
-    }
-    // FW mode
-    {
-      name: bit_order_clk_cfg_cg
-      desc: '''
-            Cover all configurations of rx/tx order in SPI_DEVICE.CFG for FW mode.
-            Note: Flash or TPM mode always use the fixed bit order.
-
-            Cover all combinations of SPI_DEVICE.CFG.CPOL and SPI_DEVICE.CFG.CPHA.
-            Cross both bit order and clock configure.'''
-    }
-    {
-      name: fw_tx_fifo_size_cg
-      desc: '''
-            Cover these values are used to configure TX fifo size for FW mode.
-            - min(1 word), typical(half of SRAM size), max(SRAM size - 1 word)
-            Sample this when fifo is full.'''
-    }
-    {
-      name: fw_rx_fifo_size_cg
-      desc: '''
-            The same CG as `fw_tx_fifo_size_cg` for RX.'''
     }
     // TPM mode
     {
@@ -568,6 +434,7 @@
             Cover payload swap enable.
             Cover upload enable.
             Cover busy enable.
+            Cover all read_pipeline_mode values
             Cover all dummy sizes.
             Cover number of payload lanes (single, dual and quad modes or no payload).
 
@@ -633,7 +500,7 @@
       desc: '''
             Cover read commands targeting inside mailbox space.
             Cover command starting outside mailbox and crossing into mailbox space.
-            Cover command starting in mailbox comming outside mailbox space.
+            Cover command starting in mailbox coming outside mailbox space.
             Cover command starting outside mailbox and crossing the entire mailbox space and coming
             outside mailbox.
             Cross above with filter on and off.'''

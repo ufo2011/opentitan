@@ -20,10 +20,9 @@ module ibex_ex_block #(
   input  ibex_pkg::alu_op_e     alu_operator_i,
   input  logic [31:0]           alu_operand_a_i,
   input  logic [31:0]           alu_operand_b_i,
-  input  logic                  alu_instr_first_cycle_i,
 
   // Branch Target ALU
-  // All of these signals are unusued when BranchTargetALU == 0
+  // All of these signals are unused when BranchTargetALU == 0
   input  logic [31:0]           bt_a_operand_i,
   input  logic [31:0]           bt_b_operand_i,
 
@@ -62,9 +61,6 @@ module ibex_ex_block #(
   logic        alu_cmp_result, alu_is_equal_result;
   logic        multdiv_valid;
   logic        multdiv_sel;
-  logic [31:0] alu_imd_val_q[2];
-  logic [31:0] alu_imd_val_d[2];
-  logic [ 1:0] alu_imd_val_we;
   logic [33:0] multdiv_imd_val_d[2];
   logic [ 1:0] multdiv_imd_val_we;
 
@@ -79,12 +75,10 @@ module ibex_ex_block #(
     assign multdiv_sel = 1'b0;
   end
 
-  // Intermediate Value Register Mux
-  assign imd_val_d_o[0] = multdiv_sel ? multdiv_imd_val_d[0] : {2'b0, alu_imd_val_d[0]};
-  assign imd_val_d_o[1] = multdiv_sel ? multdiv_imd_val_d[1] : {2'b0, alu_imd_val_d[1]};
-  assign imd_val_we_o   = multdiv_sel ? multdiv_imd_val_we : alu_imd_val_we;
-
-  assign alu_imd_val_q = '{imd_val_q_i[0][31:0], imd_val_q_i[1][31:0]};
+  // Intermediate Value Register Mux.
+  assign imd_val_d_o[0] = multdiv_sel ? multdiv_imd_val_d[0] : 34'd0;
+  assign imd_val_d_o[1] = multdiv_sel ? multdiv_imd_val_d[1] : 34'd0;
+  assign imd_val_we_o   = multdiv_sel ? multdiv_imd_val_we   : 2'b00;
 
   assign result_ex_o  = multdiv_sel ? multdiv_result : alu_result;
 
@@ -119,10 +113,6 @@ module ibex_ex_block #(
     .operator_i         (alu_operator_i),
     .operand_a_i        (alu_operand_a_i),
     .operand_b_i        (alu_operand_b_i),
-    .instr_first_cycle_i(alu_instr_first_cycle_i),
-    .imd_val_q_i        (alu_imd_val_q),
-    .imd_val_we_o       (alu_imd_val_we),
-    .imd_val_d_o        (alu_imd_val_d),
     .multdiv_operand_a_i(multdiv_alu_operand_a),
     .multdiv_operand_b_i(multdiv_alu_operand_b),
     .multdiv_sel_i      (multdiv_sel),
@@ -191,9 +181,26 @@ module ibex_ex_block #(
     );
   end
 
-  // Multiplier/divider may require multiple cycles. The ALU output is valid in the same cycle
-  // unless the intermediate result register is being written (which indicates this isn't the
-  // final cycle of ALU operation).
-  assign ex_valid_o = multdiv_sel ? multdiv_valid : ~(|alu_imd_val_we);
+  // Multiplier/divider may require multiple cycles. The ALU output is always valid in the same
+  // cycle.
+  assign ex_valid_o = multdiv_sel ? multdiv_valid : 1'b1;
+
+`ifdef INC_ASSERT
+  // This is intended to be accessed via hierarchical references, so it is neither output from this
+  // module nor used in any logic in this module
+  logic sva_multdiv_fsm_idle;
+
+  if (RV32M == RV32MSlow) begin : gen_multdiv_sva_idle_slow
+    assign sva_multdiv_fsm_idle = gen_multdiv_slow.multdiv_i.sva_fsm_idle;
+  end else if (RV32M == RV32MFast || RV32M == RV32MSingleCycle) begin : gen_multdiv_sva_idle_fast
+    assign sva_multdiv_fsm_idle = gen_multdiv_fast.multdiv_i.sva_fsm_idle;
+  end else begin : gen_multdiv_sva_idle_none
+    assign sva_multdiv_fsm_idle = 1'b1;
+  end
+
+  // Mark the sva_multdiv_fsm_idle as unused to avoid lint issues
+  logic unused_sva_multdiv_fsm_idle;
+  assign unused_sva_multdiv_fsm_idle = sva_multdiv_fsm_idle;
+`endif
 
 endmodule

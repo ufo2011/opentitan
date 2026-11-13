@@ -1,9 +1,9 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Covergoups that are dependent on run-time parameters that may be available
+ * Covergroups that are dependent on run-time parameters that may be available
  * only in build_phase can be defined here
  * Covergroups may also be wrapped inside helper classes if needed.
  */
@@ -123,9 +123,9 @@ endgroup
 // We do this so that we can create an array of these covergroups for each app interface
 // present in the testbench environment.
 class app_cg_wrap;
-  // done signal is sent while kecak rounds are running
+  // done signal is sent while Keccak rounds are running
   covergroup app_cg(string name) with function sample(bit single_beat,
-                                                      bit [keymgr_pkg::KmacDataIfWidth/8-1:0] strb,
+                                                      bit [keymgr_dpe_pkg::KmacDataIfWidth/8-1:0] strb,
                                                       bit err,
                                                       bit is_done,
                                                       bit in_keccak);
@@ -181,7 +181,7 @@ class app_cg_wrap;
   endfunction
 
   function void app_sample(bit single_beat,
-                           bit [keymgr_pkg::KmacDataIfWidth/8-1:0] strb,
+                           bit [keymgr_dpe_pkg::KmacDataIfWidth/8-1:0] strb,
                            bit err,
                            bit is_done,
                            bit in_keccak);
@@ -192,14 +192,6 @@ class app_cg_wrap;
     app_cfg_reg_cg.sample(sw_hash_mode);
   endfunction
 endclass
-
-
-// Covers whether we see an EDN response while keccak rounds are active/inactive.
-// Create this covergroup outside of the class as its instantiation relies on a field in the
-// env.cfg.
-covergroup edn_cg with function sample(bit in_keccak_rounds);
-  edn_in_keccak: coverpoint in_keccak_rounds;
-endgroup
 
 
 class kmac_env_cov extends cip_base_env_cov #(.CFG_T(kmac_env_cfg));
@@ -213,9 +205,7 @@ class kmac_env_cov extends cip_base_env_cov #(.CFG_T(kmac_env_cfg));
   config_masked_cg config_masked_cg;
   config_unmasked_cg config_unmasked_cg;
 
-  edn_cg edn_cg;
-
-  app_cg_wrap app_cg_wrappers[kmac_pkg::NumAppIntf];
+  app_cg_wrap app_cg_wrappers[kmac_env_pkg::NUM_APP_INTF];
 
   covergroup msg_len_cg with function sample(int len);
     msg_len: coverpoint len {
@@ -310,6 +300,10 @@ class kmac_env_cov extends cip_base_env_cov #(.CFG_T(kmac_env_cfg));
                                            sha3_pkg::keccak_strength_e kstrength);
     kmac_err_code: coverpoint kmac_err {
       ignore_bins ignore = {kmac_pkg::ErrNone};
+      // Covered by direct sequence, if scb enabled for those seq, can remove it from this list.
+      illegal_bins il = {kmac_pkg::ErrWaitTimerExpired,
+                         kmac_pkg::ErrIncorrectEntropyMode,
+                         kmac_pkg::ErrSwHashingWithoutEntropyReady};
     }
 
     cmd: coverpoint kcmd {
@@ -436,7 +430,6 @@ class kmac_env_cov extends cip_base_env_cov #(.CFG_T(kmac_env_cfg));
     // See cip_base_env_cov for details
     if (cfg.enable_masking) begin
       config_masked_cg = new();
-      edn_cg = new();
     end else begin
       config_unmasked_cg = new();
     end

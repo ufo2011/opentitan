@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,8 @@
 
 /**
  * @file
- * @brief <a href="/hw/ip/rv_timer/doc/">RV Timer</a> Device Interface Functions
+ * @brief <a href="/book/hw/ip/rv_timer/">RV Timer</a> Device Interface
+ * Functions
  */
 
 #include <stdint.h>
@@ -35,7 +36,7 @@ typedef struct dif_rv_timer_tick_params {
    * respectively.
    *
    * For example, if the clock frequency is 50 MHz, and the desired tick
-   * period is is 1 microsecond, i.e, a tick frequency of 1 MHz, then the
+   * period is 1 microsecond, i.e, a tick frequency of 1 MHz, then the
    * prescaler should be:
    *
    * (50 * 10^6) * (1 * 10^-6) - 1 = 49

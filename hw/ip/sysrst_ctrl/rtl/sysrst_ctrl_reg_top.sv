@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -18,10 +18,7 @@ module sysrst_ctrl_reg_top (
   input  sysrst_ctrl_reg_pkg::sysrst_ctrl_hw2reg_t hw2reg, // Read
 
   // Integrity check errors
-  output logic intg_err_o,
-
-  // Config
-  input devmode_i // If 1, explicit error return for unmapped register access
+  output logic intg_err_o
 );
 
   import sysrst_ctrl_reg_pkg::* ;
@@ -121,21 +118,21 @@ module sysrst_ctrl_reg_top (
   // cdc oversampling signals
 
   assign reg_rdata = reg_rdata_next ;
-  assign reg_error = (devmode_i & addrmiss) | wr_err | intg_err;
+  assign reg_error = addrmiss | wr_err | intg_err;
 
   // Define SW related signals
   // Format: <reg>_<field>_{wd|we|qs}
   //        or <reg>_{wd|we|qs} if field == 1 or 0
-  logic intr_state_we;
   logic intr_state_qs;
-  logic intr_state_wd;
   logic intr_enable_we;
   logic intr_enable_qs;
   logic intr_enable_wd;
   logic intr_test_we;
   logic intr_test_wd;
   logic alert_test_we;
-  logic alert_test_wd;
+  logic alert_test_fatal_fault_wd;
+  logic alert_test_regwen_qs;
+  logic alert_test_regwen_wd;
   logic regwen_we;
   logic regwen_qs;
   logic regwen_wd;
@@ -155,8 +152,8 @@ module sysrst_ctrl_reg_top (
   logic [0:0] ulp_ctl_qs;
   logic ulp_ctl_busy;
   logic ulp_status_we;
-  logic [0:0] ulp_status_qs;
-  logic ulp_status_busy;
+  logic ulp_status_qs;
+  logic ulp_status_wd;
   logic wkup_status_we;
   logic [0:0] wkup_status_qs;
   logic wkup_status_busy;
@@ -253,11 +250,43 @@ module sysrst_ctrl_reg_top (
   logic [3:0] com_out_ctl_3_qs;
   logic com_out_ctl_3_busy;
   logic combo_intr_status_we;
-  logic [3:0] combo_intr_status_qs;
-  logic combo_intr_status_busy;
+  logic combo_intr_status_combo0_h2l_qs;
+  logic combo_intr_status_combo0_h2l_wd;
+  logic combo_intr_status_combo1_h2l_qs;
+  logic combo_intr_status_combo1_h2l_wd;
+  logic combo_intr_status_combo2_h2l_qs;
+  logic combo_intr_status_combo2_h2l_wd;
+  logic combo_intr_status_combo3_h2l_qs;
+  logic combo_intr_status_combo3_h2l_wd;
   logic key_intr_status_we;
-  logic [13:0] key_intr_status_qs;
-  logic key_intr_status_busy;
+  logic key_intr_status_pwrb_h2l_qs;
+  logic key_intr_status_pwrb_h2l_wd;
+  logic key_intr_status_key0_in_h2l_qs;
+  logic key_intr_status_key0_in_h2l_wd;
+  logic key_intr_status_key1_in_h2l_qs;
+  logic key_intr_status_key1_in_h2l_wd;
+  logic key_intr_status_key2_in_h2l_qs;
+  logic key_intr_status_key2_in_h2l_wd;
+  logic key_intr_status_ac_present_h2l_qs;
+  logic key_intr_status_ac_present_h2l_wd;
+  logic key_intr_status_ec_rst_l_h2l_qs;
+  logic key_intr_status_ec_rst_l_h2l_wd;
+  logic key_intr_status_flash_wp_l_h2l_qs;
+  logic key_intr_status_flash_wp_l_h2l_wd;
+  logic key_intr_status_pwrb_l2h_qs;
+  logic key_intr_status_pwrb_l2h_wd;
+  logic key_intr_status_key0_in_l2h_qs;
+  logic key_intr_status_key0_in_l2h_wd;
+  logic key_intr_status_key1_in_l2h_qs;
+  logic key_intr_status_key1_in_l2h_wd;
+  logic key_intr_status_key2_in_l2h_qs;
+  logic key_intr_status_key2_in_l2h_wd;
+  logic key_intr_status_ac_present_l2h_qs;
+  logic key_intr_status_ac_present_l2h_wd;
+  logic key_intr_status_ec_rst_l_l2h_qs;
+  logic key_intr_status_ec_rst_l_l2h_wd;
+  logic key_intr_status_flash_wp_l_l2h_qs;
+  logic key_intr_status_flash_wp_l_l2h_wd;
   // Define register CDC handling.
   // CDC handling is done on a per-reg instead of per-field boundary.
 
@@ -454,49 +483,6 @@ module sysrst_ctrl_reg_top (
   );
   assign unused_aon_ulp_ctl_wdata =
       ^aon_ulp_ctl_wdata;
-
-  logic  aon_ulp_status_ds_int;
-  logic  aon_ulp_status_qs_int;
-  logic [0:0] aon_ulp_status_ds;
-  logic aon_ulp_status_qe;
-  logic [0:0] aon_ulp_status_qs;
-  logic [0:0] aon_ulp_status_wdata;
-  logic aon_ulp_status_we;
-  logic unused_aon_ulp_status_wdata;
-
-  always_comb begin
-    aon_ulp_status_qs = 1'h0;
-    aon_ulp_status_ds = 1'h0;
-    aon_ulp_status_ds = aon_ulp_status_ds_int;
-    aon_ulp_status_qs = aon_ulp_status_qs_int;
-  end
-
-  prim_reg_cdc #(
-    .DataWidth(1),
-    .ResetVal(1'h0),
-    .BitMask(1'h1),
-    .DstWrReq(1)
-  ) u_ulp_status_cdc (
-    .clk_src_i    (clk_i),
-    .rst_src_ni   (rst_ni),
-    .clk_dst_i    (clk_aon_i),
-    .rst_dst_ni   (rst_aon_ni),
-    .src_regwen_i ('0),
-    .src_we_i     (ulp_status_we),
-    .src_re_i     ('0),
-    .src_wd_i     (reg_wdata[0:0]),
-    .src_busy_o   (ulp_status_busy),
-    .src_qs_o     (ulp_status_qs), // for software read back
-    .dst_update_i (aon_ulp_status_qe),
-    .dst_ds_i     (aon_ulp_status_ds),
-    .dst_qs_i     (aon_ulp_status_qs),
-    .dst_we_o     (aon_ulp_status_we),
-    .dst_re_o     (),
-    .dst_regwen_o (),
-    .dst_wd_o     (aon_ulp_status_wdata)
-  );
-  assign unused_aon_ulp_status_wdata =
-      ^aon_ulp_status_wdata;
 
   logic  aon_wkup_status_ds_int;
   logic  aon_wkup_status_qs_int;
@@ -1837,169 +1823,21 @@ module sysrst_ctrl_reg_top (
   assign unused_aon_com_out_ctl_3_wdata =
       ^aon_com_out_ctl_3_wdata;
 
-  logic  aon_combo_intr_status_combo0_h2l_ds_int;
-  logic  aon_combo_intr_status_combo0_h2l_qs_int;
-  logic  aon_combo_intr_status_combo1_h2l_ds_int;
-  logic  aon_combo_intr_status_combo1_h2l_qs_int;
-  logic  aon_combo_intr_status_combo2_h2l_ds_int;
-  logic  aon_combo_intr_status_combo2_h2l_qs_int;
-  logic  aon_combo_intr_status_combo3_h2l_ds_int;
-  logic  aon_combo_intr_status_combo3_h2l_qs_int;
-  logic [3:0] aon_combo_intr_status_ds;
-  logic aon_combo_intr_status_qe;
-  logic [3:0] aon_combo_intr_status_qs;
-  logic [3:0] aon_combo_intr_status_wdata;
-  logic aon_combo_intr_status_we;
-  logic unused_aon_combo_intr_status_wdata;
-
-  always_comb begin
-    aon_combo_intr_status_qs = 4'h0;
-    aon_combo_intr_status_ds = 4'h0;
-    aon_combo_intr_status_ds[0] = aon_combo_intr_status_combo0_h2l_ds_int;
-    aon_combo_intr_status_qs[0] = aon_combo_intr_status_combo0_h2l_qs_int;
-    aon_combo_intr_status_ds[1] = aon_combo_intr_status_combo1_h2l_ds_int;
-    aon_combo_intr_status_qs[1] = aon_combo_intr_status_combo1_h2l_qs_int;
-    aon_combo_intr_status_ds[2] = aon_combo_intr_status_combo2_h2l_ds_int;
-    aon_combo_intr_status_qs[2] = aon_combo_intr_status_combo2_h2l_qs_int;
-    aon_combo_intr_status_ds[3] = aon_combo_intr_status_combo3_h2l_ds_int;
-    aon_combo_intr_status_qs[3] = aon_combo_intr_status_combo3_h2l_qs_int;
-  end
-
-  prim_reg_cdc #(
-    .DataWidth(4),
-    .ResetVal(4'h0),
-    .BitMask(4'hf),
-    .DstWrReq(1)
-  ) u_combo_intr_status_cdc (
-    .clk_src_i    (clk_i),
-    .rst_src_ni   (rst_ni),
-    .clk_dst_i    (clk_aon_i),
-    .rst_dst_ni   (rst_aon_ni),
-    .src_regwen_i ('0),
-    .src_we_i     (combo_intr_status_we),
-    .src_re_i     ('0),
-    .src_wd_i     (reg_wdata[3:0]),
-    .src_busy_o   (combo_intr_status_busy),
-    .src_qs_o     (combo_intr_status_qs), // for software read back
-    .dst_update_i (aon_combo_intr_status_qe),
-    .dst_ds_i     (aon_combo_intr_status_ds),
-    .dst_qs_i     (aon_combo_intr_status_qs),
-    .dst_we_o     (aon_combo_intr_status_we),
-    .dst_re_o     (),
-    .dst_regwen_o (),
-    .dst_wd_o     (aon_combo_intr_status_wdata)
-  );
-  assign unused_aon_combo_intr_status_wdata =
-      ^aon_combo_intr_status_wdata;
-
-  logic  aon_key_intr_status_pwrb_h2l_ds_int;
-  logic  aon_key_intr_status_pwrb_h2l_qs_int;
-  logic  aon_key_intr_status_key0_in_h2l_ds_int;
-  logic  aon_key_intr_status_key0_in_h2l_qs_int;
-  logic  aon_key_intr_status_key1_in_h2l_ds_int;
-  logic  aon_key_intr_status_key1_in_h2l_qs_int;
-  logic  aon_key_intr_status_key2_in_h2l_ds_int;
-  logic  aon_key_intr_status_key2_in_h2l_qs_int;
-  logic  aon_key_intr_status_ac_present_h2l_ds_int;
-  logic  aon_key_intr_status_ac_present_h2l_qs_int;
-  logic  aon_key_intr_status_ec_rst_l_h2l_ds_int;
-  logic  aon_key_intr_status_ec_rst_l_h2l_qs_int;
-  logic  aon_key_intr_status_flash_wp_l_h2l_ds_int;
-  logic  aon_key_intr_status_flash_wp_l_h2l_qs_int;
-  logic  aon_key_intr_status_pwrb_l2h_ds_int;
-  logic  aon_key_intr_status_pwrb_l2h_qs_int;
-  logic  aon_key_intr_status_key0_in_l2h_ds_int;
-  logic  aon_key_intr_status_key0_in_l2h_qs_int;
-  logic  aon_key_intr_status_key1_in_l2h_ds_int;
-  logic  aon_key_intr_status_key1_in_l2h_qs_int;
-  logic  aon_key_intr_status_key2_in_l2h_ds_int;
-  logic  aon_key_intr_status_key2_in_l2h_qs_int;
-  logic  aon_key_intr_status_ac_present_l2h_ds_int;
-  logic  aon_key_intr_status_ac_present_l2h_qs_int;
-  logic  aon_key_intr_status_ec_rst_l_l2h_ds_int;
-  logic  aon_key_intr_status_ec_rst_l_l2h_qs_int;
-  logic  aon_key_intr_status_flash_wp_l_l2h_ds_int;
-  logic  aon_key_intr_status_flash_wp_l_l2h_qs_int;
-  logic [13:0] aon_key_intr_status_ds;
-  logic aon_key_intr_status_qe;
-  logic [13:0] aon_key_intr_status_qs;
-  logic [13:0] aon_key_intr_status_wdata;
-  logic aon_key_intr_status_we;
-  logic unused_aon_key_intr_status_wdata;
-
-  always_comb begin
-    aon_key_intr_status_qs = 14'h0;
-    aon_key_intr_status_ds = 14'h0;
-    aon_key_intr_status_ds[0] = aon_key_intr_status_pwrb_h2l_ds_int;
-    aon_key_intr_status_qs[0] = aon_key_intr_status_pwrb_h2l_qs_int;
-    aon_key_intr_status_ds[1] = aon_key_intr_status_key0_in_h2l_ds_int;
-    aon_key_intr_status_qs[1] = aon_key_intr_status_key0_in_h2l_qs_int;
-    aon_key_intr_status_ds[2] = aon_key_intr_status_key1_in_h2l_ds_int;
-    aon_key_intr_status_qs[2] = aon_key_intr_status_key1_in_h2l_qs_int;
-    aon_key_intr_status_ds[3] = aon_key_intr_status_key2_in_h2l_ds_int;
-    aon_key_intr_status_qs[3] = aon_key_intr_status_key2_in_h2l_qs_int;
-    aon_key_intr_status_ds[4] = aon_key_intr_status_ac_present_h2l_ds_int;
-    aon_key_intr_status_qs[4] = aon_key_intr_status_ac_present_h2l_qs_int;
-    aon_key_intr_status_ds[5] = aon_key_intr_status_ec_rst_l_h2l_ds_int;
-    aon_key_intr_status_qs[5] = aon_key_intr_status_ec_rst_l_h2l_qs_int;
-    aon_key_intr_status_ds[6] = aon_key_intr_status_flash_wp_l_h2l_ds_int;
-    aon_key_intr_status_qs[6] = aon_key_intr_status_flash_wp_l_h2l_qs_int;
-    aon_key_intr_status_ds[7] = aon_key_intr_status_pwrb_l2h_ds_int;
-    aon_key_intr_status_qs[7] = aon_key_intr_status_pwrb_l2h_qs_int;
-    aon_key_intr_status_ds[8] = aon_key_intr_status_key0_in_l2h_ds_int;
-    aon_key_intr_status_qs[8] = aon_key_intr_status_key0_in_l2h_qs_int;
-    aon_key_intr_status_ds[9] = aon_key_intr_status_key1_in_l2h_ds_int;
-    aon_key_intr_status_qs[9] = aon_key_intr_status_key1_in_l2h_qs_int;
-    aon_key_intr_status_ds[10] = aon_key_intr_status_key2_in_l2h_ds_int;
-    aon_key_intr_status_qs[10] = aon_key_intr_status_key2_in_l2h_qs_int;
-    aon_key_intr_status_ds[11] = aon_key_intr_status_ac_present_l2h_ds_int;
-    aon_key_intr_status_qs[11] = aon_key_intr_status_ac_present_l2h_qs_int;
-    aon_key_intr_status_ds[12] = aon_key_intr_status_ec_rst_l_l2h_ds_int;
-    aon_key_intr_status_qs[12] = aon_key_intr_status_ec_rst_l_l2h_qs_int;
-    aon_key_intr_status_ds[13] = aon_key_intr_status_flash_wp_l_l2h_ds_int;
-    aon_key_intr_status_qs[13] = aon_key_intr_status_flash_wp_l_l2h_qs_int;
-  end
-
-  prim_reg_cdc #(
-    .DataWidth(14),
-    .ResetVal(14'h0),
-    .BitMask(14'h3fff),
-    .DstWrReq(1)
-  ) u_key_intr_status_cdc (
-    .clk_src_i    (clk_i),
-    .rst_src_ni   (rst_ni),
-    .clk_dst_i    (clk_aon_i),
-    .rst_dst_ni   (rst_aon_ni),
-    .src_regwen_i ('0),
-    .src_we_i     (key_intr_status_we),
-    .src_re_i     ('0),
-    .src_wd_i     (reg_wdata[13:0]),
-    .src_busy_o   (key_intr_status_busy),
-    .src_qs_o     (key_intr_status_qs), // for software read back
-    .dst_update_i (aon_key_intr_status_qe),
-    .dst_ds_i     (aon_key_intr_status_ds),
-    .dst_qs_i     (aon_key_intr_status_qs),
-    .dst_we_o     (aon_key_intr_status_we),
-    .dst_re_o     (),
-    .dst_regwen_o (),
-    .dst_wd_o     (aon_key_intr_status_wdata)
-  );
-  assign unused_aon_key_intr_status_wdata =
-      ^aon_key_intr_status_wdata;
-
   // Register instances
   // R[intr_state]: V(False)
   prim_subreg #(
     .DW      (1),
-    .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .SwAccess(prim_subreg_pkg::SwAccessRO),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (intr_state_we),
-    .wd     (intr_state_wd),
+    .we     (1'b0),
+    .wd     ('0),
 
     // from internal hardware
     .de     (hw2reg.intr_state.de),
@@ -2019,10 +1857,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -2064,14 +1904,18 @@ module sysrst_ctrl_reg_top (
 
   // R[alert_test]: V(True)
   logic alert_test_qe;
-  logic [0:0] alert_test_flds_we;
+  logic [1:0] alert_test_flds_we;
   assign alert_test_qe = &alert_test_flds_we;
+  // Create REGWEN-gated WE signal
+  logic alert_test_gated_we;
+  assign alert_test_gated_we = alert_test_we && alert_test_regwen_qs;
+  //   F[fatal_fault]: 0:0
   prim_subreg_ext #(
     .DW    (1)
-  ) u_alert_test (
+  ) u_alert_test_fatal_fault (
     .re     (1'b0),
-    .we     (alert_test_we),
-    .wd     (alert_test_wd),
+    .we     (alert_test_gated_we),
+    .wd     (alert_test_fatal_fault_wd),
     .d      ('0),
     .qre    (),
     .qe     (alert_test_flds_we[0]),
@@ -2081,15 +1925,45 @@ module sysrst_ctrl_reg_top (
   );
   assign reg2hw.alert_test.qe = alert_test_qe;
 
+  //   F[regwen]: 31:31
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW0C),
+    .RESVAL  (1'h1),
+    .Mubi    (1'b0)
+  ) u_alert_test_regwen (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (alert_test_we),
+    .wd     (alert_test_regwen_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (alert_test_flds_we[1]),
+    .q      (),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (alert_test_regwen_qs)
+  );
+
 
   // R[regwen]: V(False)
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW0C),
-    .RESVAL  (1'h1)
+    .RESVAL  (1'h1),
+    .Mubi    (1'b0)
   ) u_regwen (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (regwen_we),
@@ -2116,10 +1990,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (16),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h7d0)
+    .RESVAL  (16'h7d0),
+    .Mubi    (1'b0)
   ) u_ec_rst_ctl (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_ec_rst_ctl_gated_we),
@@ -2147,10 +2023,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (16),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h1f40)
+    .RESVAL  (16'h1f40),
+    .Mubi    (1'b0)
   ) u_ulp_ac_debounce_ctl (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_ulp_ac_debounce_ctl_gated_we),
@@ -2178,10 +2056,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (16),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h1f40)
+    .RESVAL  (16'h1f40),
+    .Mubi    (1'b0)
   ) u_ulp_lid_debounce_ctl (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_ulp_lid_debounce_ctl_gated_we),
@@ -2209,10 +2089,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (16),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h1f40)
+    .RESVAL  (16'h1f40),
+    .Mubi    (1'b0)
   ) u_ulp_pwrb_debounce_ctl (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_ulp_pwrb_debounce_ctl_gated_we),
@@ -2236,10 +2118,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ulp_ctl (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_ulp_ctl_we),
@@ -2260,31 +2144,31 @@ module sysrst_ctrl_reg_top (
 
 
   // R[ulp_status]: V(False)
-  logic [0:0] ulp_status_flds_we;
-  assign aon_ulp_status_qe = |ulp_status_flds_we;
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ulp_status (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_ulp_status_we),
-    .wd     (aon_ulp_status_wdata[0]),
+    .we     (ulp_status_we),
+    .wd     (ulp_status_wd),
 
     // from internal hardware
     .de     (hw2reg.ulp_status.de),
     .d      (hw2reg.ulp_status.d),
 
     // to internal hardware
-    .qe     (ulp_status_flds_we[0]),
-    .q      (),
-    .ds     (aon_ulp_status_ds_int),
+    .qe     (),
+    .q      (reg2hw.ulp_status.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_ulp_status_qs_int)
+    .qs     (ulp_status_qs)
   );
 
 
@@ -2294,10 +2178,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_wkup_status (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_wkup_status_we),
@@ -2325,10 +2211,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_key0_in (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2351,10 +2239,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_key0_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2377,10 +2267,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_key1_in (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2403,10 +2295,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_key1_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2429,10 +2323,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_key2_in (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2455,10 +2351,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_key2_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2481,10 +2379,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_pwrb_in (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2507,10 +2407,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_pwrb_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2533,10 +2435,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_ac_present (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2559,10 +2463,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_bat_disable (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2585,10 +2491,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_lid_open (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2611,10 +2519,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_invert_ctl_z3_wakeup (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_invert_ctl_gated_we),
@@ -2642,10 +2552,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_bat_disable_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2668,10 +2580,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h1)
+    .RESVAL  (1'h1),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_ec_rst_l_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2694,10 +2608,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_pwrb_out_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2720,10 +2636,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_key0_out_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2746,10 +2664,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_key1_out_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2772,10 +2692,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_key2_out_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2798,10 +2720,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_z3_wakeup_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2824,10 +2748,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h1)
+    .RESVAL  (1'h1),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_flash_wp_l_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2850,10 +2776,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_bat_disable_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2876,10 +2804,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_ec_rst_l_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2902,10 +2832,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_pwrb_out_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2928,10 +2860,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_key0_out_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2954,10 +2888,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_key1_out_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -2980,10 +2916,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_key2_out_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -3006,10 +2944,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_z3_wakeup_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -3032,10 +2972,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_allowed_ctl_flash_wp_l_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_allowed_ctl_gated_we),
@@ -3060,10 +3002,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_ctl_bat_disable (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_ctl_we),
@@ -3086,10 +3030,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h1)
+    .RESVAL  (1'h1),
+    .Mubi    (1'b0)
   ) u_pin_out_ctl_ec_rst_l (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_ctl_we),
@@ -3112,10 +3058,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_ctl_pwrb_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_ctl_we),
@@ -3138,10 +3086,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_ctl_key0_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_ctl_we),
@@ -3164,10 +3114,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_ctl_key1_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_ctl_we),
@@ -3190,10 +3142,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_ctl_key2_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_ctl_we),
@@ -3216,10 +3170,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_ctl_z3_wakeup (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_ctl_we),
@@ -3242,10 +3198,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h1)
+    .RESVAL  (1'h1),
+    .Mubi    (1'b0)
   ) u_pin_out_ctl_flash_wp_l (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_ctl_we),
@@ -3270,10 +3228,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_value_bat_disable (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_value_we),
@@ -3296,10 +3256,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_value_ec_rst_l (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_value_we),
@@ -3322,10 +3284,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_value_pwrb_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_value_we),
@@ -3348,10 +3312,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_value_key0_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_value_we),
@@ -3374,10 +3340,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_value_key1_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_value_we),
@@ -3400,10 +3368,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_value_key2_out (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_value_we),
@@ -3426,10 +3396,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_value_z3_wakeup (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_value_we),
@@ -3452,10 +3424,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_out_value_flash_wp_l (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_pin_out_value_we),
@@ -3480,10 +3454,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_in_value_pwrb_in (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3506,10 +3482,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_in_value_key0_in (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3532,10 +3510,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_in_value_key1_in (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3558,10 +3538,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_in_value_key2_in (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3584,10 +3566,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_in_value_lid_open (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3610,10 +3594,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_in_value_ac_present (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3636,10 +3622,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_in_value_ec_rst_l (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3662,10 +3650,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_pin_in_value_flash_wp_l (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3693,10 +3683,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_pwrb_in_h2l (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -3719,10 +3711,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_key0_in_h2l (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -3745,10 +3739,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_key1_in_h2l (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -3771,10 +3767,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_key2_in_h2l (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -3797,10 +3795,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_ac_present_h2l (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -3823,10 +3823,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_ec_rst_l_h2l (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -3849,10 +3851,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_flash_wp_l_h2l (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -3875,10 +3879,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_pwrb_in_l2h (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -3901,10 +3907,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_key0_in_l2h (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -3927,10 +3935,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_key1_in_l2h (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -3953,10 +3963,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_key2_in_l2h (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -3979,10 +3991,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_ac_present_l2h (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -4005,10 +4019,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_ec_rst_l_l2h (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -4031,10 +4047,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_ctl_flash_wp_l_l2h (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_ctl_gated_we),
@@ -4062,10 +4080,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (16),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h7d0)
+    .RESVAL  (16'h7d0),
+    .Mubi    (1'b0)
   ) u_key_intr_debounce_ctl (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_key_intr_debounce_ctl_gated_we),
@@ -4094,10 +4114,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (16),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h7d0)
+    .RESVAL  (16'h7d0),
+    .Mubi    (1'b0)
   ) u_auto_block_debounce_ctl_debounce_timer (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_auto_block_debounce_ctl_gated_we),
@@ -4120,10 +4142,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_auto_block_debounce_ctl_auto_block_enable (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_auto_block_debounce_ctl_gated_we),
@@ -4152,10 +4176,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_auto_block_out_ctl_key0_out_sel (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_auto_block_out_ctl_gated_we),
@@ -4178,10 +4204,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_auto_block_out_ctl_key1_out_sel (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_auto_block_out_ctl_gated_we),
@@ -4204,10 +4232,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_auto_block_out_ctl_key2_out_sel (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_auto_block_out_ctl_gated_we),
@@ -4230,10 +4260,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_auto_block_out_ctl_key0_out_value (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_auto_block_out_ctl_gated_we),
@@ -4256,10 +4288,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_auto_block_out_ctl_key1_out_value (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_auto_block_out_ctl_gated_we),
@@ -4282,10 +4316,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_auto_block_out_ctl_key2_out_value (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_auto_block_out_ctl_gated_we),
@@ -4314,10 +4350,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_0_key0_in_sel_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_0_gated_we),
@@ -4340,10 +4378,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_0_key1_in_sel_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_0_gated_we),
@@ -4366,10 +4406,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_0_key2_in_sel_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_0_gated_we),
@@ -4392,10 +4434,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_0_pwrb_in_sel_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_0_gated_we),
@@ -4418,10 +4462,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_0_ac_present_sel_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_0_gated_we),
@@ -4450,10 +4496,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_1_key0_in_sel_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_1_gated_we),
@@ -4476,10 +4524,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_1_key1_in_sel_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_1_gated_we),
@@ -4502,10 +4552,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_1_key2_in_sel_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_1_gated_we),
@@ -4528,10 +4580,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_1_pwrb_in_sel_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_1_gated_we),
@@ -4554,10 +4608,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_1_ac_present_sel_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_1_gated_we),
@@ -4586,10 +4642,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_2_key0_in_sel_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_2_gated_we),
@@ -4612,10 +4670,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_2_key1_in_sel_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_2_gated_we),
@@ -4638,10 +4698,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_2_key2_in_sel_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_2_gated_we),
@@ -4664,10 +4726,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_2_pwrb_in_sel_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_2_gated_we),
@@ -4690,10 +4754,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_2_ac_present_sel_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_2_gated_we),
@@ -4722,10 +4788,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_3_key0_in_sel_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_3_gated_we),
@@ -4748,10 +4816,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_3_key1_in_sel_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_3_gated_we),
@@ -4774,10 +4844,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_3_key2_in_sel_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_3_gated_we),
@@ -4800,10 +4872,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_3_pwrb_in_sel_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_3_gated_we),
@@ -4826,10 +4900,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_sel_ctl_3_ac_present_sel_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_sel_ctl_3_gated_we),
@@ -4857,10 +4933,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_det_ctl_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_det_ctl_0_gated_we),
@@ -4888,10 +4966,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_det_ctl_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_det_ctl_1_gated_we),
@@ -4919,10 +4999,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_det_ctl_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_det_ctl_2_gated_we),
@@ -4950,10 +5032,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_com_pre_det_ctl_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_pre_det_ctl_3_gated_we),
@@ -4982,10 +5066,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_0_key0_in_sel_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_0_gated_we),
@@ -5008,10 +5094,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_0_key1_in_sel_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_0_gated_we),
@@ -5034,10 +5122,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_0_key2_in_sel_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_0_gated_we),
@@ -5060,10 +5150,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_0_pwrb_in_sel_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_0_gated_we),
@@ -5086,10 +5178,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_0_ac_present_sel_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_0_gated_we),
@@ -5118,10 +5212,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_1_key0_in_sel_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_1_gated_we),
@@ -5144,10 +5240,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_1_key1_in_sel_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_1_gated_we),
@@ -5170,10 +5268,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_1_key2_in_sel_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_1_gated_we),
@@ -5196,10 +5296,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_1_pwrb_in_sel_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_1_gated_we),
@@ -5222,10 +5324,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_1_ac_present_sel_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_1_gated_we),
@@ -5254,10 +5358,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_2_key0_in_sel_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_2_gated_we),
@@ -5280,10 +5386,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_2_key1_in_sel_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_2_gated_we),
@@ -5306,10 +5414,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_2_key2_in_sel_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_2_gated_we),
@@ -5332,10 +5442,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_2_pwrb_in_sel_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_2_gated_we),
@@ -5358,10 +5470,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_2_ac_present_sel_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_2_gated_we),
@@ -5390,10 +5504,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_3_key0_in_sel_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_3_gated_we),
@@ -5416,10 +5532,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_3_key1_in_sel_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_3_gated_we),
@@ -5442,10 +5560,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_3_key2_in_sel_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_3_gated_we),
@@ -5468,10 +5588,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_3_pwrb_in_sel_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_3_gated_we),
@@ -5494,10 +5616,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_sel_ctl_3_ac_present_sel_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_sel_ctl_3_gated_we),
@@ -5525,10 +5649,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_com_det_ctl_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_det_ctl_0_gated_we),
@@ -5556,10 +5682,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_com_det_ctl_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_det_ctl_1_gated_we),
@@ -5587,10 +5715,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_com_det_ctl_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_det_ctl_2_gated_we),
@@ -5618,10 +5748,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_com_det_ctl_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_det_ctl_3_gated_we),
@@ -5650,10 +5782,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_0_bat_disable_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_0_gated_we),
@@ -5676,10 +5810,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_0_interrupt_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_0_gated_we),
@@ -5702,10 +5838,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_0_ec_rst_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_0_gated_we),
@@ -5728,10 +5866,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_0_rst_req_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_0_gated_we),
@@ -5760,10 +5900,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_1_bat_disable_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_1_gated_we),
@@ -5786,10 +5928,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_1_interrupt_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_1_gated_we),
@@ -5812,10 +5956,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_1_ec_rst_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_1_gated_we),
@@ -5838,10 +5984,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_1_rst_req_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_1_gated_we),
@@ -5870,10 +6018,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_2_bat_disable_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_2_gated_we),
@@ -5896,10 +6046,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_2_interrupt_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_2_gated_we),
@@ -5922,10 +6074,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_2_ec_rst_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_2_gated_we),
@@ -5948,10 +6102,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_2_rst_req_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_2_gated_we),
@@ -5980,10 +6136,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_3_bat_disable_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_3_gated_we),
@@ -6006,10 +6164,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_3_interrupt_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_3_gated_we),
@@ -6032,10 +6192,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_3_ec_rst_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_3_gated_we),
@@ -6058,10 +6220,12 @@ module sysrst_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_com_out_ctl_3_rst_req_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_com_out_ctl_3_gated_we),
@@ -6082,485 +6246,516 @@ module sysrst_ctrl_reg_top (
 
 
   // R[combo_intr_status]: V(False)
-  logic [3:0] combo_intr_status_flds_we;
-  assign aon_combo_intr_status_qe = |combo_intr_status_flds_we;
   //   F[combo0_h2l]: 0:0
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_combo_intr_status_combo0_h2l (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_combo_intr_status_we),
-    .wd     (aon_combo_intr_status_wdata[0]),
+    .we     (combo_intr_status_we),
+    .wd     (combo_intr_status_combo0_h2l_wd),
 
     // from internal hardware
     .de     (hw2reg.combo_intr_status.combo0_h2l.de),
     .d      (hw2reg.combo_intr_status.combo0_h2l.d),
 
     // to internal hardware
-    .qe     (combo_intr_status_flds_we[0]),
-    .q      (),
-    .ds     (aon_combo_intr_status_combo0_h2l_ds_int),
+    .qe     (),
+    .q      (reg2hw.combo_intr_status.combo0_h2l.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_combo_intr_status_combo0_h2l_qs_int)
+    .qs     (combo_intr_status_combo0_h2l_qs)
   );
 
   //   F[combo1_h2l]: 1:1
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_combo_intr_status_combo1_h2l (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_combo_intr_status_we),
-    .wd     (aon_combo_intr_status_wdata[1]),
+    .we     (combo_intr_status_we),
+    .wd     (combo_intr_status_combo1_h2l_wd),
 
     // from internal hardware
     .de     (hw2reg.combo_intr_status.combo1_h2l.de),
     .d      (hw2reg.combo_intr_status.combo1_h2l.d),
 
     // to internal hardware
-    .qe     (combo_intr_status_flds_we[1]),
-    .q      (),
-    .ds     (aon_combo_intr_status_combo1_h2l_ds_int),
+    .qe     (),
+    .q      (reg2hw.combo_intr_status.combo1_h2l.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_combo_intr_status_combo1_h2l_qs_int)
+    .qs     (combo_intr_status_combo1_h2l_qs)
   );
 
   //   F[combo2_h2l]: 2:2
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_combo_intr_status_combo2_h2l (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_combo_intr_status_we),
-    .wd     (aon_combo_intr_status_wdata[2]),
+    .we     (combo_intr_status_we),
+    .wd     (combo_intr_status_combo2_h2l_wd),
 
     // from internal hardware
     .de     (hw2reg.combo_intr_status.combo2_h2l.de),
     .d      (hw2reg.combo_intr_status.combo2_h2l.d),
 
     // to internal hardware
-    .qe     (combo_intr_status_flds_we[2]),
-    .q      (),
-    .ds     (aon_combo_intr_status_combo2_h2l_ds_int),
+    .qe     (),
+    .q      (reg2hw.combo_intr_status.combo2_h2l.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_combo_intr_status_combo2_h2l_qs_int)
+    .qs     (combo_intr_status_combo2_h2l_qs)
   );
 
   //   F[combo3_h2l]: 3:3
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_combo_intr_status_combo3_h2l (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_combo_intr_status_we),
-    .wd     (aon_combo_intr_status_wdata[3]),
+    .we     (combo_intr_status_we),
+    .wd     (combo_intr_status_combo3_h2l_wd),
 
     // from internal hardware
     .de     (hw2reg.combo_intr_status.combo3_h2l.de),
     .d      (hw2reg.combo_intr_status.combo3_h2l.d),
 
     // to internal hardware
-    .qe     (combo_intr_status_flds_we[3]),
-    .q      (),
-    .ds     (aon_combo_intr_status_combo3_h2l_ds_int),
+    .qe     (),
+    .q      (reg2hw.combo_intr_status.combo3_h2l.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_combo_intr_status_combo3_h2l_qs_int)
+    .qs     (combo_intr_status_combo3_h2l_qs)
   );
 
 
   // R[key_intr_status]: V(False)
-  logic [13:0] key_intr_status_flds_we;
-  assign aon_key_intr_status_qe = |key_intr_status_flds_we;
   //   F[pwrb_h2l]: 0:0
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_pwrb_h2l (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[0]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_pwrb_h2l_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.pwrb_h2l.de),
     .d      (hw2reg.key_intr_status.pwrb_h2l.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[0]),
-    .q      (),
-    .ds     (aon_key_intr_status_pwrb_h2l_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.pwrb_h2l.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_pwrb_h2l_qs_int)
+    .qs     (key_intr_status_pwrb_h2l_qs)
   );
 
   //   F[key0_in_h2l]: 1:1
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_key0_in_h2l (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[1]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_key0_in_h2l_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.key0_in_h2l.de),
     .d      (hw2reg.key_intr_status.key0_in_h2l.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[1]),
-    .q      (),
-    .ds     (aon_key_intr_status_key0_in_h2l_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.key0_in_h2l.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_key0_in_h2l_qs_int)
+    .qs     (key_intr_status_key0_in_h2l_qs)
   );
 
   //   F[key1_in_h2l]: 2:2
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_key1_in_h2l (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[2]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_key1_in_h2l_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.key1_in_h2l.de),
     .d      (hw2reg.key_intr_status.key1_in_h2l.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[2]),
-    .q      (),
-    .ds     (aon_key_intr_status_key1_in_h2l_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.key1_in_h2l.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_key1_in_h2l_qs_int)
+    .qs     (key_intr_status_key1_in_h2l_qs)
   );
 
   //   F[key2_in_h2l]: 3:3
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_key2_in_h2l (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[3]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_key2_in_h2l_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.key2_in_h2l.de),
     .d      (hw2reg.key_intr_status.key2_in_h2l.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[3]),
-    .q      (),
-    .ds     (aon_key_intr_status_key2_in_h2l_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.key2_in_h2l.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_key2_in_h2l_qs_int)
+    .qs     (key_intr_status_key2_in_h2l_qs)
   );
 
   //   F[ac_present_h2l]: 4:4
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_ac_present_h2l (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[4]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_ac_present_h2l_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.ac_present_h2l.de),
     .d      (hw2reg.key_intr_status.ac_present_h2l.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[4]),
-    .q      (),
-    .ds     (aon_key_intr_status_ac_present_h2l_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.ac_present_h2l.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_ac_present_h2l_qs_int)
+    .qs     (key_intr_status_ac_present_h2l_qs)
   );
 
   //   F[ec_rst_l_h2l]: 5:5
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_ec_rst_l_h2l (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[5]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_ec_rst_l_h2l_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.ec_rst_l_h2l.de),
     .d      (hw2reg.key_intr_status.ec_rst_l_h2l.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[5]),
-    .q      (),
-    .ds     (aon_key_intr_status_ec_rst_l_h2l_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.ec_rst_l_h2l.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_ec_rst_l_h2l_qs_int)
+    .qs     (key_intr_status_ec_rst_l_h2l_qs)
   );
 
   //   F[flash_wp_l_h2l]: 6:6
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_flash_wp_l_h2l (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[6]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_flash_wp_l_h2l_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.flash_wp_l_h2l.de),
     .d      (hw2reg.key_intr_status.flash_wp_l_h2l.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[6]),
-    .q      (),
-    .ds     (aon_key_intr_status_flash_wp_l_h2l_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.flash_wp_l_h2l.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_flash_wp_l_h2l_qs_int)
+    .qs     (key_intr_status_flash_wp_l_h2l_qs)
   );
 
   //   F[pwrb_l2h]: 7:7
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_pwrb_l2h (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[7]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_pwrb_l2h_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.pwrb_l2h.de),
     .d      (hw2reg.key_intr_status.pwrb_l2h.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[7]),
-    .q      (),
-    .ds     (aon_key_intr_status_pwrb_l2h_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.pwrb_l2h.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_pwrb_l2h_qs_int)
+    .qs     (key_intr_status_pwrb_l2h_qs)
   );
 
   //   F[key0_in_l2h]: 8:8
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_key0_in_l2h (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[8]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_key0_in_l2h_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.key0_in_l2h.de),
     .d      (hw2reg.key_intr_status.key0_in_l2h.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[8]),
-    .q      (),
-    .ds     (aon_key_intr_status_key0_in_l2h_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.key0_in_l2h.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_key0_in_l2h_qs_int)
+    .qs     (key_intr_status_key0_in_l2h_qs)
   );
 
   //   F[key1_in_l2h]: 9:9
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_key1_in_l2h (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[9]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_key1_in_l2h_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.key1_in_l2h.de),
     .d      (hw2reg.key_intr_status.key1_in_l2h.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[9]),
-    .q      (),
-    .ds     (aon_key_intr_status_key1_in_l2h_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.key1_in_l2h.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_key1_in_l2h_qs_int)
+    .qs     (key_intr_status_key1_in_l2h_qs)
   );
 
   //   F[key2_in_l2h]: 10:10
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_key2_in_l2h (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[10]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_key2_in_l2h_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.key2_in_l2h.de),
     .d      (hw2reg.key_intr_status.key2_in_l2h.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[10]),
-    .q      (),
-    .ds     (aon_key_intr_status_key2_in_l2h_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.key2_in_l2h.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_key2_in_l2h_qs_int)
+    .qs     (key_intr_status_key2_in_l2h_qs)
   );
 
   //   F[ac_present_l2h]: 11:11
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_ac_present_l2h (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[11]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_ac_present_l2h_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.ac_present_l2h.de),
     .d      (hw2reg.key_intr_status.ac_present_l2h.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[11]),
-    .q      (),
-    .ds     (aon_key_intr_status_ac_present_l2h_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.ac_present_l2h.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_ac_present_l2h_qs_int)
+    .qs     (key_intr_status_ac_present_l2h_qs)
   );
 
   //   F[ec_rst_l_l2h]: 12:12
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_ec_rst_l_l2h (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[12]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_ec_rst_l_l2h_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.ec_rst_l_l2h.de),
     .d      (hw2reg.key_intr_status.ec_rst_l_l2h.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[12]),
-    .q      (),
-    .ds     (aon_key_intr_status_ec_rst_l_l2h_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.ec_rst_l_l2h.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_ec_rst_l_l2h_qs_int)
+    .qs     (key_intr_status_ec_rst_l_l2h_qs)
   );
 
   //   F[flash_wp_l_l2h]: 13:13
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_key_intr_status_flash_wp_l_l2h (
-    .clk_i   (clk_aon_i),
-    .rst_ni  (rst_aon_ni),
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_key_intr_status_we),
-    .wd     (aon_key_intr_status_wdata[13]),
+    .we     (key_intr_status_we),
+    .wd     (key_intr_status_flash_wp_l_l2h_wd),
 
     // from internal hardware
     .de     (hw2reg.key_intr_status.flash_wp_l_l2h.de),
     .d      (hw2reg.key_intr_status.flash_wp_l_l2h.d),
 
     // to internal hardware
-    .qe     (key_intr_status_flds_we[13]),
-    .q      (),
-    .ds     (aon_key_intr_status_flash_wp_l_l2h_ds_int),
+    .qe     (),
+    .q      (reg2hw.key_intr_status.flash_wp_l_l2h.q),
+    .ds     (),
 
     // to register interface (read)
-    .qs     (aon_key_intr_status_flash_wp_l_l2h_qs_int)
+    .qs     (key_intr_status_flash_wp_l_l2h_qs)
   );
 
 
 
   logic [42:0] addr_hit;
   always_comb begin
-    addr_hit = '0;
     addr_hit[ 0] = (reg_addr == SYSRST_CTRL_INTR_STATE_OFFSET);
     addr_hit[ 1] = (reg_addr == SYSRST_CTRL_INTR_ENABLE_OFFSET);
     addr_hit[ 2] = (reg_addr == SYSRST_CTRL_INTR_TEST_OFFSET);
@@ -6657,9 +6852,6 @@ module sysrst_ctrl_reg_top (
   end
 
   // Generate write-enables
-  assign intr_state_we = addr_hit[0] & reg_we & !reg_error;
-
-  assign intr_state_wd = reg_wdata[0];
   assign intr_enable_we = addr_hit[1] & reg_we & !reg_error;
 
   assign intr_enable_wd = reg_wdata[0];
@@ -6668,7 +6860,9 @@ module sysrst_ctrl_reg_top (
   assign intr_test_wd = reg_wdata[0];
   assign alert_test_we = addr_hit[3] & reg_we & !reg_error;
 
-  assign alert_test_wd = reg_wdata[0];
+  assign alert_test_fatal_fault_wd = reg_wdata[0];
+
+  assign alert_test_regwen_wd = reg_wdata[31];
   assign regwen_we = addr_hit[4] & reg_we & !reg_error;
 
   assign regwen_wd = reg_wdata[0];
@@ -6684,6 +6878,7 @@ module sysrst_ctrl_reg_top (
 
   assign ulp_status_we = addr_hit[10] & reg_we & !reg_error;
 
+  assign ulp_status_wd = reg_wdata[0];
   assign wkup_status_we = addr_hit[11] & reg_we & !reg_error;
 
   assign key_invert_ctl_we = addr_hit[12] & reg_we & !reg_error;
@@ -6847,29 +7042,46 @@ module sysrst_ctrl_reg_top (
 
   assign combo_intr_status_we = addr_hit[41] & reg_we & !reg_error;
 
+  assign combo_intr_status_combo0_h2l_wd = reg_wdata[0];
 
+  assign combo_intr_status_combo1_h2l_wd = reg_wdata[1];
 
+  assign combo_intr_status_combo2_h2l_wd = reg_wdata[2];
 
+  assign combo_intr_status_combo3_h2l_wd = reg_wdata[3];
   assign key_intr_status_we = addr_hit[42] & reg_we & !reg_error;
 
+  assign key_intr_status_pwrb_h2l_wd = reg_wdata[0];
 
+  assign key_intr_status_key0_in_h2l_wd = reg_wdata[1];
 
+  assign key_intr_status_key1_in_h2l_wd = reg_wdata[2];
 
+  assign key_intr_status_key2_in_h2l_wd = reg_wdata[3];
 
+  assign key_intr_status_ac_present_h2l_wd = reg_wdata[4];
 
+  assign key_intr_status_ec_rst_l_h2l_wd = reg_wdata[5];
 
+  assign key_intr_status_flash_wp_l_h2l_wd = reg_wdata[6];
 
+  assign key_intr_status_pwrb_l2h_wd = reg_wdata[7];
 
+  assign key_intr_status_key0_in_l2h_wd = reg_wdata[8];
 
+  assign key_intr_status_key1_in_l2h_wd = reg_wdata[9];
 
+  assign key_intr_status_key2_in_l2h_wd = reg_wdata[10];
 
+  assign key_intr_status_ac_present_l2h_wd = reg_wdata[11];
 
+  assign key_intr_status_ec_rst_l_l2h_wd = reg_wdata[12];
 
+  assign key_intr_status_flash_wp_l_l2h_wd = reg_wdata[13];
 
   // Assign write-enables to checker logic vector.
   always_comb begin
-    reg_we_check = '0;
-    reg_we_check[0] = intr_state_we;
+    reg_we_check[0] = 1'b0;
     reg_we_check[1] = intr_enable_we;
     reg_we_check[2] = intr_test_we;
     reg_we_check[3] = alert_test_we;
@@ -6932,6 +7144,7 @@ module sysrst_ctrl_reg_top (
 
       addr_hit[3]: begin
         reg_rdata_next[0] = '0;
+        reg_rdata_next[31] = alert_test_regwen_qs;
       end
 
       addr_hit[4]: begin
@@ -6954,8 +7167,9 @@ module sysrst_ctrl_reg_top (
         reg_rdata_next = DW'(ulp_ctl_qs);
       end
       addr_hit[10]: begin
-        reg_rdata_next = DW'(ulp_status_qs);
+        reg_rdata_next[0] = ulp_status_qs;
       end
+
       addr_hit[11]: begin
         reg_rdata_next = DW'(wkup_status_qs);
       end
@@ -7055,11 +7269,29 @@ module sysrst_ctrl_reg_top (
         reg_rdata_next = DW'(com_out_ctl_3_qs);
       end
       addr_hit[41]: begin
-        reg_rdata_next = DW'(combo_intr_status_qs);
+        reg_rdata_next[0] = combo_intr_status_combo0_h2l_qs;
+        reg_rdata_next[1] = combo_intr_status_combo1_h2l_qs;
+        reg_rdata_next[2] = combo_intr_status_combo2_h2l_qs;
+        reg_rdata_next[3] = combo_intr_status_combo3_h2l_qs;
       end
+
       addr_hit[42]: begin
-        reg_rdata_next = DW'(key_intr_status_qs);
+        reg_rdata_next[0] = key_intr_status_pwrb_h2l_qs;
+        reg_rdata_next[1] = key_intr_status_key0_in_h2l_qs;
+        reg_rdata_next[2] = key_intr_status_key1_in_h2l_qs;
+        reg_rdata_next[3] = key_intr_status_key2_in_h2l_qs;
+        reg_rdata_next[4] = key_intr_status_ac_present_h2l_qs;
+        reg_rdata_next[5] = key_intr_status_ec_rst_l_h2l_qs;
+        reg_rdata_next[6] = key_intr_status_flash_wp_l_h2l_qs;
+        reg_rdata_next[7] = key_intr_status_pwrb_l2h_qs;
+        reg_rdata_next[8] = key_intr_status_key0_in_l2h_qs;
+        reg_rdata_next[9] = key_intr_status_key1_in_l2h_qs;
+        reg_rdata_next[10] = key_intr_status_key2_in_l2h_qs;
+        reg_rdata_next[11] = key_intr_status_ac_present_l2h_qs;
+        reg_rdata_next[12] = key_intr_status_ec_rst_l_l2h_qs;
+        reg_rdata_next[13] = key_intr_status_flash_wp_l_l2h_qs;
       end
+
       default: begin
         reg_rdata_next = '1;
       end
@@ -7072,7 +7304,7 @@ module sysrst_ctrl_reg_top (
 
   // register busy
   logic reg_busy_sel;
-  assign reg_busy = reg_busy_sel | shadow_busy;
+  assign reg_busy = (reg_busy_sel | shadow_busy) & tl_i.a_valid;
   always_comb begin
     reg_busy_sel = '0;
     unique case (1'b1)
@@ -7090,9 +7322,6 @@ module sysrst_ctrl_reg_top (
       end
       addr_hit[9]: begin
         reg_busy_sel = ulp_ctl_busy;
-      end
-      addr_hit[10]: begin
-        reg_busy_sel = ulp_status_busy;
       end
       addr_hit[11]: begin
         reg_busy_sel = wkup_status_busy;
@@ -7180,12 +7409,6 @@ module sysrst_ctrl_reg_top (
       end
       addr_hit[40]: begin
         reg_busy_sel = com_out_ctl_3_busy;
-      end
-      addr_hit[41]: begin
-        reg_busy_sel = combo_intr_status_busy;
-      end
-      addr_hit[42]: begin
-        reg_busy_sel = key_intr_status_busy;
       end
       default: begin
         reg_busy_sel  = '0;

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,9 +10,8 @@ class chip_sw_deep_power_glitch_vseq extends chip_sw_base_vseq;
   virtual task pre_start();
     super.pre_start();
     // disable expected assertion error for power glitch test
-    $assertoff(0,"pwrmgr_ast_sva_if");
-    $assertoff(1,"tb.dut.top_earlgrey.pwrmgr_rstmgr_sva_if.MainPwrRstOff_A");
-    $assertoff(1,"tb.dut.top_earlgrey.pwrmgr_rstmgr_sva_if.MainPwrRstOn_A");
+    $assertoff(1,"tb.dut.top_earlgrey.earlgrey_pd_aon.pwrmgr_rstreqs_sva_if.MainPwrRstOff_A");
+    $assertoff(1,"tb.dut.top_earlgrey.earlgrey_pd_aon.pwrmgr_rstreqs_sva_if.MainPwrRstOn_A");
   endtask
 
   virtual task body();

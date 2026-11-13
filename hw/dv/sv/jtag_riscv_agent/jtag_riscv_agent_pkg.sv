@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@ package jtag_riscv_agent_pkg;
   // dep packages
   import uvm_pkg::*;
   import dv_utils_pkg::*;
+  import dv_base_agent_pkg::*;
   import dv_lib_pkg::*;
   import jtag_agent_pkg::*;
 
@@ -18,7 +19,11 @@ package jtag_riscv_agent_pkg;
   // JTAG TAP for DMI according to debug spec 0.13
   parameter uint DMI_OPW = 2;
   parameter uint DMI_DATAW = 32;
+`ifdef USE_DMI_INTERFACE
+  parameter uint DMI_ADDRW = 16;
+`else
   parameter uint DMI_ADDRW = 7;
+`endif
   parameter uint DMI_IRW = 5;
   parameter uint DMI_DRW = DMI_OPW + DMI_DATAW + DMI_ADDRW;
   parameter uint DTMCS_DRW = 32;

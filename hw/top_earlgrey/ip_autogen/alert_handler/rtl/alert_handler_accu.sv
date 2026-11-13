@@ -1,9 +1,9 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
 // This module accumulates incoming alert triggers. Once the current accumulator
-// value is greater or equal the accumulator threshold, the next occurence of
+// value is greater or equal the accumulator threshold, the next occurrence of
 // class_trig_i will trigger escalation.
 //
 // Note that the accumulator is implemented using a saturation counter which
@@ -12,7 +12,7 @@
 
 `include "prim_assert.sv"
 
-module alert_handler_accu import alert_pkg::*; (
+module alert_handler_accu import alert_handler_pkg::*; (
   input                        clk_i,
   input                        rst_ni,
   input                        class_en_i,   // class enable
@@ -48,7 +48,8 @@ module alert_handler_accu import alert_pkg::*; (
     .decr_en_i(1'b0),
     .step_i(AccuCntDw'(1)),
     .cnt_o(accu_cnt_o),
-    .cnt_next_o(),
+    .commit_i(1'b1),
+    .cnt_after_commit_o(),
     .err_o(accu_fail_o)
   );
 

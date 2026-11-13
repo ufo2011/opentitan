@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 '''A wrapper around riscv32-unknown-elf-ld for OTBN
@@ -32,7 +32,7 @@ def interpolate_linker_script(in_path: str, out_path: str) -> None:
                                    dmem_bus_length=mems.dmem_bus_size_bytes)
     except OSError as err:
         raise RuntimeError(str(err)) from None
-    except:  # noqa: 722
+    except:  # noqa: E722
         raise RuntimeError(exceptions.text_error_template().render()) from None
 
     try:

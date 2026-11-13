@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,20 +16,12 @@ class spi_host_driver extends spi_driver;
     join
   endtask
 
-  // Resets signals
-  virtual task reset_signals();
-    forever begin
-      @(negedge cfg.vif.rst_n or negedge cfg.vif.disconnected);
-      if (cfg.vif.disconnected) continue;
-      under_reset = 1'b1;
-      active_csb  = 1'b0;
-      cfg.vif.sck <= cfg.sck_polarity[0];
-      cfg.vif.sio_out <= 'x;
-      cfg.vif.csb <= '1;
-      sck_pulses = 0;
-      @(posedge cfg.vif.rst_n);
-      under_reset = 1'b0;
-    end
+  task on_enter_reset();
+    active_csb  = 1'b0;
+    cfg.vif.sck <= cfg.sck_polarity[0];
+    cfg.vif.sio_out <= 'x;
+    cfg.vif.csb <= '1;
+    sck_pulses = 0;
   endtask
 
   // generate sck
@@ -162,7 +154,7 @@ class spi_host_driver extends spi_driver;
     bit [7:0] cmd_addr_bytes[$];
     bit [7:0] dummy_return_q[$]; // nothing to return for flash cmd, addr and write
 
-    `uvm_info(`gfn, $sformatf("Driving flash item: \n%s", req.sprint()), UVM_MEDIUM)
+    `uvm_info(`gfn, $sformatf("Driving flash item: \n%s", req.sprint()), UVM_HIGH)
     cfg.vif.csb[active_csb] <= 1'b0;
 
     cmd_addr_bytes = {req.opcode, req.address_q};
@@ -174,6 +166,8 @@ class spi_host_driver extends spi_driver;
       end else begin
         `DV_CHECK_EQ(req.payload_q.size, 0)
         sck_pulses += req.read_size * (8 / req.num_lanes);
+        if (req.read_pipeline_mode>0)
+          sck_pulses += 2;
       end
     end
 
@@ -198,13 +192,15 @@ class spi_host_driver extends spi_driver;
       if (req.write_command) begin
         issue_data(req.payload_q, dummy_return_q);
       end else begin
+        repeat (req.read_pipeline_mode>0 ? 2 : 0)
+          cfg.wait_sck_edge(SamplingEdge, active_csb);
         repeat (req.read_size) begin
           logic [7:0] data;
           cfg.read_byte(.num_lanes(req.num_lanes), .is_device_rsp(1),
                         .csb_id(active_csb), .data(data));
           rsp.payload_q.push_back(data);
         end
-        `uvm_info(`gfn, $sformatf("collect read data for flash: 0x%p", rsp.payload_q), UVM_MEDIUM)
+        `uvm_info(`gfn, $sformatf("collect read data for flash: %s", rsp.sprint), UVM_HIGH)
       end
     end
 

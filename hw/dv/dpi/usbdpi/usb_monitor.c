@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,7 +42,7 @@ struct usb_monitor_ctx {
    * Current bus driver
    */
   usbmon_driver_t driver;
-  int pu;
+  uint32_t pu;
   int line;
   int rawbits;
   int bits;
@@ -103,7 +103,7 @@ usb_monitor_ctx_t *usb_monitor_init(const char *filename,
   }
 
   // more useful for tail -f
-  setlinebuf(mon->file);
+  setvbuf(mon->file, NULL, _IOLBF, 0);
   printf(
       "\nUSBDPI: Monitor output file created at %s. Works well with tail:\n"
       "$ tail -f %s\n",

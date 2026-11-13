@@ -1,9 +1,9 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 class key_sideload_agent_cfg #(
-    parameter type KEY_T = keymgr_pkg::hw_key_req_t
+    parameter type KEY_T = keymgr_dpe_pkg::hw_key_req_t
 ) extends dv_base_agent_cfg;
 
 

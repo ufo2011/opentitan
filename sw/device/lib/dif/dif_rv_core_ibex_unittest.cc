@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include "sw/device/lib/dif/dif_test_base.h"
 
 extern "C" {
-#include "rv_core_ibex_regs.h"  // Generated.
+#include "hw/top/rv_core_ibex_regs.h"  // Generated.
 }  // extern "C"
 
 // We define global namespace == and << to make
@@ -499,28 +499,6 @@ TEST_F(RndTest, StatusBadArg) {
   dif_rv_core_ibex_rnd_status_t status;
   EXPECT_DIF_BADARG(dif_rv_core_ibex_get_rnd_status(nullptr, &status));
   EXPECT_DIF_BADARG(dif_rv_core_ibex_get_rnd_status(&ibex_, nullptr));
-}
-
-class FpgaInfoTest : public RvCoreIbexTestInitialized {};
-
-TEST_F(FpgaInfoTest, ReadSuccess) {
-  EXPECT_READ32(RV_CORE_IBEX_FPGA_INFO_REG_OFFSET, 0xf55ef65e);
-  dif_rv_core_ibex_fpga_info_t info;
-  EXPECT_DIF_OK(dif_rv_core_ibex_read_fpga_info(&ibex_, &info));
-  EXPECT_EQ(info, 0xf55ef65e);
-}
-
-TEST_F(FpgaInfoTest, ReadZero) {
-  EXPECT_READ32(RV_CORE_IBEX_FPGA_INFO_REG_OFFSET, 0);
-  dif_rv_core_ibex_fpga_info_t info;
-  EXPECT_DIF_OK(dif_rv_core_ibex_read_fpga_info(&ibex_, &info));
-  EXPECT_EQ(info, 0);
-}
-
-TEST_F(FpgaInfoTest, ReadBadArg) {
-  dif_rv_core_ibex_fpga_info_t info;
-  EXPECT_DIF_BADARG(dif_rv_core_ibex_read_fpga_info(nullptr, &info));
-  EXPECT_DIF_BADARG(dif_rv_core_ibex_read_fpga_info(&ibex_, nullptr));
 }
 
 class FatalErrorAlertTest : public RvCoreIbexTestInitialized {};

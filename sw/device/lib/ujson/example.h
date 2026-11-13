@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define MODULE_ID MAKE_MODULE_ID('e', 'x', 'j')
 
 // clang-format off
 /////////////////////////////////////////////////////////////////////////////
@@ -104,6 +106,8 @@ C_ONLY(UJSON_SERDE_ENUM(FuzzyBool, fuzzy_bool, ENUM_FUZZY_BOOL, WITH_UNKNOWN));
     field(value, bool) \
     field(status, status_t)
 UJSON_SERDE_STRUCT(Misc, misc_t, STRUCT_MISC);
+
+#undef MODULE_ID
 
 // clang-format on
 

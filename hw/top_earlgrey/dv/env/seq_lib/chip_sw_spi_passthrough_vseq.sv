@@ -1,24 +1,52 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 class chip_sw_spi_passthrough_vseq extends chip_sw_base_vseq;
   `uvm_object_utils(chip_sw_spi_passthrough_vseq)
 
-  `uvm_object_new
-
   // The sequence of opcodes used for the test.
   spi_flash_cmd_e test_opcodes[$];
+
   // Whether to check for transactions appearing on the unused spi_host.
   bit en_unused_spi_host_monitoring = 1'b1;
+
   // Frequencies to use for testing the sequences.
   time sck_periods_ps[] = '{
     41_000, // 24 MHz
     33_000, // 30 MHz
     167_000 // 6 MHz
   };
+
   // A bit map of command slots that will have passthrough filters enabled.
   rand bit [spi_device_pkg::NumTotalCmdInfo-1:0] passthrough_filters;
+
+  // This test will run with a random SCK period, selected from sck_periods_ps
+  rand time sck_period_ps;
+
+  // Constrain the selected SCK period to be one of the frequencies in sck_periods_ps
+  constraint valid_sck_period_c {
+    sck_period_ps inside {sck_periods_ps};
+  }
+
+  // Configures the read pipeline when set to non-zero
+  rand bit [1:0] read_pipeline_mode;
+
+  constraint read_pipeline_mode_c {
+    read_pipeline_mode <= 2;
+  }
+
+  // Constrain read_pipeline_mode to be 2 when running at a high frequency (with period at most
+  // 33_000, so an SCK frequency of 30 MHz or more)
+  constraint high_speed_read_pipeline_c {
+    if (sck_period_ps <= 33_000) {
+      read_pipeline_mode == 2;
+    }
+  }
+
+  function new (string name="");
+    super.new(name);
+  endfunction
 
   // Generate a random permutation of the following opcodes, and place them in
   // the test_opcodes queue:
@@ -39,6 +67,15 @@ class chip_sw_spi_passthrough_vseq extends chip_sw_base_vseq;
     };
     test_opcodes.shuffle();
   endfunction
+
+  // Assert that the chip select lines of spi_host0 other than CSB[0] never assert.  Passthrough
+  // uses CSB[0] only, and the SW test does not use the other lines.
+  virtual task monitor_spi_host0_other_csbs();
+    spi_agent_cfg agent_cfg = cfg.m_spi_device_agent_cfgs[0];
+    wait (agent_cfg.vif.rst_n && (agent_cfg.vif.csb[NUM_SPI_HOST_CSBS-1:1] !== '1));
+    `uvm_fatal(`gfn, $sformatf("Observed CSB[%0d:1] = 0x%0h on spi_host0, which should be inactive",
+                               NUM_SPI_HOST_CSBS-1, agent_cfg.vif.csb[NUM_SPI_HOST_CSBS-1:1]))
+  endtask
 
   // Assert that spi_host does not send any transactions.
   virtual task monitor_unused_spi_host();
@@ -110,8 +147,22 @@ class chip_sw_spi_passthrough_vseq extends chip_sw_base_vseq;
         if (!filter_map[opcode]) begin
           // Check that the command, address, and data sent matches on both sides.
           `DV_CHECK_EQ(device_rsp_q.size(), 1);
-          host_rsp = m_spi_host_seq.rsp;
           device_rsp = device_rsp_q.pop_front();
+
+          wait (p_sequencer.spi_host_sequencer_h.host_mon_item_q.size() > 0);
+          host_rsp = p_sequencer.spi_host_sequencer_h.host_mon_item_q.pop_front();
+
+          if (device_rsp.read_pipeline_mode > 0 && device_rsp.num_lanes==4) begin
+            // It means the read pipeline mode is enabled, hence the 'device_rsp' side which is
+            // connected to the passthrough will have a couple of extra cycles of data, which
+            // translates into an extra item in the queue when reading 4 lanes
+            `uvm_info(`gfn, {"[Passtrhough sampled side] Last item in queue dropped due to",
+                             $sformatf(" read_pipeline enabled - : 0x%0x",device_rsp.payload_q[$])},
+                      UVM_DEBUG)
+            void'(device_rsp.payload_q.pop_back());
+            if (device_rsp.read_size > 0)
+              device_rsp.read_size--;
+          end
           if (!host_rsp.compare(device_rsp)) begin
             `uvm_error(`gfn, $sformatf("Compare mismatch\nhost_rsp:\n%sdevice_rsp:\n%s",
                                        host_rsp.sprint(), device_rsp.sprint()))
@@ -126,17 +177,32 @@ class chip_sw_spi_passthrough_vseq extends chip_sw_base_vseq;
 
   virtual task cpu_init();
     bit [7:0] sw_filter_config[4];
-    super.cpu_init();
-    `DV_CHECK_MEMBER_RANDOMIZE_FATAL(passthrough_filters);
+    bit [7:0] read_pipeline_mode_data[1];
+
+    read_pipeline_mode_data[0] = {read_pipeline_mode};
     sw_filter_config = {<<byte{passthrough_filters}};
+
+    super.cpu_init();
+
+    sw_symbol_backdoor_overwrite("kReadPipelineMode", read_pipeline_mode_data);
     sw_symbol_backdoor_overwrite("kFilteredCommands", sw_filter_config);
   endtask
 
   virtual task body();
+    `uvm_info(get_full_name(),
+              $sformatf({"\nRunning SPI passthrough test with following config:\n",
+                         "    SCK period                  = %0d ps\n",
+                         "    Enabled passthrough filters = 0x%0h\n",
+                         "    Read pipeline mode          = %0d"},
+                        sck_period_ps,
+                        passthrough_filters,
+                        read_pipeline_mode),
+              UVM_LOW)
+
     // Turn off the FIFO data output assertion, as spi_device issues a read
     // before it knows whether it needs the data.
-    $assertoff(0, "tb.dut.top_earlgrey.u_spi_device.u_readcmd.u_readsram.u_sram_fifo.DataKnown_A");
-    $assertoff(0, "tb.dut.top_earlgrey.u_spi_device.u_readcmd.u_readsram.u_fifo.DataKnown_A");
+    $assertoff(0, "tb.dut.top_earlgrey.earlgrey_pd_main.u_spi_device.u_readcmd.u_readsram.u_sram_fifo.DataKnown_A");
+    $assertoff(0, "tb.dut.top_earlgrey.earlgrey_pd_main.u_spi_device.u_readcmd.u_readsram.u_fifo.DataKnown_A");
 
     super.body();
 
@@ -147,8 +213,8 @@ class chip_sw_spi_passthrough_vseq extends chip_sw_base_vseq;
     cfg.m_spi_host_agent_cfg.min_idle_ns_after_csb_drop = 50;
     cfg.m_spi_host_agent_cfg.max_idle_ns_after_csb_drop = 200;
 
-    spi_agent_configure_flash_cmds(cfg.m_spi_host_agent_cfg);
-    spi_agent_configure_flash_cmds(cfg.m_spi_device_agent_cfgs[0]);
+    spi_agent_configure_flash_cmds(cfg.m_spi_host_agent_cfg, read_pipeline_mode);
+    spi_agent_configure_flash_cmds(cfg.m_spi_device_agent_cfgs[0], read_pipeline_mode);
     // Enable the spi agents.
     cfg.chip_vif.enable_spi_host = 1;
     cfg.chip_vif.enable_spi_device(.inst_num(0), .enable(1));
@@ -166,11 +232,14 @@ class chip_sw_spi_passthrough_vseq extends chip_sw_base_vseq;
         monitor_unused_spi_host();
       join_none
     end
-    foreach (sck_periods_ps[i]) begin
-      cfg.m_spi_host_agent_cfg.sck_period_ps = sck_periods_ps[i];
-      generate_spi_flash_sequence();
-      execute_spi_flash_sequence();
-    end
+    fork
+      monitor_spi_host0_other_csbs();
+    join_none
+
+    cfg.m_spi_host_agent_cfg.sck_period_ps = sck_period_ps;
+    generate_spi_flash_sequence();
+    execute_spi_flash_sequence();
+
     override_test_status_and_finish(1'b1);
   endtask
 

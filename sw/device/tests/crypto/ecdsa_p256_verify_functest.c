@@ -1,10 +1,13 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sw/device/lib/crypto/drivers/hmac.h"
 #include "sw/device/lib/crypto/drivers/otbn.h"
-#include "sw/device/lib/crypto/impl/ecdsa_p256/ecdsa_p256.h"
+#include "sw/device/lib/crypto/impl/ecc/p256.h"
+#include "sw/device/lib/crypto/include/config.h"
+#include "sw/device/lib/crypto/include/entropy_src.h"
+#include "sw/device/lib/crypto/include/integrity.h"
+#include "sw/device/lib/crypto/include/sha2.h"
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
@@ -15,28 +18,23 @@
 // the version of this file matching the Bazel rule under test.
 #include "ecdsa_p256_verify_testvectors.h"
 
-static void compute_digest(size_t msg_len, const uint8_t *msg,
-                           ecdsa_p256_message_digest_t *digest) {
-  // Compute the SHA-256 digest using the HMAC device.
-  hmac_sha256_init();
-  CHECK_STATUS_OK(hmac_sha256_update(msg, msg_len));
-  hmac_digest_t hmac_digest;
-  CHECK_STATUS_OK(hmac_sha256_final(&hmac_digest));
-
-  // Copy digest into the destination array.
-  memcpy(digest->h, hmac_digest.digest, sizeof(hmac_digest.digest));
-}
-
 status_t ecdsa_p256_verify_test(
     const ecdsa_p256_verify_test_vector_t *testvec) {
   // Hash message.
-  ecdsa_p256_message_digest_t digest;
-  compute_digest(testvec->msg_len, testvec->msg, &digest);
+  otcrypto_const_byte_buf_t msg_buf = OTCRYPTO_MAKE_BUF(
+      otcrypto_const_byte_buf_t, testvec->msg, testvec->msg_len);
+  uint32_t digest_buf[256 / 32];
+  otcrypto_hash_digest_t digest = {
+      .data = digest_buf,
+      .len = ARRAYSIZE(digest_buf),
+  };
+  TRY(otcrypto_sha2_256(&msg_buf, &digest));
 
   // Attempt to verify signature.
+  TRY(p256_ecdsa_verify_start(&testvec->signature, digest.data,
+                              &testvec->public_key));
   hardened_bool_t result;
-  TRY(ecdsa_p256_verify(&testvec->signature, &digest, &testvec->public_key,
-                        &result));
+  TRY(p256_ecdsa_verify_finalize(&testvec->signature, &result));
 
   if (testvec->valid && result != kHardenedBoolTrue) {
     LOG_ERROR("Valid signature failed verification.");
@@ -54,6 +52,8 @@ OTTF_DEFINE_TEST_CONFIG();
 bool test_main(void) {
   // Stays true only if all tests pass.
   bool result = true;
+
+  CHECK_STATUS_OK(otcrypto_init(kOtcryptoKeySecurityLevelLow));
 
   // The definition of `RULE_NAME` comes from the autogen Bazel rule.
   LOG_INFO("Starting ecdsa_p256_verify_test:%s", RULE_NAME);

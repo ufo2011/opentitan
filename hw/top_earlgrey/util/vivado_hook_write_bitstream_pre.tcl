@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,103 +8,45 @@ send_msg "Designcheck 1-1" INFO "Checking design"
 set slack_ns [get_property SLACK [get_timing_paths -delay_type min_max]]
 send_msg "Designcheck 1-2" INFO "Slack is ${slack_ns} ns."
 
+# The build-time optimized flow places without timing and skips phys_opt_design, so a marginal
+# path can fail by a few tens of picoseconds. Only then, optimize the routed design, cheapest step
+# first: phys_opt_design fixes setup violations, and routing again with the Explore directive also
+# fixes hold violations. The routed checkpoint, the routed timing report and the bitstream are all
+# written after this hook, from the design in memory, so they include these optimizations.
 if [expr {$slack_ns < 0}] {
+  send_msg "Designcheck 1-4" WARNING "Slack is ${slack_ns} ns, running phys_opt_design."
+  phys_opt_design -directive AggressiveExplore
+  set slack_ns [get_property SLACK [get_timing_paths -delay_type min_max]]
+  send_msg "Designcheck 1-5" INFO "Slack after phys_opt_design is ${slack_ns} ns."
+}
+if [expr {$slack_ns < 0}] {
+  send_msg "Designcheck 1-6" WARNING "Slack is ${slack_ns} ns, routing again."
+  route_design -directive Explore
+  set slack_ns [get_property SLACK [get_timing_paths -delay_type min_max]]
+  send_msg "Designcheck 1-7" INFO "Slack after routing again is ${slack_ns} ns."
+}
+
+if [expr {$slack_ns < 0}] {
+  # The routed timing report is written after this hook, so show the failing paths here.
+  report_timing_summary -max_paths 10
   send_msg "Designcheck 1-3" ERROR "Timing failed. Slack is ${slack_ns} ns."
 }
 
 # Enable bitstream identification via USR_ACCESS register.
 set_property BITSTREAM.CONFIG.USR_ACCESS TIMESTAMP [current_design]
 
-# Generate an MMI file for the given BRAM cells.
-#
+# Generate a dummy MMI file (FIXME: temporary, to be removed).
 # Args:
 #   filename:            Path to the output file.
-#   brams:               A list of BRAM cells.
-#   mem_type:            The BRAM type, e.g. "RAMB36".
-#   fake_word_width:     If non-zero, pretend that $brams covers
-#                        `fake_word_width` bits. Influences the values of the
-#                        MMI's <AddressSpace> and <DataWidth> tags.
-#   addr_end_multiplier: A coefficient applied to the address space. Influences
-#                        the values of the MMI's <AddressSpace> and
-#                        <AddressRange> tags.
 #   designtask_count:    A number used for logging with `send_msg`.
-proc generate_mmi {filename brams mem_type fake_word_width addr_end_multiplier designtask_count} {
-    send_msg "${designtask_count}-1" INFO "Dumping MMI to ${filename}"
-
-    if {[llen $brams] == 0} {
-        send_msg "${designtask_count}-1" INFO "Cannot make MMI for zero BRAMs"
-        return
-    }
-
+proc generate_mmi {filename designtask_count} {
+    send_msg "${designtask_count}-1" INFO "Writing dummy MMI file to ${filename}"
     set workroot [file dirname [info script]]
     set filepath "${workroot}/${filename}"
     set fileout [open $filepath "w"]
-
-    set fake_slice_width [expr $fake_word_width / [llen $brams]]
-
-    # Calculate the overall address space.
-    set space 0
-    foreach inst [lsort -dictionary $brams] {
-        set slice_begin [get_property ram_slice_begin [get_cells $inst]]
-        set slice_end [get_property ram_slice_end [get_cells $inst]]
-        if {$slice_begin eq {} || $slice_end eq {}} {
-            send_msg "${designtask_count}-2" ERROR "Extraction of ${filename} information failed."
-        }
-        set slice_width [expr {$slice_end - $slice_begin + 1}]
-        if {$slice_width < $fake_slice_width} {
-            set slice_end [expr {$slice_begin + $fake_slice_width - 1}]
-            set slice_width $fake_slice_width
-        }
-        set addr_begin [get_property ram_addr_begin [get_cells $inst]]
-        set addr_end [get_property ram_addr_end [get_cells $inst]]
-        if {$addr_begin eq {} || $addr_end eq {}} {
-            send_msg "${designtask_count}-3" ERROR "Extraction of ${filename} MMI information failed."
-        }
-
-        # Calculate total number of bits.
-        set space [expr {$space + ($addr_end - $addr_begin + 1) * $slice_width}]
-        set last_slice_width $slice_width
-    }
-    set space [expr {($space * $addr_end_multiplier / 8) - 1}]
-
-    # Generate the MMI.
-    puts $fileout "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-    puts $fileout "<MemInfo Version=\"1\" Minor=\"1\">"
-    puts $fileout "  <Processor Endianness=\"Little\" InstPath=\"dummy\">"
-    puts $fileout "  <AddressSpace Name=\"dummy_addrspace\" Begin=\"0\" End=\"$space\">"
-    puts $fileout "      <BusBlock>"
-
-    set loc_prefix "${mem_type}_"
-
-    set part [get_property PART [current_design]]
-    foreach inst [lsort -dictionary $brams] {
-        set loc [get_property LOC [get_cells $inst]]
-        set loc [string trimleft $loc $loc_prefix]
-        set slice_begin [get_property ram_slice_begin [get_cells $inst]]
-        set slice_end [get_property ram_slice_end [get_cells $inst]]
-        set slice_width [expr {$slice_end - $slice_begin + 1}]
-        if {$slice_width < $fake_slice_width} {
-            set slice_end [expr {$slice_begin + $fake_slice_width - 1}]
-            set slice_width $fake_slice_width
-        }
-        set addr_begin [get_property ram_addr_begin [get_cells $inst]]
-        set addr_end [get_property ram_addr_end [get_cells $inst]]
-        set addr_end [expr {($addr_end + 1) * $addr_end_multiplier - 1}]
-        puts $fileout "        <BitLane MemType=\"$mem_type\" Placement=\"$loc\">"
-        puts $fileout "          <DataWidth MSB=\"$slice_end\" LSB=\"$slice_begin\"/>"
-        puts $fileout "          <AddressRange Begin=\"$addr_begin\" End=\"$addr_end\"/>"
-        puts $fileout "          <Parity ON=\"false\" NumBits=\"0\"/>"
-        puts $fileout "        </BitLane>"
-    }
-    puts $fileout "      </BusBlock>"
-    puts $fileout "    </AddressSpace>"
-    puts $fileout "  </Processor>"
-    puts $fileout "<Config>"
-    puts $fileout "  <Option Name=\"Part\" Val=\"$part\"/>"
-    puts $fileout "</Config>"
-    puts $fileout "</MemInfo>"
+    puts $fileout "This is a temporary dummy file to placate Bazel/CI whilst migrating to the bkdr_loader flow."
+    puts $fileout "This file is not a valid MMI file, and should NOT be used as such."
     close $fileout
-    send_msg "${designtask_count}-4" INFO "MMI dumped to ${filepath}"
 }
 
 # Dump INIT_XX strings for the given BRAMs to an output file.
@@ -118,7 +60,7 @@ proc generate_mmi {filename brams mem_type fake_word_width addr_end_multiplier d
 #   brams:            A list of BRAM cells.
 #   designtask_count: A number used for logging with `send_msg`.
 proc dump_init_strings {filename brams designtask_count} {
-    # For each OTP BRAM, dump all the INIT_XX strings.
+    # For each BRAM, dump all the INIT_XX strings.
     send_msg "${designtask_count}-1" INFO "Dumping INIT_XX strings to ${filename}"
 
     set workroot [file dirname [info script]]
@@ -148,6 +90,29 @@ proc dump_init_strings {filename brams designtask_count} {
     send_msg "${designtask_count}-4" INFO "INIT_XX strings dumped to ${filepath}"
 }
 
+set fpga_family [get_property FAMILY [get_parts [get_property PART [current_design]]]]
+
+switch ${fpga_family} {
+  kintex7 {
+    set bram_regex "BMEM.*.*"
+  }
+  kintexu {
+    set bram_regex "BLOCKRAM.*.*"
+  }
+  default {
+    set bram_regex "BMEM.*.*"
+  }
+}
+set mem_type_regex {(RAMB\d+)_(\w+)}
+
+set gen_mem_info {{brams mem_type_regex fake_word_width addr_end_multiplier schema} {
+  dict set mem_info brams $brams
+  dict set mem_info mem_type_regex $mem_type_regex
+  dict set mem_info fake_word_width $fake_word_width
+  dict set mem_info addr_end_multiplier $addr_end_multiplier
+  return [dict set mem_info schema $schema]
+}}
+
 # The scrambled Boot ROM is actually 39 bits wide, but we need to pretend that
 # it's 40 bits, or else we will be unable to encode our ROM data in a MEM file
 # that updatemem will understand.
@@ -162,17 +127,13 @@ proc dump_init_strings {filename brams designtask_count} {
 #
 # A hack that works is to pretend the data width is actually 40 bits. Updatemem
 # seems to write that extra zero bit into the ether without complaint.
-set rom_brams [split [get_cells -hierarchical -filter { PRIMITIVE_TYPE =~ BMEM.bram.* && NAME =~ *u_rom_ctrl*}] " "]
-generate_mmi "rom.mmi" $rom_brams "RAMB36" 40 1 1
+set rom_brams [split [get_cells -hierarchical -filter " PRIMITIVE_TYPE =~ ${bram_regex} && NAME =~ *u_rom_ctrl*"] " "]
+dict set memInfo rom [apply $gen_mem_info $rom_brams $mem_type_regex 40 1 "Processor"]
 
-# OTP does not require faking the word width, but it has its own quirk. It seems
-# each 22-bit OTP word is followed by 15 zero words. The MMI's <AddressSpace>
-# and <AddressRange> tags need to account for this or else updatemem will think
-# that its data input overruns the address space. The workaround is to pretend
-# the address space is 16 times larger than we would normally compute.
-set otp_brams [split [get_cells -hierarchical -filter { PRIMITIVE_TYPE =~ BMEM.bram.* && NAME =~ *u_otp_ctrl*}] " "]
-generate_mmi "otp.mmi" $otp_brams "RAMB18" 0 16 2
+generate_mmi "memories.mmi" 1
 
-# For debugging purposes, dump the INIT_XX strings for ROM and OTP.
-dump_init_strings "rom_init_strings.txt" $rom_brams 3
-dump_init_strings "otp_init_strings.txt" $otp_brams 4
+# For debugging purposes, dump the INIT_XX strings for ROM.
+# Only with CW340_DEBUG=1: this is very slow on a flattened netlist.
+if {[info exists ::env(CW340_DEBUG)] && [string is true -strict $::env(CW340_DEBUG)]} {
+  dump_init_strings "rom_init_strings.txt" $rom_brams 3
+}

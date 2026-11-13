@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //==================================================
@@ -10,8 +10,12 @@
 // ExclMode: default
 //==================================================
 CHECKSUM: "3497701341 3193573764"
-INSTANCE: tb.dut.top_earlgrey.u_lc_ctrl
-ANNOTATION: "[UNR]: LcCtrlChipGen and LcCtrlChipRev are tied off to design parameters."
-Toggle hw_rev_o.chip_gen "logic hw_rev_o.chip_gen[15:0]"
-ANNOTATION: "[UNR]: LcCtrlChipGen and LcCtrlChipRev are tied off to design parameters."
-Toggle hw_rev_o.chip_rev "logic hw_rev_o.chip_rev[15:0]"
+INSTANCE: tb.dut.top_earlgrey.earlgrey_pd_main.u_lc_ctrl
+ANNOTATION: "[UNR]: LcCtrlSiliconCreatorId and LcCtrlProductId and LcCtrlRevisionId are tied off to design parameters."
+Toggle hw_rev_o.silicon_creator_id "logic hw_rev_o.silicon_creator_id[15:0]"
+ANNOTATION: "[UNR]: LcCtrlSiliconCreatorId and LcCtrlProductId and LcCtrlRevisionId are tied off to design parameters."
+Toggle hw_rev_o.product_id "logic hw_rev_o.product_id[15:0]"
+ANNOTATION: "[UNR]: LcCtrlSiliconCreatorId and LcCtrlProductId and LcCtrlRevisionId are tied off to design parameters."
+Toggle hw_rev_o.revision_id "logic hw_rev_o.revision_id[7:0]"
+ANNOTATION: "[UNR]: LcCtrlSiliconCreatorId and LcCtrlProductId and LcCtrlRevisionId are tied off to design parameters."
+Toggle hw_rev_o.reserved "logic hw_rev_o.reserved[23:0]"

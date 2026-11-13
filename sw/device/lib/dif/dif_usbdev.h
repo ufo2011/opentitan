@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,8 @@
 
 /**
  * @file
- * @brief <a href="/hw/ip/usbdev/doc/">USB Device</a> Device Interface Functions
+ * @brief <a href="/book/hw/ip/usbdev/">USB Device</a> Device Interface
+ * Functions
  */
 
 #include <stddef.h>
@@ -179,7 +180,7 @@ dif_result_t dif_usbdev_configure(const dif_usbdev_t *usbdev,
  * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
-dif_result_t dif_usbdev_fill_available_fifo(
+dif_result_t dif_usbdev_fill_available_fifos(
     const dif_usbdev_t *usbdev, dif_usbdev_buffer_pool_t *buffer_pool);
 
 /**
@@ -614,6 +615,56 @@ OT_WARN_UNUSED_RESULT
 dif_result_t dif_usbdev_address_get(const dif_usbdev_t *usbdev, uint8_t *addr);
 
 /**
+ * Read the data toggle bits of the OUT endpoints.
+ *
+ * @param usbdev A USB device.
+ * @param[out]toggles Current state of OUT data toggle bits.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_usbdev_data_toggle_out_read(const dif_usbdev_t *usbdev,
+                                             uint16_t *toggles);
+
+/**
+ * Read the data toggle bits of the IN endpoints.
+ *
+ * @param usbdev A USB device.
+ * @param[out]toggles Current state of IN data toggle bits.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_usbdev_data_toggle_in_read(const dif_usbdev_t *usbdev,
+                                            uint16_t *toggles);
+
+/**
+ * Write to the data toggle bits of a subset of the OUT endpoints.
+ * Set 1 in `mask` to change the data toggle bit of an OUT endpoint to the value
+ * of the corresponding bit in `state`.
+ *
+ * @param usbdev A USB device.
+ * @param mask Mask of OUT endpoint data toggles to be changed.
+ * @param state New states of that OUT endpoint data toggles being changed.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_usbdev_data_toggle_out_write(const dif_usbdev_t *usbdev,
+                                              uint16_t mask, uint16_t state);
+
+/**
+ * Write to the data toggle bits of a subset of the IN endpoints.
+ * Set 1 in `mask` to change the data toggle bit of an IN endpoint to the value
+ * of the corresponding bit in `state`.
+ *
+ * @param usbdev A USB device.
+ * @param mask Mask of IN endpoint data toggles to be changed.
+ * @param state New states of that IN endpoint data toggles being changed.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_usbdev_data_toggle_in_write(const dif_usbdev_t *usbdev,
+                                             uint16_t mask, uint16_t state);
+
+/**
  * Clear the data toggle bits for the selected endpoint.
  *
  * @param usbdev A USB device.
@@ -687,29 +738,33 @@ dif_result_t dif_usbdev_status_get_sense(const dif_usbdev_t *usbdev,
                                          bool *sense);
 
 /**
- * Get the depth of the AV FIFO.
+ * Get the depths of the AV OUT and AV SETUP FIFOs.
  *
- * See also: `dif_usbdev_fill_available_fifo`.
+ * See also: `dif_usbdev_fill_available_fifos`.
  *
  * @param usbdev A USB device.
- * @param[out] depth Depth of the AV FIFO.
+ * @param[out] setup_depth Depth of the AV SETUP FIFO.
+ * @param[out] out_depth Depth of the AV OUT FIFO.
  * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
-dif_result_t dif_usbdev_status_get_available_fifo_depth(
-    const dif_usbdev_t *usbdev, uint8_t *depth);
+dif_result_t dif_usbdev_status_get_available_fifo_depths(
+    const dif_usbdev_t *usbdev, uint8_t *setup_depth, uint8_t *out_depth);
 /**
- * Check if AV FIFO is full.
+ * Check if AV OUT and AV SETUP FIFOs are full.
  *
- * See also: `dif_usbdev_fill_available_fifo`.
+ * See also: `dif_usbdev_fill_available_fifos`.
  *
  * @param usbdev A USB device.
- * @param[out] is_full State of the AV FIFO. `true` if full, false otherwise.
+ * @param[out] setup_is_full State of the AV SETUP FIFO. `true` if full, false
+ * otherwise.
+ * @param[out] out_is_full State of the AV OUT FIFO. `true` if full, false
+ * otherwise.
  * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
 dif_result_t dif_usbdev_status_get_available_fifo_full(
-    const dif_usbdev_t *usbdev, bool *is_full);
+    const dif_usbdev_t *usbdev, bool *setup_is_full, bool *out_is_full);
 /**
  * Get the depth of the RX FIFO.
  *
@@ -769,6 +824,8 @@ typedef struct dif_usbdev_wake_status {
   bool disconnected;
   /** Whether the USB was reset while the AON wake module was active. */
   bool bus_reset;
+  /** Whether the USB became non-Idle whilst the AON wake module was active. */
+  bool bus_not_idle;
 } dif_usbdev_wake_status_t;
 
 /**
@@ -868,6 +925,36 @@ OT_WARN_UNUSED_RESULT
 dif_result_t dif_usbdev_set_phy_pins_state(
     const dif_usbdev_t *usbdev, dif_toggle_t override_enable,
     dif_usbdev_phy_pins_drive_t overrides);
+
+/**
+ * Raw data transfer directly to the packet buffer memory. This is a faster
+ * implementation of the generic `mmio_memcpy_to_mmio32` that is specialized for
+ * the USB device and gives a significant performance improvement.
+ *
+ * @param usbdev A USB device.
+ * @param id Buffer number.
+ * @param src Source data.
+ * @param src_len Number of bytes to transfer.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_usbdev_buffer_raw_write(const dif_usbdev_t *usbdev, uint8_t id,
+                                         const uint8_t *src, size_t src_len);
+
+/**
+ * Raw data transfer directly from the packet buffer memory. This is a faster
+ * implementation of the generic `mmio_memcpy_from_mmio32` that is specialized
+ * for the USB device and gives a significant performance improvemenet.
+ *
+ * @param usbdev A USB device.
+ * @param id Buffer number.
+ * @param dst Destination buffer.
+ * @param dst_len Number of bytes to transfer.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_usbdev_buffer_raw_read(const dif_usbdev_t *usbdev, uint8_t id,
+                                        uint8_t *dst, size_t dst_len);
 
 #ifdef __cplusplus
 }  // extern "C"

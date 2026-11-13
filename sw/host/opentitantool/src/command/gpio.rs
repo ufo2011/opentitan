@@ -1,30 +1,35 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use nix::unistd::isatty;
-use raw_tty::TtyModeGuard;
-use serde_annotate::Annotate;
+use clap::{Args, Subcommand};
 use std::any::Any;
 use std::borrow::Borrow;
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Write};
-use std::os::unix::io::AsRawFd;
+use std::io::Read;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::time::Duration;
-use structopt::StructOpt;
 
-use opentitanlib::app::command::CommandDispatch;
 use opentitanlib::app::TransportWrapper;
-use opentitanlib::io::gpio::{ClockNature, Edge, GpioPin, PinMode, PullMode};
+use opentitanlib::app::command::CommandDispatch;
+use opentitanlib::io::gpio::{
+    ClockNature, Edge, GpioPin, MonitoringReadResponse, MonitoringStartResponse, PinMode, PullMode,
+};
 use opentitanlib::transport::Capability;
 use opentitanlib::util::file;
+use opentitanlib::util::raw_tty::RawTty;
+use opentitanlib::util::vcd::{
+    Header, ScalarValue, ValueChangeItem, ValueChangeSection, VcdWriter, dump_vcd_wire_vardefs,
+};
+use opentitanlib::util::voltage::Voltage;
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 /// Reads a GPIO pin.
 pub struct GpioRead {
-    #[structopt(name = "PIN", help = "The GPIO pin to read")]
+    /// The GPIO pin to read.
     pub pin: String,
 }
 
@@ -39,7 +44,7 @@ impl CommandDispatch for GpioRead {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport.capabilities()?.request(Capability::GPIO).ok()?;
         let gpio_pin = transport.gpio_pin(&self.pin)?;
         let value = gpio_pin.read()?;
@@ -50,16 +55,13 @@ impl CommandDispatch for GpioRead {
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 /// Writes a GPIO pin.
 pub struct GpioWrite {
-    #[structopt(name = "PIN", help = "The GPIO pin to write")]
+    /// The GPIO pin to write.
     pub pin: String,
-    #[structopt(
-        name = "VALUE",
-        parse(try_from_str),
-        help = "The value to write to the pin"
-    )]
+    /// The value to write to the pin.
+    #[arg(action = clap::ArgAction::Set)]
     pub value: bool,
 }
 
@@ -68,7 +70,7 @@ impl CommandDispatch for GpioWrite {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport.capabilities()?.request(Capability::GPIO).ok()?;
         let gpio_pin = transport.gpio_pin(&self.pin)?;
 
@@ -77,17 +79,13 @@ impl CommandDispatch for GpioWrite {
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 /// Set the I/O mode of a GPIO pin (Input/OpenDrain/PushPull).
 pub struct GpioSetMode {
-    #[structopt(name = "PIN", help = "The GPIO pin to modify")]
+    /// The GPIO pin to modify.
     pub pin: String,
-    #[structopt(
-        name = "MODE",
-        possible_values = &PinMode::variants(),
-        case_insensitive=true,
-        help = "The I/O mode of the pin"
-    )]
+    /// The I/O mode of the pin.
+    #[arg(value_enum, ignore_case = true)]
     pub mode: PinMode,
 }
 
@@ -96,7 +94,7 @@ impl CommandDispatch for GpioSetMode {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport.capabilities()?.request(Capability::GPIO).ok()?;
         let gpio_pin = transport.gpio_pin(&self.pin)?;
         gpio_pin.set_mode(self.mode)?;
@@ -104,17 +102,13 @@ impl CommandDispatch for GpioSetMode {
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 /// Set the I/O weak pull mode of a GPIO pin (PullUp/PullDown/None).
 pub struct GpioSetPullMode {
-    #[structopt(name = "PIN", help = "The GPIO pin to modify")]
+    /// The GPIO pin to modify.
     pub pin: String,
-    #[structopt(
-        name = "PULLMODE",
-        possible_values = &PullMode::variants(),
-        case_insensitive=true,
-        help = "The weak pull mode of the pin"
-    )]
+    /// The weak pull mode of the pin.
+    #[arg(value_name = "PULLMODE", value_enum, ignore_case = true)]
     pub pull_mode: PullMode,
 }
 
@@ -123,7 +117,7 @@ impl CommandDispatch for GpioSetPullMode {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport.capabilities()?.request(Capability::GPIO).ok()?;
         let gpio_pin = transport.gpio_pin(&self.pin)?;
         gpio_pin.set_pull_mode(self.pull_mode)?;
@@ -131,17 +125,23 @@ impl CommandDispatch for GpioSetPullMode {
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 /// Simultaneously set mode, pull and output value of a GPIO pin.
 pub struct GpioSet {
-    #[structopt(name = "PIN", help = "The GPIO pin to modify")]
+    /// The GPIO pin to modify.
     pub pin: String,
-    #[structopt(long, case_insensitive = true, help = "The I/O mode of the pin")]
+    /// The I/O mode of the pin.
+    #[arg(long, ignore_case = true)]
     pub mode: Option<PinMode>,
-    #[structopt(long, parse(try_from_str), help = "The value to write to the pin")]
+    /// The value to write to the pin, has effect only in PushPull and OpenDrain modes.
+    #[arg(long, value_parser = bool::from_str)]
     pub value: Option<bool>,
-    #[structopt(long, case_insensitive = true, help = "The weak pull mode of the pin")]
+    /// The weak pull mode of the pin.
+    #[arg(long, ignore_case = true)]
     pub pull: Option<PullMode>,
+    /// The analog value to write to the pin in volts, has effect only in AnalogOutput mode.
+    #[arg(long)]
+    pub voltage: Option<Voltage>,
 }
 
 impl CommandDispatch for GpioSet {
@@ -149,19 +149,76 @@ impl CommandDispatch for GpioSet {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport.capabilities()?.request(Capability::GPIO).ok()?;
         let gpio_pin = transport.gpio_pin(&self.pin)?;
 
-        gpio_pin.set(self.mode, self.value, self.pull)?;
+        gpio_pin.set(
+            self.mode,
+            self.value,
+            self.pull,
+            self.voltage.map(|v| v.as_volts() as f32),
+        )?;
         Ok(None)
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
+/// Reads a GPIO pin.
+pub struct GpioAnalogRead {
+    /// The GPIO pin to read.
+    pub pin: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct GpioAnalogReadResult {
+    pub pin: String,
+    pub volts: f32,
+}
+
+impl CommandDispatch for GpioAnalogRead {
+    fn run(
+        &self,
+        _context: &dyn Any,
+        transport: &TransportWrapper,
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
+        transport.capabilities()?.request(Capability::GPIO).ok()?;
+        let gpio_pin = transport.gpio_pin(&self.pin)?;
+        let volts = gpio_pin.analog_read()?;
+        Ok(Some(Box::new(GpioAnalogReadResult {
+            pin: self.pin.clone(),
+            volts,
+        })))
+    }
+}
+
+#[derive(Debug, Args)]
+/// Writes an analog voltage to a GPIO pin.
+pub struct GpioAnalogWrite {
+    /// The GPIO pin to write.
+    pub pin: String,
+    /// The analog value to write to the pin in volts, has effect only in AnalogOutput mode.
+    pub voltage: Voltage,
+}
+
+impl CommandDispatch for GpioAnalogWrite {
+    fn run(
+        &self,
+        _context: &dyn Any,
+        transport: &TransportWrapper,
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
+        transport.capabilities()?.request(Capability::GPIO).ok()?;
+        let gpio_pin = transport.gpio_pin(&self.pin)?;
+
+        gpio_pin.analog_write(self.voltage.as_volts() as f32)?;
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Args)]
 /// Apply a configuration-named pin strapping
 pub struct GpioApplyStrapping {
-    #[structopt(name = "NAME", help = "The pin strapping to apply")]
+    /// The pin strapping to apply.
     pub name: String,
 }
 
@@ -170,28 +227,29 @@ impl CommandDispatch for GpioApplyStrapping {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport.capabilities()?.request(Capability::GPIO).ok()?;
-        transport.apply_pin_strapping(&self.name)?;
+        transport.pin_strapping(&self.name)?.apply()?;
         Ok(None)
     }
 }
 
-#[derive(Debug, StructOpt, CommandDispatch)]
+#[derive(Debug, Subcommand, CommandDispatch)]
 pub enum GpioMonitoringCommand {
     Start(GpioMonitoringStart),
     Read(GpioMonitoringRead),
     Vcd(GpioMonitoringVcd),
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 /// Begin logic-analyzer style monitoring of a set of pins.
 pub struct GpioMonitoringStart {
-    #[structopt(
-        name = "PINS",
-        help = "The list of GPIO pins to monitor (space separated)"
-    )]
+    /// The list of GPIO pins to monitor (space separated).
     pub pins: Vec<String>,
+
+    /// Location of optional output file to record the vcd header information.
+    #[arg(short, long)]
+    pub outfile: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -212,7 +270,7 @@ impl CommandDispatch for GpioMonitoringStart {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport
             .capabilities()?
             .request(Capability::GPIO | Capability::GPIO_MONITORING)
@@ -226,6 +284,12 @@ impl CommandDispatch for GpioMonitoringStart {
                 .map(Rc::borrow)
                 .collect::<Vec<&dyn GpioPin>>(),
         )?;
+
+        // If vcd output file was was provided, record results there.
+        if let Some(file) = &self.outfile {
+            write_vcd_header(file, &self.pins, clock_nature, &resp)?;
+        }
+
         Ok(Some(Box::new(GpioMonitoringStartResult {
             clock_nature,
             initial_levels: resp
@@ -242,18 +306,20 @@ impl CommandDispatch for GpioMonitoringStart {
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 /// Retrieve logic-analyzer style monitoring events detected so far, on a set of pins.  Optionally
 /// continue monitoring, in which case `monitoring read` must be called again later.
 pub struct GpioMonitoringRead {
-    #[structopt(
-        name = "PINS",
-        help = "The list of GPIO pins being monitored (space separated)"
-    )]
+    /// The list of GPIO pins being monitored (space separated).
     pub pins: Vec<String>,
 
-    #[structopt(long, case_insensitive = true)]
+    #[arg(long)]
     pub continue_monitoring: bool,
+
+    /// Optional vcd file to append data to. Note it is important that the gpios are in the same
+    /// order from the gpio start command where the vcd header was written.
+    #[arg(short, long)]
+    outfile: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -278,7 +344,7 @@ impl CommandDispatch for GpioMonitoringRead {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport
             .capabilities()?
             .request(Capability::GPIO | Capability::GPIO_MONITORING)
@@ -292,6 +358,10 @@ impl CommandDispatch for GpioMonitoringRead {
                 .collect::<Vec<&dyn GpioPin>>(),
             self.continue_monitoring,
         )?;
+        // If vcd output file was specified, write data there.
+        if let Some(file) = &self.outfile {
+            append_vcd_data(file, &resp, !self.continue_monitoring)?;
+        }
         Ok(Some(Box::new(GpioMonitoringReadResult {
             events: resp
                 .events
@@ -307,23 +377,106 @@ impl CommandDispatch for GpioMonitoringRead {
     }
 }
 
-#[derive(Debug, StructOpt)]
+/// Write the VCD header data with the given inputs
+fn write_vcd_header(
+    file: &str,
+    pins: &[String],
+    clock_nature: ClockNature,
+    start_response: &MonitoringStartResponse,
+) -> Result<()> {
+    let file = File::create(file)?;
+    let mut writer = VcdWriter::new(file);
+    let version = super::version::VersionResponse::default();
+    let version_str = format!(
+        "opentitantool {} {}",
+        version.version.as_ref().map_or("<unknown>", String::as_str),
+        match version.clean {
+            Some(true) => "clean",
+            Some(false) => "modified",
+            None => "<unknown>",
+        }
+    );
+    let timescale_ps = match clock_nature {
+        ClockNature::Wallclock { resolution, .. } => {
+            Some(1_000_000_000_000u128 / resolution as u128)
+        }
+        ClockNature::Unspecified => None,
+    };
+    writer.write_header(&Header {
+        timescale_ps,
+        date: None,
+        version: Some(version_str),
+    })?;
+    let pin_info = pins
+        .iter()
+        .enumerate()
+        .map(|(n, name)| (format!("'{}", n), Some(name.to_string())))
+        .collect::<Vec<_>>();
+    writer.write_vardefs(&dump_vcd_wire_vardefs(String::from("logic"), pin_info))?;
+    let mut changes = vec![ValueChangeItem::Timestamp {
+        step: start_response.timestamp as u128,
+    }];
+    for (n, v) in start_response.initial_levels.iter().enumerate() {
+        let value = if *v {
+            ScalarValue::One
+        } else {
+            ScalarValue::Zero
+        };
+        changes.push(ValueChangeItem::Scalar {
+            identifier: format!("'{}", n),
+            value,
+        });
+    }
+    writer.write_value_change_section(&ValueChangeSection { changes }, 0u128)?;
+    writer.flush()?;
+    Ok(())
+}
+
+/// Appends the VCD data to the end of the file specified. Note the order of the gpios should
+/// be consistent between calls and match the order from the gpio start command.
+fn append_vcd_data(file: &str, read_response: &MonitoringReadResponse, last: bool) -> Result<()> {
+    let file = std::fs::OpenOptions::new().append(true).open(file)?;
+    let mut writer = VcdWriter::new(file);
+    let mut changes = Vec::new();
+    for event in &read_response.events {
+        changes.push(ValueChangeItem::Timestamp {
+            step: event.timestamp as u128,
+        });
+        let identifier = format!("'{}", event.signal_index);
+        let value = match event.edge {
+            Edge::Rising => ScalarValue::One,
+            Edge::Falling => ScalarValue::Zero,
+        };
+        changes.push(ValueChangeItem::Scalar { identifier, value });
+    }
+    // Output timestamp of final reading (all signals remained stable from the last edge until
+    // this time.)
+    if last {
+        writer.write_value_change_item(&ValueChangeItem::Timestamp {
+            step: read_response.timestamp as u128,
+        })?;
+    }
+    writer.write_value_change_section(&ValueChangeSection { changes }, 0u128)?;
+    writer.flush()?;
+    Ok(())
+}
+
+#[derive(Debug, Args)]
 /// Whereas `monitoring start` and `monitoring read` are meant for use by scripts, this
 /// `monitoring vcd` is intended for manual use by an operator.  It will stay in the foreground,
 /// collecting events until the user presses Ctrl-C.  A transcript will be written in the industry
 /// standard VCD format, which can be loaded into e.g. Pulseview (or probably also Saleae
 /// software), to get a logic analyzer view of what transpired.
 pub struct GpioMonitoringVcd {
-    #[structopt(
-        name = "PINS",
-        help = "The list of GPIO pins to monitor (space separated)"
-    )]
+    /// The list of GPIO pins to monitor (space separated).
     pub pins: Vec<String>,
 
-    #[structopt(short, long, help = "Output file")]
+    /// Output file.
+    #[arg(short, long)]
     outfile: String,
 
-    #[structopt(short, long, help = "Do not print start end exit messages.")]
+    /// Do not print start end exit messages.
+    #[arg(short, long)]
     quiet: bool,
 }
 
@@ -332,14 +485,13 @@ impl CommandDispatch for GpioMonitoringVcd {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport
             .capabilities()?
             .request(Capability::GPIO | Capability::GPIO_MONITORING)
             .ok()?;
         let gpio_monitoring = transport.gpio_monitoring()?;
         let gpio_pins = transport.gpio_pins(&self.pins)?;
-        let mut file = File::create(&self.outfile)?;
 
         if !self.quiet {
             eprintln!("Dumping events to {}", &self.outfile);
@@ -349,54 +501,19 @@ impl CommandDispatch for GpioMonitoringVcd {
         // not ideal, it would have been better to catch the SIGINT signal, but the mio_signals
         // package is not compatible with the way that our rusb library uses background threads.)
         // The tty guard will restore the console settings when it goes out of scope.
-        let mut stdin = std::io::stdin();
-        let _stdin_guard = if isatty(stdin.as_raw_fd())? {
-            let mut guard = TtyModeGuard::new(stdin.as_raw_fd())?;
-            guard.set_raw_mode()?;
-            Some(guard)
-        } else {
-            None
-        };
+        let mut stdin = RawTty::new(std::io::stdin())?;
 
         // Inform the transport that we want to monitor a set of pins, and write a file header
         // with the names of each of the monitored signals.
-        let clock_nature = gpio_monitoring.get_clock_nature()?;
         let initial = gpio_monitoring.monitoring_start(
             &gpio_pins
                 .iter()
                 .map(Rc::borrow)
                 .collect::<Vec<&dyn GpioPin>>(),
         )?;
-        writeln!(&mut file, "$version")?;
-        let properties = super::version::get_volatile_status();
-        writeln!(
-            &mut file,
-            "   opentitantool {} {} {}",
-            properties.get("BUILD_GIT_VERSION").unwrap(),
-            properties.get("BUILD_SCM_STATUS").unwrap(),
-            properties.get("BUILD_TIMESTAMP").unwrap().parse::<i64>()?
-        )?;
-        writeln!(&mut file, "$end")?;
-        match clock_nature {
-            ClockNature::Wallclock { resolution, .. } => {
-                writeln!(
-                    &mut file,
-                    "$timescale {}ps $end",
-                    1000000000000u64 / resolution
-                )?;
-            }
-            ClockNature::Unspecified => (),
-        }
-        writeln!(&mut file, "$scope module logic $end")?;
-        for (n, pin) in self.pins.iter().enumerate() {
-            writeln!(&mut file, "$var wire 1 '{} {} $end", n, pin)?;
-        }
-        writeln!(&mut file, "$upscope $end")?;
-        writeln!(&mut file, "$enddefinitions $end")?;
-        writeln!(&mut file, "#{}", initial.timestamp)?;
-        for (n, v) in initial.initial_levels.iter().enumerate() {
-            writeln!(&mut file, "{}'{}", if *v { 1 } else { 0 }, n)?;
-        }
+
+        let clock_nature = gpio_monitoring.get_clock_nature()?;
+        write_vcd_header(&self.outfile, &self.pins, clock_nature, &initial)?;
 
         // Now loop indefinitely, retrieving events from the internal queue of the transport and
         // printing them to the output file.
@@ -409,25 +526,14 @@ impl CommandDispatch for GpioMonitoringVcd {
                     .collect::<Vec<&dyn GpioPin>>(),
                 true,
             )?;
-            for event in &resp.events {
-                writeln!(&mut file, "#{}", event.timestamp)?;
-                writeln!(
-                    &mut file,
-                    "{}'{}",
-                    match event.edge {
-                        Edge::Rising => 1,
-                        Edge::Falling => 0,
-                    },
-                    event.signal_index
-                )?;
-            }
+            append_vcd_data(&self.outfile, &resp, false)?;
             eprint!("\u{8}{}", ['/', '-', '\\', '|'][loop_count & 3usize]);
             let delay = if resp.events.is_empty() {
                 Duration::from_millis(10)
             } else {
                 Duration::from_millis(0)
             };
-            if file::wait_fd_read_timeout(stdin.as_raw_fd(), delay).is_ok() {
+            if file::wait_read_timeout(&stdin, delay).is_ok() {
                 let mut buf = [0u8; 1];
                 let len = stdin.read(&mut buf)?;
                 if len == 1 && buf[0] == 3 {
@@ -447,30 +553,16 @@ impl CommandDispatch for GpioMonitoringVcd {
                 .collect::<Vec<&dyn GpioPin>>(),
             false,
         )?;
-        for event in &resp.events {
-            writeln!(&mut file, "#{}", event.timestamp)?;
-            writeln!(
-                &mut file,
-                "{}'{}",
-                match event.edge {
-                    Edge::Rising => 1,
-                    Edge::Falling => 0,
-                },
-                event.signal_index
-            )?;
-        }
-        // Output timestamp of final reading (all signals remained stable from the last edge until
-        // this time.)
-        writeln!(&mut file, "#{}", resp.timestamp)?;
+        append_vcd_data(&self.outfile, &resp, true)?;
         eprintln!("\r");
         Ok(None)
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 /// Remove a configuration-named pin strapping
 pub struct GpioRemoveStrapping {
-    #[structopt(name = "NAME", help = "The pin strapping to release")]
+    /// The pin strapping to release.
     pub name: String,
 }
 
@@ -479,16 +571,16 @@ impl CommandDispatch for GpioRemoveStrapping {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport.capabilities()?.request(Capability::GPIO).ok()?;
-        transport.remove_pin_strapping(&self.name)?;
+        transport.pin_strapping(&self.name)?.remove()?;
         Ok(None)
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub struct GpioMonitoring {
-    #[structopt(subcommand)]
+    #[command(subcommand)]
     command: GpioMonitoringCommand,
 }
 
@@ -497,13 +589,143 @@ impl CommandDispatch for GpioMonitoring {
         &self,
         context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         self.command.run(context, transport)
     }
 }
 
+#[derive(Debug, Args)]
+/// Manipulates a given set of GPIO pins, clocking out successive samples at a given frequency.
+pub struct GpioBitbang {
+    /// The list of GPIO pins to manipulate (space separated).
+    pub pins: Vec<String>,
+
+    #[arg(long, value_parser = opentitanlib::util::bitbang::parse_clock_frequency)]
+    pub clock: Duration,
+
+    #[arg(short, long)]
+    pub sequence: String,
+
+    #[arg(short, long)]
+    pub all: bool,
+}
+
+#[derive(serde::Serialize)]
+pub struct GpioBitbangResult {
+    /// Samples of input, gathered at particular times while the waveform was generated, according
+    /// to instructions in the `sequence` argument.
+    samples: HashMap<String, String>,
+
+    /// Transcript of logic levels of all affected pins at each clock tick.  Only populated if
+    /// `--all` was requested.
+    all: Vec<String>,
+}
+
+/// Composes a string of '0' and '1', with the least significant bit first in the string (opposite
+/// of ordinary numbers).  This is used to print logic levels of the set of pins listed on the
+/// command line.
+fn binary_string(data: u8, num_digits: usize) -> String {
+    let mut val = String::new();
+    for i in 0..num_digits {
+        val += if data & (1 << i) != 0 { "1" } else { "0" };
+    }
+    val
+}
+
+impl CommandDispatch for GpioBitbang {
+    fn run(
+        &self,
+        _context: &dyn Any,
+        transport: &TransportWrapper,
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
+        transport
+            .capabilities()?
+            .request(Capability::GPIO_BITBANGING)
+            .ok()?;
+        let gpio_bitbanging = transport.gpio_bitbanging()?;
+        let gpio_pins = transport.gpio_pins(&self.pins)?;
+        let mut outbound_data_accumulator: Vec<u8> = Vec::new();
+        let mut inbound_data_accumulator: Vec<u8> = Vec::new();
+        let (sequence, output_map) = opentitanlib::util::bitbang::parse_sequence(
+            &self.sequence,
+            gpio_pins.len(),
+            self.clock,
+            &mut inbound_data_accumulator,
+            &mut outbound_data_accumulator,
+        )?;
+        gpio_bitbanging.run(
+            &gpio_pins
+                .iter()
+                .map(Rc::borrow)
+                .collect::<Vec<&dyn GpioPin>>(),
+            self.clock,
+            sequence,
+        )?;
+        let mut samples = HashMap::new();
+        for (label, byte_index) in output_map {
+            let sampled_data = inbound_data_accumulator[byte_index];
+            samples.insert(
+                label.to_string(),
+                binary_string(sampled_data, gpio_pins.len()),
+            );
+        }
+        let mut all = Vec::new();
+        if self.all {
+            for sampled_data in inbound_data_accumulator {
+                all.push(binary_string(sampled_data, gpio_pins.len()));
+            }
+        }
+        Ok(Some(Box::new(GpioBitbangResult { samples, all })))
+    }
+}
+
+#[derive(Debug, Args)]
+/// Manipulates a given set of analog output pins, clocking out successive samples at a given
+/// frequency.
+pub struct GpioDacBang {
+    /// The list of analog output pins to manipulate (space separated).
+    pub pins: Vec<String>,
+
+    #[arg(long, value_parser = opentitanlib::util::bitbang::parse_clock_frequency)]
+    pub clock: Duration,
+
+    #[arg(short, long)]
+    pub sequence: String,
+}
+
+impl CommandDispatch for GpioDacBang {
+    fn run(
+        &self,
+        _context: &dyn Any,
+        transport: &TransportWrapper,
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
+        transport
+            .capabilities()?
+            .request(Capability::GPIO_BITBANGING)
+            .ok()?;
+        let gpio_bitbanging = transport.gpio_bitbanging()?;
+        let gpio_pins = transport.gpio_pins(&self.pins)?;
+        let mut data_accumulator: Vec<f32> = Vec::new();
+        let sequence = opentitanlib::util::bitbang::parse_dac_sequence(
+            &self.sequence,
+            gpio_pins.len(),
+            self.clock,
+            &mut data_accumulator,
+        )?;
+        gpio_bitbanging.dac_run(
+            &gpio_pins
+                .iter()
+                .map(Rc::borrow)
+                .collect::<Vec<&dyn GpioPin>>(),
+            self.clock,
+            sequence,
+        )?;
+        Ok(None)
+    }
+}
+
 /// Commands for manipulating GPIO pins.
-#[derive(Debug, StructOpt, CommandDispatch)]
+#[derive(Debug, Subcommand, CommandDispatch)]
 pub enum GpioCommand {
     Apply(GpioApplyStrapping),
     Remove(GpioRemoveStrapping),
@@ -512,5 +734,9 @@ pub enum GpioCommand {
     SetMode(GpioSetMode),
     SetPullMode(GpioSetPullMode),
     Set(GpioSet),
+    AnalogRead(GpioAnalogRead),
+    AnalogWrite(GpioAnalogWrite),
     Monitoring(GpioMonitoring),
+    Bitbang(GpioBitbang),
+    DacBang(GpioDacBang),
 }

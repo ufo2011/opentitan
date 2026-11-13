@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-import collections
 import datetime
 import io
 import json
 import logging
 import os.path
 import re
+import ssl
 import subprocess
 import sys
 import tarfile
 import time
 import urllib.request
 import xml.etree.ElementTree
+from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Set
-
-import jsonschema
+from typing import Dict
 
 # The schema version used for legacy cache entries, JSON files missing a version
 # entry, and entries that use a higher version of the schema than supported here
 # (attempted in case there is forwards compatibility).
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION_MIN = 2
+MANIFEST_SCHEMA_VERSION_MAX = 3
 
 # Default location of the bitstreams cache.
 CACHE_DIR = '~/.cache/opentitan-bitstreams'
@@ -36,16 +36,83 @@ XMLNS = {'': 'http://doc.s3.amazonaws.com/2006-03-01'}
 # Manifest schema directory
 MANIFESTS_DIR = os.path.dirname(__file__) if __file__ else os.path.dirname(sys.argv[0])
 
+# Conventional locations of the system CA bundle, in the order we try them.
+# Used only as a fallback; see SslContext() below.
+CA_BUNDLE_PATHS = (
+    '/etc/ssl/certs/ca-certificates.crt',  # Debian, Ubuntu, Alpine, Arch
+    '/etc/pki/tls/cert.pem',               # RHEL, Rocky, AlmaLinux, Fedora
+    '/etc/ssl/ca-bundle.pem',              # openSUSE
+    '/etc/ssl/cert.pem',                   # FreeBSD, some macOS setups
+)
+
+
+@lru_cache(maxsize=None)
+def SslContext():
+    """Return an SSL context that has a usable CA trust store.
+
+    Under Bazel this script runs on the hermetic CPython that rules_python
+    downloads, which bundles its own OpenSSL built with Debian-style CA paths
+    (cafile unset, capath /etc/ssl/certs). RHEL-family distributions populate
+    neither, so the trust store is empty and every request fails with
+    CERTIFICATE_VERIFY_FAILED. Debian and Ubuntu match those paths and are
+    unaffected, which is why this only appears on some hosts.
+
+    Fall back to the first system bundle we can find. SSL_CERT_FILE and
+    SSL_CERT_DIR still take precedence, being honoured by
+    ssl.create_default_context() itself.
+    """
+    ctx = ssl.create_default_context()
+
+    # A populated store means the defaults (or SSL_CERT_FILE) already work.
+    # This counts only eagerly-loaded certificates, so a capath-only store
+    # reports zero; loading a bundle is then redundant but harmless, as it can
+    # only add trust anchors.
+    if ctx.cert_store_stats()['x509_ca'] > 0:
+        return ctx
+
+    for path in CA_BUNDLE_PATHS:
+        if os.path.exists(path):
+            try:
+                ctx.load_verify_locations(cafile=path)
+            except OSError as e:
+                logging.debug(f"Could not load CA bundle {path}: {e}")
+                continue
+            logging.debug(f"Loaded CA bundle from {path}")
+            return ctx
+
+    logging.warning(
+        "No usable CA trust store was found; HTTPS requests are likely to "
+        "fail. Set SSL_CERT_FILE to your system CA bundle to override.")
+    return ctx
+
+
+# Required designs
+KNOWN_DESIGNS = {
+    "chip_earlgrey_cw340": {
+        "bitstream": "@//hw/bitstream/vivado:fpga_cw340_stub_rom",
+        "mmi": "@//hw/bitstream/vivado:cw340_mmi",
+    },
+}
+
 parser = argparse.ArgumentParser(
     description='Bitstream Downloader & Cache manager')
 parser.add_argument('--cache', default=CACHE_DIR, help='Cache directory name')
+parser.add_argument('--create-symlink', default=True,
+                    action=argparse.BooleanOptionalAction,
+                    help='Create symlink to cache directory')
 parser.add_argument('--latest-update',
                     default='latest.txt',
                     help='Last time the cache was updated')
+parser.add_argument('--branch',
+                    default="master",
+                    help='Upstream git branch to search for bitstreams.')
 parser.add_argument('--bucket-url', default=BUCKET_URL, help='GCP Bucket URL')
 parser.add_argument('--build-file',
                     default='BUILD.bazel',
-                    help='Name of the genrated BUILD file')
+                    help='Name of the generated BUILD file')
+parser.add_argument('--watch-file',
+                    default=None,
+                    help='Path to output files to watch')
 parser.add_argument('--list',
                     default=False,
                     action=argparse.BooleanOptionalAction,
@@ -79,13 +146,40 @@ class BitstreamCache(object):
         if bucket_url[-1] != '/':
             bucket_url += '/'
         self.bucket_url = bucket_url
-        cachedir = os.path.expanduser(cachedir)
+        cachedir = os.path.abspath(os.path.expanduser(cachedir))
         self.cachedir = os.path.join(cachedir, 'cache')
         latest_update = os.path.join(cachedir,
                                      os.path.expanduser(latest_update))
         self.latest_update = latest_update
         self.offline = offline
         self.available = {}
+        self.watch_list = []
+        self.schema_v2 = None
+        self.schema = None
+
+    def ValidateManifestV2(self, manifest: str):
+        try:
+            import jsonschema
+        except ImportError:
+            logging.warning("jsonschema not found, skipping schema validation")
+        else:
+            if not self.schema_v2:
+                schema_path = os.path.join(MANIFESTS_DIR, "bitstreams_manifest_v2.schema.json")
+                with open(schema_path) as schema_file:
+                    self.schema_v2 = json.load(schema_file)
+            jsonschema.validate(manifest, self.schema_v2)
+
+    def ValidateManifest(self, manifest: str):
+        try:
+            import jsonschema
+        except ImportError:
+            logging.warning("jsonschema not found, skipping schema validation")
+        else:
+            if not self.schema:
+                schema_path = os.path.join(MANIFESTS_DIR, "bitstreams_manifest.schema.json")
+                with open(schema_path) as schema_file:
+                    self.schema = json.load(schema_file)
+            jsonschema.validate(manifest, self.schema)
 
     @staticmethod
     def MakeWithDefaults() -> 'BitstreamCache':
@@ -95,10 +189,62 @@ class BitstreamCache(object):
                                args.offline)
         return cache
 
-    def InitRepository(self):
+    def InitRepository(self, create_symlink: bool):
         """Create the cache directory and symlink it into the bazel repository dir."""
         os.makedirs(self.cachedir, exist_ok=True)
-        os.symlink(self.cachedir, 'cache')
+        if create_symlink:
+            os.symlink(self.cachedir, 'cache')
+
+    def ResolveGitRef(self, repodir: str, ref: str):
+        """Resolve Git references and add related Git files to watch list.
+        This is conceptually equivalent to `git rev-parse <ref>` but it makes effort to figure
+        out files to watch.
+        """
+
+        # Object ID (possibly in short form)
+        if re.search(r'^[0-9A-Fa-f]{4,}$', ref):
+            return subprocess.check_output(
+                ['git', 'rev-parse', ref],
+                universal_newlines=True,
+                cwd=repodir).strip()
+
+        # For short form of references, expand it to long form
+        if not ref.endswith("HEAD") and not ref.startswith("refs/"):
+            ref = subprocess.check_output(
+                ['git', 'rev-parse', '--symbolic-full-name', ref],
+                universal_newlines=True,
+                cwd=repodir).strip()
+
+        # Resolve git path. This is not simply `<repodir>/.git/<ref>` when worktrees are used.
+        path = subprocess.check_output(
+            ['git', 'rev-parse', '--path-format=absolute', '--git-path', ref],
+            universal_newlines=True,
+            cwd=repodir).strip()
+
+        self.watch_list.append(path)
+
+        try:
+            with open(path) as f:
+                content = f.read().strip()
+        except FileNotFoundError:
+            # The ref may be stored in packed-refs rather than as a loose file.
+            # Add packed-refs to watch list and resolve via git rev-parse.
+            packed_refs = subprocess.check_output(
+                ['git', 'rev-parse', '--path-format=absolute', '--git-path', 'packed-refs'],
+                universal_newlines=True,
+                cwd=repodir).strip()
+            if packed_refs not in self.watch_list:
+                self.watch_list.append(packed_refs)
+            return subprocess.check_output(
+                ['git', 'rev-parse', ref],
+                universal_newlines=True,
+                cwd=repodir).strip()
+
+        # For refs, recurse into contents.
+        if content.startswith('ref: '):
+            return self.ResolveGitRef(repodir, content.removeprefix('ref: '))
+
+        return content
 
     def Touch(self, key):
         """Set the latest known bitstream.
@@ -137,30 +283,49 @@ class BitstreamCache(object):
         query = urllib.parse.urlencode(kwargs)
         url = url_parts._replace(path=path, query=query).geturl()
 
-        response = urllib.request.urlopen(url)
-        return response.read()
+        # Attempt to get from the URL, with 4 attempts (3 retries)
+        # and exponential backoff (1s, 2s, 4s, 8s).
+        max_attempts = 4
+        attempt = 0
+        wait_time = 1.0
+        while attempt < max_attempts:
+            attempt += 1
+            try:
+                response = urllib.request.urlopen(url, context=SslContext())
+                return response.read()
+            except urllib.error.HTTPError as e:
+                if e.code not in (403, 408, 429, 500, 502, 503, 504):
+                    logging.error(
+                        f"Request to {url} failed with status code {e.code}")
+                    sys.exit(1)
+                elif attempt >= max_attempts:
+                    logging.error(f"Requests to {url} failed afer retries: {e}")
+                    sys.exit(1)
+            time.sleep(wait_time)
+            wait_time *= 2.0
 
-    def GetBitstreamsAvailable(self, refresh):
+    def GetBitstreamsAvailable(self, branch, refresh, load_latest_update=True):
         """Inventory which bitstreams are available.
 
         Args:
             refresh: bool; whether to refresh from the network.
+            load_latest_update: bool; whether to load the latest_update file
         """
         if not refresh:
-            for (_, dirnames, _) in os.walk('cache'):
-                for d in dirnames:
-                    self.available[d] = 'local'
-            try:
-                with open(self.latest_update, 'rt') as f:
-                    self.available['latest'] = f.read().strip()
-            except FileNotFoundError:
-                if self.offline:
-                    logging.error(
-                        'Must pre-initialize bitstream cache in offline mode.')
-                else:
-                    logging.error(
-                        f'Bitstream cache missing {self.latest_update}.')
-                sys.exit(1)
+            for direntry in os.scandir('cache'):
+                self.available[direntry.name] = 'local'
+            if load_latest_update:
+                try:
+                    with open(self.latest_update, 'rt') as f:
+                        self.available['latest'] = f.read().strip()
+                except FileNotFoundError:
+                    if self.offline:
+                        logging.error(
+                            'Must pre-initialize bitstream cache in offline mode.')
+                    else:
+                        logging.error(
+                            f'Bitstream cache missing {self.latest_update}.')
+                    sys.exit(1)
             return
 
         # Fetching the list of all entries in the cache may require multiple
@@ -186,7 +351,7 @@ class BitstreamCache(object):
             else:
                 break
 
-        latest = self.Get('master/latest.txt').decode('utf-8').split('\n')
+        latest = self.Get(f'{branch}/latest.txt').decode('utf-8').split('\n')
         self.available['latest'] = latest[1]
 
     def GetClosest(self, repodir, key):
@@ -200,6 +365,9 @@ class BitstreamCache(object):
         """
         if key in self.available:
             return key
+
+        key = self.ResolveGitRef(repodir, key)
+
         commits = []
         lines = subprocess.check_output(
             ['git', 'log', '--oneline', '--no-abbrev-commit', key],
@@ -254,7 +422,7 @@ class BitstreamCache(object):
         if not os.path.exists(self.latest_update):
             self.Touch(key)
 
-    def _GenerateLegacyManifest(self, key: str, files: [str]) -> Dict:
+    def _GenerateMemoryMapFromV2(self, key: str, mmi_v2: Dict) -> Dict:
         """Generate a manifest for old cache entries without them.
 
         Args:
@@ -263,66 +431,70 @@ class BitstreamCache(object):
         Returns:
             A dictionary mapping file paths to manifest entries
         """
-        output_files = dict()
-        legacy_files = {
-            "lowrisc_systems_chip_earlgrey_cw310_0.1.bit.orig": {
-                "buildTarget": "//hw/bitstream/vivado:fpga_cw310",
-                "outputInfo": {
-                    "@type": "bitstreamInfo",
-                    "design": "chip_earlgrey_cw310"
-                }
-            },
-            "otp.mmi": {
-                "buildTarget": "//hw/bitstream/vivado:fpga_cw310",
-                "outputInfo": {
-                    "@type": "memoryMapInfo",
-                    "design": "chip_earlgrey_cw310",
-                    "memoryId": "otp"
-                }
-            },
-            "rom.mmi": {
-                "buildTarget": "//hw/bitstream/vivado:fpga_cw310",
-                "outputInfo": {
-                    "@type": "memoryMapInfo",
-                    "design": "chip_earlgrey_cw310",
-                    "memoryId": "rom"
-                }
-            },
-            "chip_earlgrey_cw310_hyperdebug/"
-            "lowrisc_systems_chip_earlgrey_cw310_hyperdebug_0.1.bit": {
-                "buildTarget": "//hw/bitstream/vivado:fpga_cw310_hyperdebug",
-                "outputInfo": {
-                    "@type": "bitstreamInfo",
-                    "design": "chip_earlgrey_cw310_hyperdebug"
-                }
-            },
-            "chip_earlgrey_cw310_hyperdebug/otp.mmi": {
-                "buildTarget": "//hw/bitstream/vivado:fpga_cw310_hyperdebug",
-                "outputInfo": {
-                    "@type": "memoryMapInfo",
-                    "design": "chip_earlgrey_cw310_hyperdebug",
-                    "memoryId": "otp"
-                }
-            },
-            "chip_earlgrey_cw310_hyperdebug/rom.mmi": {
-                "buildTarget": "//hw/bitstream/vivado:fpga_cw310_hyperdebug",
-                "outputInfo": {
-                    "@type": "memoryMapInfo",
-                    "design": "chip_earlgrey_cw310_hyperdebug",
-                    "memoryId": "rom"
-                }
-            },
+        filepath = None
+        memories = []
+        cache_path = os.path.join("cache", key)
+        merged_tree = None
+        merged_root = None
+        for memory, info in mmi_v2.items():
+            mmi_path = os.path.join(cache_path, info["file"])
+            mmi_tree = xml.etree.ElementTree.parse(mmi_path)
+            mmi_root = mmi_tree.getroot()
+            assert mmi_root.tag == "MemInfo"
+            processor_elem = mmi_root.findall("Processor")
+            assert len(processor_elem) == 1
+            processor_elem = processor_elem[0]
+            # Adjust the Processor element's InstPath to use the memory ID
+            processor_elem.attrib["InstPath"] = memory
+            memories.append(memory)
+
+            if filepath is None:
+                filepath = os.path.dirname(mmi_path)
+                filepath = os.path.join(filepath, "memories.mmi")
+            if merged_root is None:
+                merged_tree = mmi_tree
+                merged_root = mmi_root
+                continue
+            else:
+                merged_root.append(processor_elem)
+
+        # The Config element must be at the end
+        config_elem = merged_root.findall("Config")
+        assert len(config_elem) == 1
+        config_elem = config_elem[0]
+        merged_root.remove(config_elem)
+        merged_root.append(config_elem)
+
+        # Write the merged XML file
+        merged_tree.write(filepath)
+
+        # Rewrite memory map info in v3 format
+        memory_map_info = {
+            "file": os.path.relpath(filepath, cache_path),
+            "memories": memories,
         }
+        return memory_map_info
 
-        for legacy_file in legacy_files:
-            if os.path.join("cache", key, legacy_file) in files:
-                output_files[legacy_file] = legacy_files[legacy_file]
+    def _GenerateV3ManifestFromV2(self, key: str, manifest: Dict) -> Dict:
+        """Generate a manifest for cache entries in old v2 format.
 
-        manifest = {"schemaVersion": MANIFEST_SCHEMA_VERSION, "buildId": key,
-                    "outputFiles": output_files}
+        Aggregates MMI files into one merged file, per v3 requirements.
+
+        Args:
+            manifest: The v2 manifest in the cache entry
+        Returns:
+            An updated manifest Dict with v3 memory map info
+        """
+        self.ValidateManifestV2(manifest)
+
+        for design, metadata in manifest["designs"].items():
+            memory_map_info = metadata["memory_map_info"]
+            memory_map_info = self._GenerateMemoryMapFromV2(key, memory_map_info)
+            metadata["memory_map_info"] = memory_map_info
+        manifest["schema_version"] = 3
         return manifest
 
-    def GetFromCache(self, key: str) -> Dict:
+    def GetFromCache(self, key: str) -> (Dict, Path):
         """Get the requested bitstream files manifest.
 
         Args:
@@ -336,63 +508,32 @@ class BitstreamCache(object):
             files = self._GetFromLocal(key)
 
         manifest_path = os.path.join("cache", key, "manifest.json")
-        if manifest_path not in files:
-            logging.warning("No manifest found."
-                            " Attempting to generate manifest from legacy file"
-                            " paths.")
-            return self._GenerateLegacyManifest(key, files)
-
         with open(manifest_path, "r") as manifest_file:
             manifest = json.load(manifest_file)
 
-        if "schemaVersion" not in manifest:
-            logging.error("schema is missing a version number."
-                          " Generating legacy manifest instead...")
-            return self._GenerateLegacyManifest(key, files)
+        assert "schema_version" in manifest
+        schema_version = int(manifest["schema_version"])
+        assert schema_version >= MANIFEST_SCHEMA_VERSION_MIN
+        assert schema_version <= MANIFEST_SCHEMA_VERSION_MAX
 
-        return manifest
+        if schema_version == 2:
+            return (self._GenerateV3ManifestFromV2(key, manifest), None)
+        return (manifest, manifest_path)
 
     @staticmethod
     def _GetDateTimeStr():
         return datetime.datetime.now().isoformat()
 
-    def _ConstructBazelString(self, build_file: Path, key: str) -> str:
-        # If `key` passed in is "latest", this updates the `key` to be the hash
-        # that "latest" points to.
-        if key == 'latest':
-            key = self.available['latest']
+    @staticmethod
+    def _WriteSubstituteManifest(contents: Dict, path: Path):
+        with open(path, "w") as manifest_file:
+            json.dump(contents, manifest_file, indent=True)
 
-        manifest = self.GetFromCache(key)
-        designs = collections.defaultdict(dict)
-        if manifest["schemaVersion"] > MANIFEST_SCHEMA_VERSION:
-            logging.warning("Warning: Manifest is newer than available schemas")
-            logging.warning("Will try parsing an available schema with highest version")
-            manifest["schemaVersion"] = MANIFEST_SCHEMA_VERSION
-
-        if manifest["schemaVersion"] == 1:
-            schema_path = os.path.join(MANIFESTS_DIR, "bitstreams_manifest.schema.json")
-            with open(schema_path) as schema_file:
-                schema = json.load(schema_file)
-            jsonschema.validate(manifest, schema)
-            output_files = manifest["outputFiles"]
-            for output in output_files:
-                metadata = output_files[output]["outputInfo"]
-                design_name = metadata["design"]
-                design = designs[design_name]
-
-                if metadata["@type"] == "bitstreamInfo":
-                    design["bitstream"] = output
-                elif metadata["@type"] == "memoryMapInfo":
-                    mmi_id = metadata["memoryId"] + "_mmi"
-                    if mmi_id in design:
-                        logging.error("Unexpected duplicate memoryId " + metadata["memoryId"])
-                        sys.exit(1)
-                    design[mmi_id] = output
-
+    def _ConstructBazelString(self, build_file: Path, default_key: str) -> str:
         bazel_lines = [
             '# This file was autogenerated. Do not edit!',
             '# Built at {}.'.format(BitstreamCache._GetDateTimeStr()),
-            '# Configured for bitstream: {}'.format(key),
+            '# Configured for bitstream: {}'.format(default_key),
             '',
             'package(default_visibility = ["//visibility:public"])',
             '',
@@ -409,37 +550,109 @@ class BitstreamCache(object):
                 '',
             ]
 
-        used_target_names: Set[str] = set()
+        # Only consider local entries and the requested default key.
+        local_cache_entries = [
+            entry_name for entry_name in sorted(self.available.keys())
+            if self.available[entry_name] == "local" or entry_name == default_key]
+        # First, we create a set of filegroups for each available entry in the cache.
+        default_design = set()
+        for entry_name in local_cache_entries:
+            cache_base_dir = os.path.join("cache", entry_name)
+            # Load manifest.
+            (manifest, manifest_path) = self.GetFromCache(entry_name)
+            self.ValidateManifest(manifest)
+            if manifest_path is None:
+                # Write substitute manifest if none came with the cache entry.
+                manifest_path = os.path.join(cache_base_dir,
+                                             "substitute_manifest.json")
+                abs_manifest_path = os.path.join(self.cachedir, entry_name,
+                                                 "substitute_manifest.json")
+                self._WriteSubstituteManifest(manifest, abs_manifest_path)
 
-        cache_base_dir = os.path.join("cache", key)
-        for design_name in sorted(designs.keys()):
-            design = designs[design_name]
-            if "bitstream" not in design:
-                error_msg_lines = [
-                    "Could not find the bitstreams to generate a BUILD file:" +
-                    repr(build_file),
-                    "in design " + design_name + ":" + repr(design),
-                    "using key:" + repr(key),
+            for design_name, metadata in manifest["designs"].items():
+                if entry_name == default_key:
+                    default_design.add(design_name)
+                bazel_lines += filegroup_lines(
+                    f"cache_{entry_name}_{design_name}_bitstream",
+                    os.path.join(cache_base_dir, metadata["bitstream"]["file"]),
+                )
+                bazel_lines += filegroup_lines(
+                    f'cache_{entry_name}_{design_name}_mmi',
+                    os.path.join(cache_base_dir, metadata["memory_map_info"]["file"]),
+                )
+
+            bazel_lines += filegroup_lines(
+                f'cache_{entry_name}_manifest',
+                manifest_path,
+            )
+
+            # The following names cannot be used because they have a special meaning.
+            assert entry_name not in ["skip", "vivado"], \
+                "bitstream cache entries cannot be named 'skip' or 'vivado'"
+            # Also create a config setting to match the 'bitstream' define against
+            # the entry name
+            bazel_lines += [
+                'config_setting(',
+                f'    name = "bitstream_{entry_name}",',
+                '    define_values = {',
+                f'        "bitstream": "{entry_name}",',
+                '    },',
+                ')',
+                '',
+            ]
+
+        # Finally, create the final targets which point to the selected cache entry.
+        for design_name in sorted(KNOWN_DESIGNS.keys()):
+            for target_ext, alias in KNOWN_DESIGNS[design_name].items():
+                bazel_lines += [
+                    'alias(',
+                    f'    name = "{design_name}_{target_ext}",',
+                    '    actual = select({',
                 ]
-                logging.error('\n'.join(error_msg_lines))
-                sys.exit(1)
+                for entry_name in local_cache_entries:
+                    cache_entry_name = f'cache_{entry_name}_{design_name}_{target_ext}'
+                    bazel_lines += [
+                        f'            ":bitstream_{entry_name}": ":{cache_entry_name}",'
+                    ]
+                # By default, we point to the selected design, unless there is none.
+                # To avoid hard to debug problems, we match the default against "gcp" so that
+                # requesting a non-existent bitstream does not silently fallback to default.
+                default_cache_entry_name = f':cache_{default_key}_{design_name}_{target_ext}' \
+                    if design_name in default_design else alias
+                bazel_lines += [
+                    f'            "@lowrisc_opentitan//hw/bitstream:bitstream_gcp": "{default_cache_entry_name}",',  # noqa: E501
+                    '        },',
+                    '        no_match_error = "the requested bitstream was not found in the cache",',  # noqa: E501
+                    '    ),',
+                    ')',
+                    ''
+                ]
 
-            for target in sorted(design.keys()):
-                target_file = os.path.join(cache_base_dir, design[target])
-                target_name = "_".join([design_name, target])
-
-                if target_name in used_target_names:
-                    logging.error(
-                        "Target name {} for file {} would collide with another target"
-                        .format(repr(target_name), repr(target_file)))
-                    sys.exit(1)
-                used_target_names.add(target_name)
-
-                bazel_lines += filegroup_lines(target_name, target_file)
+        # Create an alias for the manifest.
+        bazel_lines += [
+            'alias(',
+            '    name = "manifest",',
+            '    actual = select({',
+        ]
+        for entry_name in local_cache_entries:
+            cache_entry_name = f'cache_{entry_name}_manifest'
+            bazel_lines += [
+                f'            ":bitstream_{entry_name}": ":{cache_entry_name}",'
+            ]
+        # Same as above.
+        default_cache_entry_name = f':cache_{default_key}_manifest'
+        bazel_lines += [
+            f'            "@lowrisc_opentitan//hw/bitstream:bitstream_gcp": "{default_cache_entry_name}",',  # noqa: E501
+            '        },',
+            '        no_match_error = "the requested bitstream was not found in the cache",',  # noqa: E501
+            '    ),',
+            ')',
+            ''
+        ]
 
         return '\n'.join(bazel_lines)
 
-    def WriteBuildFile(self, build_file: Path, key: str) -> str:
+    def WriteBazelFiles(self, build_file: Path, key: str) -> str:
         """Write a BUILD file for the requested bitstream files.
 
         Args:
@@ -448,12 +661,15 @@ class BitstreamCache(object):
         Returns:
             Either `key` or the corresponding commit hash if `key` is 'latest'.
         """
+        # If `key` passed in is "latest", this updates the `key` to be the hash
+        # that "latest" points to.
+        if key == 'latest':
+            key = self.available['latest']
+
         with open(build_file, 'wt') as f:
             f.write(self._ConstructBazelString(build_file, key))
 
-        if key != 'latest':
-            return key
-        return self.available[key]
+        return key
 
 
 def main(argv):
@@ -479,12 +695,15 @@ def main(argv):
 
     cache = BitstreamCache(args.bucket_url, args.cache, args.latest_update,
                            args.offline)
-    cache.InitRepository()
+    cache.InitRepository(args.create_symlink)
 
     # Do we need a refresh?
     need_refresh = (args.refresh or desired_bitstream != 'latest' or
                     cache.NeedRefresh(args.refresh_time))
-    cache.GetBitstreamsAvailable(need_refresh and not args.offline)
+    # Do we need to load the latest_update file?
+    load_latest_update = (desired_bitstream == 'latest')
+    cache.GetBitstreamsAvailable(args.branch, need_refresh and not args.offline,
+                                 load_latest_update)
 
     # If commanded to print bitstream availability, do so.
     if args.list:
@@ -507,8 +726,8 @@ def main(argv):
     # Write a build file which allows tests to reference the bitstreams with
     # the labels:
     #   @bitstreams//:{design}_bitstream
-    configured_bitream = cache.WriteBuildFile(args.build_file,
-                                              desired_bitstream)
+    configured_bitream = cache.WriteBazelFiles(args.build_file,
+                                               desired_bitstream)
     if desired_bitstream != 'latest' and configured_bitream != desired_bitstream:
         logging.error(
             'Configured bitstream {} does not match desired bitstream {}.'.
@@ -516,6 +735,10 @@ def main(argv):
         return 1
     logging.info(
         'Configured latest bitstream as {}.'.format(configured_bitream))
+
+    if args.watch_file is not None:
+        with open(args.watch_file, "w") as f:
+            f.write("\n".join(cache.watch_list))
 
     return 0
 

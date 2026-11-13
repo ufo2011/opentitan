@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,13 +30,13 @@
  * bare-metal program. Note, for the majority of top-level tests, this
  * should be set to false.
  *
- * Set `can_clobber_uart` to true if this test will reconfigure the UART in
- * any way, since the OTTF uses the UART to communicate test results on
+ * Set `console.test_may_clobber` to true if this test will reconfigure the UART
+ * in any way, since the OTTF uses the UART to communicate test results on
  * Verilator and FPGA platforms, it must be reconfigured by the OTTF before
  * test results are printed.
  */
 OTTF_DEFINE_TEST_CONFIG(.enable_concurrency = false,
-                        .can_clobber_uart = false, );
+                        .console.test_may_clobber = false, );
 
 /**
  * Override any of the default OTTF exception handlers (by uncommenting and
@@ -47,16 +47,16 @@ OTTF_DEFINE_TEST_CONFIG(.enable_concurrency = false,
  * details of the default OTTF exception handlers.
  *
  * Note, the `ottf_machine_ecall_handler` cannot be overridden when using the
- * full OTTF, as it it used to implement FreeRTOS context switching. See its
+ * full OTTF, as it used to implement FreeRTOS context switching. See its
  * implementation in `sw/device/lib/testing/test_framework/ottf_main.c`.
  */
-// void ottf_exception_handler(void) {}
-// void ottf_instr_misaligned_fault_handler(void) {}
-// void ottf_instr_access_fault_handler(void) {}
-// void ottf_illegal_instr_fault_handler(void) {}
-// void ottf_breakpoint_handler(void) {}
-// void ottf_load_store_fault_handler(void) {}
-// void ottf_user_ecall_handler(void) {}
+// void ottf_exception_handler(uint32_t *exc_info) {}
+// void ottf_instr_misaligned_fault_handler(uint32_t *exc_info) {}
+// void ottf_instr_access_fault_handler(uint32_t *exc_info) {}
+// void ottf_illegal_instr_fault_handler(uint32_t *exc_info) {}
+// void ottf_breakpoint_handler(uint32_t *exc_info) {}
+// void ottf_load_store_fault_handler(uint32_t *exc_info) {}
+// void ottf_user_ecall_handler(uint32_t *exc_info) {}
 
 /**
  * Override any of the default OTTF ISRs (by uncommenting and implementing them)
@@ -66,9 +66,9 @@ OTTF_DEFINE_TEST_CONFIG(.enable_concurrency = false,
  * See `sw/device/lib/testing/test_framework/ottf_isrs.c` for implementation
  * details of the default OTTF ISRs.
  */
-// void ottf_software_isr(void) {}
-// void ottf_timer_isr(void) {}
-// void ottf_external_isr(void) {}
+// void ottf_software_isr(uint32_t *exc_info) {}
+// void ottf_timer_isr(uint32_t *exc_info) {}
+// void ottf_external_isr(uint32_t *exc_info) {}
 
 /**
  * Save data that will need to persist across resets by placing it in the

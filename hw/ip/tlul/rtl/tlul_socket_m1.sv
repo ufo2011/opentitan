@@ -1,8 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
 // TL-UL socket M:1 module
+//
+// cheriot_socket_m1 is a copy of this module with a CHERIoT sideband; keep the two in sync.
 //
 // Verilog parameters
 //   M:             Number of host ports.

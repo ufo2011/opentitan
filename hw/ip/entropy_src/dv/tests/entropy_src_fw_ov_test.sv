@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,8 +14,6 @@ class entropy_src_fw_ov_test extends entropy_src_base_test;
     cfg.alert_max_delay                     = 5;
     cfg.rng_ignores_backpressure            = 1;
 
-    cfg.dut_cfg.boot_mode_retry_limit       = 10;
-    cfg.sim_duration                        = 5ms;
     cfg.hard_mtbf                           = 100s;
     cfg.mean_rand_reconfig_time             = 1ms;
     cfg.mean_rand_csr_alert_time            = 2ms;
@@ -26,6 +24,10 @@ class entropy_src_fw_ov_test extends entropy_src_base_test;
     cfg.dut_cfg.adaptp_sigma_min_tight      = 0.0;
     cfg.dut_cfg.adaptp_sigma_max_typ        = 0.0;
     cfg.dut_cfg.adaptp_sigma_max_tight      = 0.0;
+    cfg.dut_cfg.adaptps_sigma_min_typ       = 0.0;
+    cfg.dut_cfg.adaptps_sigma_min_tight     = 0.0;
+    cfg.dut_cfg.adaptps_sigma_max_typ       = 0.0;
+    cfg.dut_cfg.adaptps_sigma_max_tight     = 0.0;
     cfg.dut_cfg.bucket_sigma_min_typ        = 0.0;
     cfg.dut_cfg.bucket_sigma_min_tight      = 0.0;
     cfg.dut_cfg.bucket_sigma_max_typ        = 0.0;
@@ -40,11 +42,8 @@ class entropy_src_fw_ov_test extends entropy_src_base_test;
 
     cfg.dut_cfg.entropy_data_reg_enable_pct = 50;
     cfg.dut_cfg.route_software_pct          = 50;
-    cfg.otp_en_es_fw_read_pct               = 33;
-    cfg.otp_en_es_fw_read_inval_pct         = 33;
-    // Always allow FW override for this test
-    cfg.otp_en_es_fw_over_pct               = 100;
 
+    cfg.dut_cfg.ht_threshold_oneway_pct     = 10;
     cfg.dut_cfg.ht_threshold_scope_pct      = 50;
     cfg.dut_cfg.default_ht_thresholds_pct   = 0;
 
@@ -54,16 +53,16 @@ class entropy_src_fw_ov_test extends entropy_src_base_test;
     cfg.dut_cfg.fips_enable_pct             = 25;
     cfg.dut_cfg.type_bypass_pct             = 75;
 
-    // Always read data from the Observe FIFO
-    cfg.dut_cfg.fw_read_pct                 = 100;
-    cfg.dut_cfg.fw_over_pct                 = 100;
+    cfg.dut_cfg.fw_read_pct                 = 50;
+    // To read from the observe FIFO, FW_OV_CONTROL.FW_OV_MODE needs to be enabled.
+    cfg.dut_cfg.fw_over_pct                 = 85;
+
     // Spurious injection parameter has no meaning here.
     cfg.spurious_inject_entropy_pct = 50;
 
     // RNG bit Enable shouldn't matter for this test. Randomize anyway
     cfg.dut_cfg.rng_bit_enable_pct          = 80;
 
-    // TODO: Randomize@50%
     cfg.dut_cfg.fips_enable_pct             = 50;
     cfg.dut_cfg.module_enable_pct           = 100;
     cfg.induce_targeted_transition_pct      = 75;

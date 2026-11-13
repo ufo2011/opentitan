@@ -1,10 +1,12 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Hardened LFSR module that instantiates two LFSRs of the same type.
 // The state vector of both LFSRs is constantly checked and an error is asserted if the
 // two states are inconsistent.
+
+`include "prim_assert.sv"
 
 module prim_double_lfsr #(
   // prim_lfsr parameters - refer to prim_lfsr for their meaning/

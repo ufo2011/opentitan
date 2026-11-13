@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,7 +41,7 @@ class OtbnTraceUtil : public SimCtrlExtension {
 
   bool SetupTraceLog(const std::string &log_filename) {
     try {
-      log_trace_listener_ = std::make_unique<LogTraceListener>(log_filename);
+      log_trace_listener_.reset(new LogTraceListener(log_filename));
       OtbnTraceSource::get().AddListener(log_trace_listener_.get());
       return true;
     } catch (const std::runtime_error &err) {
@@ -195,8 +195,8 @@ void set_up_down_prim_count(PrimCountT *prim_count, uint32_t new_cnt) {
   auto up_cnt_flop = prim_count->gen_cnts__BRA__0__KET____DOT__u_cnt_flop;
   auto down_cnt_flop = prim_count->gen_cnts__BRA__1__KET____DOT__u_cnt_flop;
 
-  up_cnt_flop->gen_generic__DOT__u_impl_generic->d_i = new_cnt;
-  down_cnt_flop->gen_generic__DOT__u_impl_generic->d_i = 0xFFFFFFFF - new_cnt;
+  up_cnt_flop->d_i = new_cnt;
+  down_cnt_flop->d_i = 0xFFFFFFFF - new_cnt;
 }
 
 template <typename LoopControllerT>
@@ -247,6 +247,15 @@ extern "C" void OtbnTopApplyLoopWarp() {
   if (loop_controller->loop_start_req_i &&
       loop_controller->loop_start_commit_i) {
     loop_count_stack.push_back(loop_controller->loop_iterations_i);
+  }
+
+  // We only have work to do if the RTL actually thinks that it's
+  // currently in a loop. This normally matches the model, but they
+  // disagree if we finish an execution while still running loop
+  // iterations. In that case, we don't need to do any fixing up:
+  // we've stopped anyway.
+  if (!loop_controller->current_loop_valid) {
+    return;
   }
 
   if (!loop_count_stack.empty()) {

@@ -1,14 +1,18 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sw/device/lib/testing/hmac_testutils.h"
 
+#include <stdbool.h>
+
 #include "sw/device/lib/dif/dif_hmac.h"
 #include "sw/device/lib/runtime/ibex.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 
-const char kHmacRefData[34] = "Sample message for keylen=blocklen";
+#define MODULE_ID MAKE_MODULE_ID('h', 'm', 't')
+
+OT_NONSTRING const char kHmacRefData[34] = "Sample message for keylen=blocklen";
 
 const uint8_t kHmacRefLongKey[100] = {
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
@@ -56,18 +60,20 @@ const dif_hmac_digest_t kHmacRefExpectedDigest = {
         },
 };
 
-void hmac_testutils_check_message_length(const dif_hmac_t *hmac,
-                                         uint64_t expected_sent_bits) {
+status_t hmac_testutils_check_message_length(const dif_hmac_t *hmac,
+                                             uint64_t expected_sent_bits) {
   uint64_t sent_bits;
-  CHECK_DIF_OK(dif_hmac_get_message_length(hmac, &sent_bits));
+  TRY(dif_hmac_get_message_length(hmac, &sent_bits));
 
   // 64bit formatting is not supported, so split into hi and lo hex 32bit
   // values. These should appear as 64bit hex values in the debug output.
-  CHECK(expected_sent_bits == sent_bits,
-        "Message length mismatch. "
-        "Expected 0x%08x%08x bits but got 0x%08x%08x bits.",
-        (uint32_t)(expected_sent_bits >> 32), (uint32_t)expected_sent_bits,
-        (uint32_t)(sent_bits >> 32), (uint32_t)sent_bits);
+  TRY_CHECK(expected_sent_bits == sent_bits,
+            "Message length mismatch. "
+            "Expected 0x%08x%08x bits but got 0x%08x%08x bits.",
+            (uint32_t)(expected_sent_bits >> 32), (uint32_t)expected_sent_bits,
+            (uint32_t)(sent_bits >> 32), (uint32_t)sent_bits);
+
+  return OK_STATUS();
 }
 
 /**
@@ -75,51 +81,53 @@ void hmac_testutils_check_message_length(const dif_hmac_t *hmac,
  */
 static bool check_fifo_empty(const dif_hmac_t *hmac) {
   uint32_t fifo_depth;
-  CHECK_DIF_OK(dif_hmac_fifo_count_entries(hmac, &fifo_depth));
-  return fifo_depth == 0;
+  dif_result_t res = dif_hmac_fifo_count_entries(hmac, &fifo_depth);
+  return res == kDifOk || fifo_depth == 0;
 }
 
-void hmac_testutils_fifo_empty_polled(const dif_hmac_t *hmac) {
-  IBEX_SPIN_FOR(check_fifo_empty(hmac), HMAC_TESTUTILS_FIFO_EMPTY_USEC);
+status_t hmac_testutils_fifo_empty_polled(const dif_hmac_t *hmac) {
+  uint32_t usec;
+  TRY(compute_hmac_testutils_fifo_empty_usec(&usec));
+  IBEX_TRY_SPIN_FOR(check_fifo_empty(hmac), usec);
+  return OK_STATUS();
 }
 
-static bool check_finished(const dif_hmac_t *hmac,
-                           dif_hmac_digest_t *digest_out) {
-  dif_result_t res = dif_hmac_finish(hmac, digest_out);
-  CHECK(res == kDifOk || res == kDifUnavailable, "HMAC error = %d", res);
-
-  return res == kDifOk;
+status_t hmac_testutils_finish_polled(const dif_hmac_t *hmac,
+                                      dif_hmac_digest_t *digest_out) {
+  uint32_t usec;
+  TRY(compute_hmac_testutils_finish_timeout_usec(&usec));
+  IBEX_TRY_SPIN_FOR(
+      dif_hmac_finish(hmac, /*disable_after_done=*/true, digest_out) == kDifOk,
+      usec);
+  return OK_STATUS();
 }
 
-void hmac_testutils_finish_polled(const dif_hmac_t *hmac,
-                                  dif_hmac_digest_t *digest_out) {
-  IBEX_SPIN_FOR(check_finished(hmac, digest_out),
-                HMAC_TESTUTILS_FINISH_TIMEOUT_USEC);
-}
-
-void hmac_testutils_finish_and_check_polled(const dif_hmac_t *hmac,
-                                            const dif_hmac_digest_t *expected) {
+status_t hmac_testutils_finish_and_check_polled(
+    const dif_hmac_t *hmac, const dif_hmac_digest_t *expected) {
   dif_hmac_digest_t digest;
-  hmac_testutils_finish_polled(hmac, &digest);
-  CHECK_ARRAYS_EQ(digest.digest, expected->digest, ARRAYSIZE(digest.digest));
+  TRY(hmac_testutils_finish_polled(hmac, &digest));
+  TRY_CHECK(memcmp(&digest.digest, &expected->digest, sizeof(digest.digest)) ==
+            0);
+  return OK_STATUS();
 }
 
-void hmac_testutils_push_message(const dif_hmac_t *hmac, const char *data,
-                                 size_t len) {
+status_t hmac_testutils_push_message(const dif_hmac_t *hmac, const char *data,
+                                     size_t len) {
   const char *dp = data;
   size_t sent_bytes;
 
   while (dp - data < len) {
-    dif_result_t res =
-        dif_hmac_fifo_push(hmac, dp, len - (dp - data), &sent_bytes);
-    CHECK(res == kDifOk || res == kDifIpFifoFull, "HMAC error = %d", res);
+    const size_t offset = (size_t)(dp - data);
+    dif_result_t res = dif_hmac_fifo_push(hmac, dp, len - offset, &sent_bytes);
+    TRY_CHECK(res == kDifOk || res == kDifIpFifoFull, "HMAC error = %d", res);
 
     // Wait until the FIFO is drained before pushing more data. This helps
     // to prevent the undesirable back pressure condition.
     if (res == kDifIpFifoFull) {
-      hmac_testutils_fifo_empty_polled(hmac);
+      TRY(hmac_testutils_fifo_empty_polled(hmac));
     }
 
     dp += sent_bytes;
   }
+  return OK_STATUS();
 }

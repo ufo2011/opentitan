@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,17 +17,17 @@ class chip_sw_sram_ctrl_scrambled_access_vseq extends chip_sw_base_vseq;
   // to avoid the location of the scramble buffer. This will have been allocated by the
   // compiler close to the start of the RAM.
   // For both, an offset that is at the midpoint of the SRAM should suffice.
-  localparam uint BACKDOOR_RET_OFFSET = (top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_RET_AON_RAM_SIZE_BYTES / 8);
+  localparam uint BACKDOOR_RET_OFFSET = (top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_RET_RAM_SIZE_BYTES / 8);
   localparam uint BACKDOOR_MAIN_OFFSET = (top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_MAIN_RAM_SIZE_BYTES / 8);
 
   localparam string MAIN_INDEX = "0";
   localparam string MAIN_REQ_INDEX = "3";
-  localparam string RET_INDEX = "1";
-  localparam string RET_REQ_INDEX = "4";
+  localparam string RET_INDEX = "2";
+  localparam string RET_REQ_INDEX = "5";
 
-  localparam string SRAM_CTRL_RET_HDL_PATH = "tb.dut.top_earlgrey.u_sram_ctrl_ret_aon";
-  localparam string SRAM_CTRL_MAIN_HDL_PATH = "tb.dut.top_earlgrey.u_sram_ctrl_main";
-  localparam string OTP_CTRL_KDI_HDL_PATH = "tb.dut.top_earlgrey.u_otp_ctrl.u_otp_ctrl_kdi";
+  localparam string SRAM_CTRL_RET_HDL_PATH = "tb.dut.top_earlgrey.earlgrey_pd_aon.u_sram_ctrl_ret";
+  localparam string SRAM_CTRL_MAIN_HDL_PATH = "tb.dut.top_earlgrey.earlgrey_pd_main.u_sram_ctrl_main";
+  localparam string OTP_CTRL_KDI_HDL_PATH = "tb.dut.top_earlgrey.earlgrey_pd_main.u_otp_ctrl.u_otp_ctrl_kdi";
 
   localparam string KEY_VALID_PATH = ".u_reg_regs.u_status_scr_key_valid.qs[0]";
 
@@ -59,6 +59,15 @@ class chip_sw_sram_ctrl_scrambled_access_vseq extends chip_sw_base_vseq;
   bit [  sram_scrambler_pkg::SRAM_KEY_WIDTH-1:0] sram_ret_key;
   bit [sram_scrambler_pkg::SRAM_BLOCK_WIDTH-1:0] sram_main_nonce;
   bit [  sram_scrambler_pkg::SRAM_KEY_WIDTH-1:0] sram_main_key;
+
+  typedef enum byte {
+    PhaseSetup                   = 0,
+    kTestPhaseMainSramScramble   = 1,
+    kTestPhaseMainSramCheck      = 2,
+    kTestPhaseRetSramScramble    = 3,
+    kTestPhaseRetSramCheck       = 4,
+    PhaseDone                    = 5
+  } test_phases_e;
 
   virtual task check_hdl_paths();
     int retval;
@@ -111,7 +120,8 @@ class chip_sw_sram_ctrl_scrambled_access_vseq extends chip_sw_base_vseq;
         retval = uvm_hdl_read(RET_KEY_PATH, sram_ret_key);
         `DV_CHECK_EQ(retval, 1, $sformatf("uvm_hdl_read failed for %0s", RET_KEY_PATH))
       end
-      cfg.clk_rst_vif.wait_clks(1);
+      // The sampling cycle should be faster then otp clock.
+      #1ns;
     end
   endtask
 
@@ -130,14 +140,17 @@ class chip_sw_sram_ctrl_scrambled_access_vseq extends chip_sw_base_vseq;
         retval = uvm_hdl_read(MAIN_KEY_PATH, sram_main_key);
         `DV_CHECK_EQ(retval, 1, $sformatf("uvm_hdl_read failed for %0s", MAIN_KEY_PATH))
       end
-      cfg.clk_rst_vif.wait_clks(1);
+      // The sampling cycle should be faster then otp clock.
+      #1ns;
     end
   endtask
 
   virtual task ret_backdoor_write(int addr);
     int retval;
     bit scr_key_valid;
-    int offset = addr - top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_RET_AON_RAM_BASE_ADDR;
+    int offset = addr - top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_RET_RAM_BASE_ADDR;
+    // `backdoor` comes after `pattern` which is `BACKDOOR_DATA_WORDS` long.
+    offset += BACKDOOR_DATA_WORDS * 4;
     forever begin
       retval = uvm_hdl_read(SRAM_CTRL_RET_SCR_KEY_VALID_PATH, scr_key_valid);
       `DV_CHECK_EQ(retval, 1, $sformatf(
@@ -148,7 +161,7 @@ class chip_sw_sram_ctrl_scrambled_access_vseq extends chip_sw_base_vseq;
         // Write the data to a known offset in the SRAM. The random byte data
         // is used little-endian.
         for (int i = 0; i < BACKDOOR_DATA_WORDS; i++) begin
-         ret_sram_bkdr_write32(offset + (i * 4), {
+          ret_sram_bkdr_write32(offset + (i * 4), {
                                 backdoor_data[(i*4)+3],
                                 backdoor_data[(i*4)+2],
                                 backdoor_data[(i*4)+1],
@@ -157,7 +170,7 @@ class chip_sw_sram_ctrl_scrambled_access_vseq extends chip_sw_base_vseq;
         end
         break;
       end
-      cfg.clk_rst_vif.wait_clks(1);
+      #1ns;
     end
   endtask
 
@@ -165,13 +178,15 @@ class chip_sw_sram_ctrl_scrambled_access_vseq extends chip_sw_base_vseq;
     int retval;
     bit scr_key_valid;
     int offset = addr - top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_MAIN_RAM_BASE_ADDR;
+    // `backdoor` comes after `pattern` which is `BACKDOOR_DATA_WORDS` long.
+    offset += BACKDOOR_DATA_WORDS * 4;
     forever begin
       retval = uvm_hdl_read(SRAM_CTRL_MAIN_SCR_KEY_VALID_PATH, scr_key_valid);
       `DV_CHECK_EQ(retval, 1, $sformatf(
                    "uvm_hdl_read failed for %0s", SRAM_CTRL_MAIN_SCR_KEY_VALID_PATH))
       // Wait for sram_ctrl.STATUS.SCR_KEY_VALID.
       if (scr_key_valid == 1) begin
-        `uvm_info(`gfn, $sformatf("main_backdoor_write start %x", offset), UVM_LOW)
+        `uvm_info(`gfn, $sformatf("main_backdoor_write to 0x%x", offset), UVM_LOW)
         // Write the data to a known offset in the SRAM. The random byte data
         // is used little-endian.
         for (int i = 0; i < BACKDOOR_DATA_WORDS; i++) begin
@@ -184,7 +199,7 @@ class chip_sw_sram_ctrl_scrambled_access_vseq extends chip_sw_base_vseq;
         end
         break;
       end
-      cfg.clk_rst_vif.wait_clks(1);
+      #1ns;
     end
   endtask
 
@@ -199,9 +214,11 @@ class chip_sw_sram_ctrl_scrambled_access_vseq extends chip_sw_base_vseq;
     end
   endtask: cpu_init
 
-  virtual task sync_with_sw();
+  virtual task sync_with_sw(input test_phases_e phase);
     `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInWfi)
     `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInTest)
+
+     sw_symbol_backdoor_overwrite("kTestPhase", {<<8{phase}});
   endtask:sync_with_sw
 
   virtual task body();
@@ -218,25 +235,31 @@ class chip_sw_sram_ctrl_scrambled_access_vseq extends chip_sw_base_vseq;
 
     sw_symbol_backdoor_overwrite("kBackdoorExpectedBytes", backdoor_data);
 
-    sync_with_sw();
+    `DV_WAIT(cfg.sw_logger_vif.printed_format == "RET_SRAM addr: %0h MAIN_SRAM addr: %0h");
     ret_sram_offset = int'(cfg.sw_logger_vif.printed_arg[0]);
     main_sram_offset = int'(cfg.sw_logger_vif.printed_arg[1]);
+    sync_with_sw(kTestPhaseMainSramScramble);
 
     `uvm_info(`gfn, $sformatf("Testing main sram addr: %x", main_sram_offset), UVM_LOW);
     fork
       get_main_keys();
-      main_backdoor_write(main_sram_offset);
     join_none
 
-    sync_with_sw();
+    main_backdoor_write(main_sram_offset);
+    sync_with_sw(kTestPhaseMainSramCheck);
+
+    `DV_WAIT(cfg.sw_logger_vif.printed_format == "RET_SRAM addr: %0h MAIN_SRAM addr: %0h");
     ret_sram_offset = int'(cfg.sw_logger_vif.printed_arg[0]);
     main_sram_offset = int'(cfg.sw_logger_vif.printed_arg[1]);
+    sync_with_sw(kTestPhaseRetSramScramble);
 
     `uvm_info(`gfn, $sformatf("Testing ret sram addr: %x", ret_sram_offset), UVM_LOW);
     fork
       get_ret_keys();
-      ret_backdoor_write(ret_sram_offset);
     join_none
+
+    ret_backdoor_write(ret_sram_offset);
+    sync_with_sw(kTestPhaseRetSramCheck);
 
   endtask
 

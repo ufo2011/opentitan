@@ -1,32 +1,30 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{anyhow, Result};
-use serde::{Deserialize, Serialize};
+use anyhow::{Result, anyhow};
+use clap::{Args, Subcommand};
+use serde::Deserialize;
 use serde_annotate::Annotate;
 use std::any::Any;
-use structopt::StructOpt;
 
-use opentitanlib::app::command::CommandDispatch;
 use opentitanlib::app::TransportWrapper;
+use opentitanlib::app::command::CommandDispatch;
 use opentitanlib::tpm;
 
 /// Read the value of a given TPM register.
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub struct TpmReadRegister {
-    #[structopt(
-        name = "REGISTER",
-        case_insensitive = true,
-        help = "The TPM register to inspect"
-    )]
+    /// The TPM register to inspect.
+    #[arg(value_enum, ignore_case = true)]
     register: tpm::Register,
 
-    #[structopt(long, help = "Number of bytes to read.")]
+    /// Number of bytes to read.
+    #[arg(long)]
     length: Option<usize>,
 }
 
-#[derive(Annotate, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Annotate, Deserialize, Debug, PartialEq, Eq)]
 pub struct TpmReadRegisterResponse {
     hexdata: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -40,7 +38,7 @@ impl CommandDispatch for TpmReadRegister {
         &self,
         context: &dyn Any,
         _transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         let tpm = context.downcast_ref::<Box<dyn tpm::Driver>>().unwrap();
         let length = self
             .length
@@ -67,39 +65,36 @@ impl CommandDispatch for TpmReadRegister {
 }
 
 /// Write to a given TPM register.
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub struct TpmWriteRegister {
-    #[structopt(
-        name = "REGISTER",
-        case_insensitive = true,
-        help = "The TPM register to modify"
-    )]
+    /// The TPM register to modify.
+    #[arg(value_enum, ignore_case = true)]
     register: tpm::Register,
 
-    #[structopt(
-        short = "d",
+    /// Data to write, specify only one kind.
+    #[arg(
+        short = 'd',
         long,
-        conflicts_with_all=&["uint32", "uint8"],
-        help = "Data to write, specify only one kind.",
+        conflicts_with_all=&["uint32", "uint8"]
     )]
     hexdata: Option<String>,
-    #[structopt(
-        short = "w",
+    /// Data to write, specify only one kind.
+    #[arg(
+        short = 'w',
         long,
-        conflicts_with_all=&["hexdata", "uint8"],
-        help = "Data to write, specify only one kind.",
+        conflicts_with_all=&["hexdata", "uint8"]
     )]
     uint32: Option<u32>,
-    #[structopt(
-        short = "b",
+    /// Data to write, specify only one kind.
+    #[arg(
+        short = 'b',
         long,
-        conflicts_with_all=&["hexdata", "uint32"],
-        help = "Data to write, specify only one kind.",
+        conflicts_with_all=&["hexdata", "uint32"]
     )]
     uint8: Option<u8>,
 }
 
-#[derive(Annotate, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Annotate, Deserialize, Debug, PartialEq, Eq)]
 pub struct TpmWriteRegisterResponse {}
 
 impl CommandDispatch for TpmWriteRegister {
@@ -107,7 +102,7 @@ impl CommandDispatch for TpmWriteRegister {
         &self,
         context: &dyn Any,
         _transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         let tpm = context.downcast_ref::<Box<dyn tpm::Driver>>().unwrap();
         if let Some(hexdata) = &self.hexdata {
             tpm.write_register(self.register, &hex::decode(hexdata)?)?;
@@ -120,10 +115,38 @@ impl CommandDispatch for TpmWriteRegister {
     }
 }
 
+/// Write to a given TPM register.
+#[derive(Debug, Args)]
+pub struct TpmExecuteCommand {
+    /// Hex encoding of TPM command to execute.
+    #[arg(short = 'd', long)]
+    hexdata: String,
+}
+
+#[derive(Annotate, Deserialize, Debug, PartialEq, Eq)]
+pub struct TpmExecuteCommandResponse {
+    hexdata: String,
+}
+
+impl CommandDispatch for TpmExecuteCommand {
+    fn run(
+        &self,
+        context: &dyn Any,
+        _transport: &TransportWrapper,
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
+        let tpm = context.downcast_ref::<Box<dyn tpm::Driver>>().unwrap();
+        let resp = tpm.execute_command(&hex::decode(&self.hexdata)?)?;
+        Ok(Some(Box::new(TpmExecuteCommandResponse {
+            hexdata: hex::encode(resp),
+        })))
+    }
+}
+
 /// Commands for interacting with a TPM.  These appear as subcommands of both `opentitantool i2c
 /// tpm` and `opentitantool spi tpm`.
-#[derive(Debug, StructOpt, CommandDispatch)]
+#[derive(Debug, Subcommand, CommandDispatch)]
 pub enum TpmSubCommand {
     ReadRegister(TpmReadRegister),
     WriteRegister(TpmWriteRegister),
+    ExecuteCommand(TpmExecuteCommand),
 }

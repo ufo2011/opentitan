@@ -1,19 +1,21 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
-# ALERT_HANDLER register template
+# ${(module_instance_name).upper()} register template
 <%
 import math
 chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 %>
 {
-  name:               "alert_handler",
+  name:               "${module_instance_name}",
+  // Unique comportable IP identifier defined under KNOWN_CIP_IDS in the regtool.
+  cip_id:             "32",
   design_spec:        "../doc",
   dv_doc:             "../doc/dv",
   hw_checklist:       "../doc/checklist",
-  sw_checklist:       "/sw/device/lib/dif/dif_alert_handler"
-  version:            "1.0",
+  sw_checklist:       "/sw/device/lib/dif/dif_${module_instance_name.lower()}"
+  version:            "2.0.0",
   life_stage:         "L1",
   design_stage:       "D3",
   verification_stage: "V2S",
@@ -24,21 +26,30 @@ chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
     {clock: "clk_edn_i", reset: "rst_edn_ni"}
   ]
   bus_interfaces: [
+  % if racl_support:
+    { protocol: "tlul", direction: "device", hier_path: "u_reg_wrap.u_reg", racl_support: true }
+  % else:
     { protocol: "tlul", direction: "device", hier_path: "u_reg_wrap.u_reg" }
+  % endif
   ],
   regwidth: "32",
 ##############################################################################
+  # The number of escalation severities and ping count width parameters
+  # have a local and non-local varieties instantiated with the same value.
+  # This is to work around the restriction in CSR generation to only allow
+  # local parameters, or the value may become inconsistent when the
+  # parameter gets an override.
   param_list: [
     // Random netlist constants
     { name:      "RndCnstLfsrSeed",
       desc:      "Compile-time random bits for initial LFSR seed",
-      type:      "alert_pkg::lfsr_seed_t"
+      type:      "${module_instance_name}_pkg::lfsr_seed_t"
       randcount: "32",
       randtype:  "data", // randomize randcount databits
     }
     { name:      "RndCnstLfsrPerm",
       desc:      "Compile-time random permutation for LFSR output",
-      type:      "alert_pkg::lfsr_perm_t"
+      type:      "${module_instance_name}_pkg::lfsr_perm_t"
       randcount: "32",
       randtype:  "perm", // random permutation for randcount elements
     }
@@ -67,12 +78,14 @@ chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
             '''
       type: "logic [NAlerts-1:0][NLpgWidth-1:0]",
       default: '''
-% if lpg_map:
+% if lpg_map and isinstance(lpg_map, list):
                {
   % for l in list(reversed(lpg_map)):
                  ${l}${"" if loop.last else ","}
   % endfor
                }
+% elif lpg_map:
+               ${lpg_map}
 % else:
                '0
 % endif
@@ -98,12 +111,14 @@ chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
             '''
       type: "logic [NAlerts-1:0]",
       default: '''
-% if async_on:
+% if async_on and isinstance(async_on, list):
                {
   % for a in list(reversed(async_on)):
                  ${a}${"" if loop.last else ","}
   % endfor
                }
+% elif async_on:
+               ${async_on}
 % else:
                '0
 % endif
@@ -116,10 +131,21 @@ chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
       default: "${n_classes}",
       local: "true"
     },
+    { name: "EscNumSeverities",
+      desc: "Number of escalation severities as regular parameter",
+      type: "int",
+      # NOTE: If this value is to be changed, pass the exposed parameter as
+      # a regular override to all IPs with prim_esc_receiver
+      default: "${n_esc_sev}",
+      expose: "true",
+      local: "false"
+    },
     { name: "N_ESC_SEV",
       desc: "Number of escalation severities",
       type: "int",
-      default: "4",
+      # NOTE: If this value is to be changed, ensure all IPs with
+      # prim_esc_receiver get updated as well.
+      default: "${n_esc_sev}",
       local: "true"
     },
     { name: "N_PHASES",
@@ -131,13 +157,24 @@ chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
     { name: "N_LOC_ALERT",
       desc: "Number of local alerts",
       type: "int",
-      default: "7",
+      default: "${n_loc_alert}",
       local: "true"
+    },
+    { name: "EscPingCountWidth",
+      desc: "Width of ping counter as regular parameter",
+      type: "int",
+      # NOTE: If this value is to be changed, pass the exposed parameter as
+      # a regular override to all IPs with prim_esc_receiver
+      default: "${ping_cnt_dw}",
+      expose: "true",
+      local: "false"
     },
     { name: "PING_CNT_DW",
       desc: "Width of ping counter",
       type: "int",
-      default: "16",
+      # NOTE: If this value is to be changed, ensure all IPs with
+      # prim_esc_receiver get updated as well.
+      default: "${ping_cnt_dw}",
       local: "true"
     },
     { name: "PHASE_DW",
@@ -207,7 +244,7 @@ chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
       type:    "uni",
       name:    "crashdump",
       act:     "req",
-      package: "alert_pkg"
+      package: "${module_instance_name}_pkg"
     },
     { struct:  "edn"
       type:    "req_rsp"
@@ -230,6 +267,85 @@ chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
       width:   "4", // N_ESC_SEV
       package: "prim_esc_pkg"
     },
+  % if racl_support:
+    { struct:  "racl_policy_vec",
+      type:    "uni",
+      name:    "racl_policies",
+      act:     "rcv",
+      package: "top_racl_pkg",
+      desc:    '''
+        Incoming RACL policy vector from a racl_ctrl instance.
+        The policy selection vector (parameter) selects the policy for each register.
+      '''
+    }
+    { struct:  "racl_error_log",
+      type:    "uni",
+      name:    "racl_error",
+      act:     "req",
+      width:   "1"
+      package: "top_racl_pkg",
+      desc:    '''
+        RACL error log information of this module.
+      '''
+    }
+  % endif
+  ]
+
+  features: [
+    { name: "ALERT_HANDLER.ALERT.OBSERVE",
+      desc: '''
+                All incoming alerts can be observed by the alert handler.
+            '''
+    }
+    { name: "ALERT_HANDLER.ALERT.INTERRUPT",
+      desc: '''
+                All alert classes can raise an interrupt when an alert that is
+                allocated to them is raised.
+            '''
+    }
+    { name: "ALERT_HANDLER.ALERT.ESCALATE",
+      desc: '''
+               All incoming alerts can trigger the alert escalation mechanisms
+               of the classes they are allocated to
+            '''
+    }
+    {
+      name: "ALERT_HANDLER.PING_TIMER",
+      desc: '''
+                The alert handler periodically pings all alert receivers and
+                will raise an alert if the ping isn't responded to in good time
+             '''
+    }
+    { name: "ALERT_HANDLER.ESCALATION.COUNT",
+      desc: '''
+                An escalation can be triggered when the number of alerts seen in
+                a particular class exceeds a software programmable threshold
+            '''
+    }
+    { name: "ALERT_HANDLER.ESCALATION.TIMEOUT",
+      desc: '''
+                An escalation can be triggered when an interrupt from a class
+                isn't acknowledged after a software programmable timeout
+            '''
+    }
+    { name: "ALERT_HANDLER.ESCALATION.PHASES",
+      desc: '''
+               Each alert class can trigger the same 4 escalation phases. A
+               programmable timer specifies the delay between each of the
+               escalation phases. The actions taken on each of the escalation
+               signals are specific to the top-level integration.
+            '''
+    }
+    {
+      name: "ALERT_HANDLER.CRASH_DUMP",
+      desc: '''
+               A crashdump with the state of CSRs and alert handler state bits
+               is made available. When a programmable latching trigger condition
+               is met the crashdump is held constant at its value on that
+               trigger condition so it can be recorded and made available for
+               later analysis
+            '''
+    }
   ]
 
   countermeasures: [
@@ -566,7 +682,6 @@ chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
       tags: [// Top level CSR automation test, CPU clock is disabled, so escalation response will
              // not send back to alert handler. This will set loc_alert_cause and could not predict
              // automatically.
-             // TODO: remove the exclusion after set up top-level esc_receiver_driver
              "excl:CsrNonInitTests:CsrExclCheck"],
       fields: [
         { bits: "0", name: "LA", desc: "Cause bit ", resval: 0}

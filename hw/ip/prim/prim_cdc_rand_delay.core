@@ -1,5 +1,5 @@
 CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 name: "lowrisc:prim:cdc_rand_delay"
@@ -7,9 +7,6 @@ description: "CDC random delay module for DV"
 
 filesets:
   files_rtl:
-    depend:
-      - lowrisc:prim:assert
-      - lowrisc:dv:dv_macros
     files:
       - rtl/prim_cdc_rand_delay.sv
     file_type: systemVerilogSource

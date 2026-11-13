@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -18,6 +18,7 @@
 // transactions are succesfully received by the device, the test passes.
 
 #include "sw/device/lib/dif/dif_pinmux.h"
+#include "sw/device/lib/runtime/ibex.h"
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/runtime/print.h"
 #include "sw/device/lib/testing/pinmux_testutils.h"
@@ -25,6 +26,7 @@
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 #include "sw/device/lib/testing/usb_testutils.h"
 #include "sw/device/lib/testing/usb_testutils_controlep.h"
+#include "sw/device/lib/testing/usb_testutils_diags.h"
 #include "sw/device/lib/testing/usb_testutils_simpleserial.h"
 
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"  // Generated.
@@ -97,15 +99,10 @@ static void usb_receipt_callback(uint8_t c) {
 OTTF_DEFINE_TEST_CONFIG();
 
 bool test_main(void) {
-  CHECK(kDeviceType == kDeviceSimVerilator || kDeviceType == kDeviceFpgaCw310,
-        "This test is not expected to run on platforms other than the "
-        "Verilator simulation or CW310 FPGA. It needs the USB DPI model "
-        "or host application.");
-
   LOG_INFO("Running USBDEV test");
 
   CHECK_DIF_OK(dif_pinmux_init(
-      mmio_region_from_addr(TOP_EARLGREY_PINMUX_AON_BASE_ADDR), &pinmux));
+      mmio_region_from_addr(TOP_EARLGREY_PINMUX_BASE_ADDR), &pinmux));
   pinmux_testutils_init(&pinmux);
   CHECK_DIF_OK(dif_pinmux_input_select(
       &pinmux, kTopEarlgreyPinmuxPeripheralInUsbdevSense,
@@ -114,19 +111,34 @@ bool test_main(void) {
   // Call `usbdev_init` here so that DPI will not start until the
   // simulation has finished all of the printing, which takes a while
   // if `--trace` was passed in.
-  usb_testutils_init(&usbdev, /*pinflip=*/false, /*en_diff_rcvr=*/false,
-                     /*tx_use_d_se0=*/false);
-  usb_testutils_controlep_init(&usbdev_control, &usbdev, 0, config_descriptors,
-                               sizeof(config_descriptors), test_descriptor,
-                               sizeof(test_descriptor));
-  while (usbdev_control.device_state != kUsbTestutilsDeviceConfigured) {
-    usb_testutils_poll(&usbdev);
-  }
-  usb_testutils_simpleserial_init(&simple_serial, &usbdev, 1,
-                                  usb_receipt_callback);
+  CHECK_STATUS_OK(usb_testutils_init(&usbdev, /*pinflip=*/false,
+                                     /*en_diff_rcvr=*/true,
+                                     /*tx_use_d_se0=*/false));
+  CHECK_STATUS_OK(usb_testutils_controlep_init(
+      &usbdev_control, &usbdev, 0, config_descriptors,
+      sizeof(config_descriptors), test_descriptor, sizeof(test_descriptor)));
 
+  // Proceed only when the device has been configured; this allows host-side
+  // software to establish communication.
+  CHECK_STATUS_OK(
+      usb_testutils_controlep_config_wait(&usbdev_control, &usbdev));
+
+  // Set up a serial port.
+  CHECK_STATUS_OK(usb_testutils_simpleserial_init(&simple_serial, &usbdev, 1U,
+                                                  usb_receipt_callback));
+
+  USBUTILS_USER_PROMPT("Echo characters now...eg. 'cat /dev/ttyUSB0'");
+
+  // Send a "Hi!Hi!" sign on message.
+  for (int idx = 0; idx < kExpectedUsbCharsRecved; idx++) {
+    CHECK_STATUS_OK(usb_testutils_simpleserial_send_byte(
+        &simple_serial, kExpectedUsbRecved[idx]));
+  }
+
+  // Await the same message as a response; this allows a simple 'cat <port>'
+  // command to form the host side because of character echo.
   while (usb_chars_recved_total < kExpectedUsbCharsRecved) {
-    usb_testutils_poll(&usbdev);
+    CHECK_STATUS_OK(usb_testutils_poll(&usbdev));
   }
 
   base_printf("\r\n");
@@ -136,6 +148,8 @@ bool test_main(void) {
           kExpectedUsbRecved[i], buffer[i]);
   }
   LOG_INFO("USB received %d characters: %s", usb_chars_recved_total, buffer);
+
+  CHECK_STATUS_OK(usb_testutils_fin(&usbdev));
 
   return true;
 }

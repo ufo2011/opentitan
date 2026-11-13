@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 #ifndef OPENTITAN_HW_IP_OTBN_DV_MODEL_ISS_WRAPPER_H_
@@ -87,8 +87,8 @@ struct ISSWrapper {
   void edn_urnd_step(uint32_t edn_urnd_data);
 
   // Provide keymgr values to model
-  void set_keymgr_value(const std::array<uint32_t, 12> &key0_arr,
-                        const std::array<uint32_t, 12> &key1_arr, bool valid);
+  void set_keymgr_value(const std::array<uint32_t, 16> &key0_arr,
+                        const std::array<uint32_t, 16> &key1_arr, bool valid);
 
   // Signals that the received OTP key is valid in the RTL.
   void otp_key_cdc_done();
@@ -123,6 +123,15 @@ struct ISSWrapper {
   // Set software_errs_fatal bit in ISS model.
   void set_software_errs_fatal(bool new_val);
 
+  // Set wfi_enabled bit in ISS model.
+  void set_wfi_enabled(bool new_val);
+
+  // Set urnd_ctrl_enabled bit in ISS model.
+  void set_urnd_ctrl_enabled(bool new_val);
+
+  // Resume a paused wfi instruction (host issued the RESUME command).
+  void wfi_resume();
+
   void initial_secure_wipe();
 
   // Step a CRC calculation with 48 bits of data
@@ -138,8 +147,13 @@ struct ISSWrapper {
   // Send an error escalation
   void send_err_escalation(uint32_t err_val, bool lock_immediately);
 
-  // Send RMA request
-  void send_rma_req();
+  // Stall for one cycle instead of retiring the next instruction.
+  // In case there is a pending halt, the stall request is ignored except if
+  // enforced is True.
+  void send_stall_request(bool enforced);
+
+  // Set the RMA request input
+  void set_rma_req(uint8_t rma_req);
 
   const MirroredRegs &get_mirrored() const { return mirrored_; }
 

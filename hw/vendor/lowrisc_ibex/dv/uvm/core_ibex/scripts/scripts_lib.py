@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import sys
 import pickle
+import yaml
 import pathlib3x as pathlib
 from io import IOBase
 from typing import Dict, TextIO, Optional, Union, List
@@ -26,7 +27,7 @@ def run_one(verbose: bool,
             redirect_stdstreams: Optional[Union[str, pathlib.Path, IOBase]] = None,
             timeout_s: Optional[int] = None,
             reraise: bool = False,
-            env: Dict[str, str] = None) -> int:
+            env: Optional[Dict[str, str]] = None) -> int:
     """Run a command, returning its retcode.
 
     If verbose is true, print the command to stderr first (a bit like bash -x).
@@ -247,18 +248,29 @@ def format_to_str(arg: any) -> str:
         raise TypeError("Couldn't format element to str!")
 
 
+def read_yaml(yaml_file: pathlib.Path):
+    """Read YAML file to a dictionary."""
+    with yaml_file.open("r") as f:
+        try:
+            yaml_data = yaml.safe_load(f)
+        except yaml.YAMLError as exc:
+            logging.error(exc)
+            sys.exit(1)
+    return yaml_data
+
+
 class testdata_cls():
     """Baseclass for testdata to hold common methods....
 
     Objects inheriting from this can easily import/export
-    themselves to files, allowing data to gain continuinty between
+    themselves to files, allowing data to gain continuity between
     different phases of the regression and testing process
     """
 
     @classmethod
     @typechecked
     def construct_from_pickle(cls, metadata_pickle: pathlib.Path):
-        """Allow easy contruction of the data-structure from a file."""
+        """Allow easy construction of the data-structure from a file."""
         trr = cls()
         logger.debug(f"Constructing object from data in {metadata_pickle}")
         with metadata_pickle.open('rb') as handle:

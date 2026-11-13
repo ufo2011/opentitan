@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include "sw/device/lib/base/math.h"
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_alert_handler.h"
-#include "sw/device/lib/dif/dif_flash_ctrl.h"
 #include "sw/device/lib/dif/dif_i2c.h"
 #include "sw/device/lib/dif/dif_rstmgr.h"
 #include "sw/device/lib/dif/dif_rv_core_ibex.h"
@@ -21,19 +20,20 @@
 #include "sw/device/lib/runtime/irq.h"
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/alert_handler_testutils.h"
-#include "sw/device/lib/testing/flash_ctrl_testutils.h"
+#include "sw/device/lib/testing/ret_sram_testutils.h"
+#include "sw/device/lib/testing/rstmgr_testutils.h"
 #include "sw/device/lib/testing/rv_plic_testutils.h"
 #include "sw/device/lib/testing/test_framework/FreeRTOSConfig.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "alert_handler_regs.h"
+#include "hw/top/alert_handler_regs.h"
+#include "hw/top/i2c_regs.h"
+#include "hw/top/spi_device_regs.h"
+#include "hw/top/spi_host_regs.h"
+#include "hw/top/usbdev_regs.h"
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "i2c_regs.h"
-#include "spi_device_regs.h"
-#include "spi_host_regs.h"
 #include "sw/device/lib/testing/autogen/isr_testutils.h"
-#include "usbdev_regs.h"
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -48,24 +48,7 @@ static dif_i2c_t i2c0;
 static dif_i2c_t i2c1;
 static dif_i2c_t i2c2;
 static dif_rv_core_ibex_t ibex;
-static dif_flash_ctrl_state_t flash_ctrl;
 static const uint32_t kPlicTarget = kTopEarlgreyPlicTargetIbex0;
-
-static plic_isr_ctx_t plic_ctx = {
-    .rv_plic = &plic,
-    .hart_id = kPlicTarget,
-};
-
-// Depends on the clock domain, sometimes alert handler will trigger a spurious
-// alert after the alert timeout. (Issue #2321)
-// So we allow class A interrupt to fire after the real timeout interrupt is
-// triggered.
-static alert_handler_isr_ctx_t alert_handler_ctx = {
-    .alert_handler = &alert_handler,
-    .plic_alert_handler_start_irq_id = kTopEarlgreyPlicIrqIdAlertHandlerClassa,
-    .expected_irq = kDifAlertHandlerIrqClassb,
-    .is_only_irq = false,
-};
 
 /**
  * Initialize the peripherals used in this test.
@@ -79,7 +62,7 @@ static void init_peripherals(void) {
   CHECK_DIF_OK(dif_alert_handler_init(base_addr, &alert_handler));
 
   CHECK_DIF_OK(dif_rstmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR), &rstmgr));
+      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_BASE_ADDR), &rstmgr));
 
   CHECK_DIF_OK(dif_usbdev_init(
       mmio_region_from_addr(TOP_EARLGREY_USBDEV_BASE_ADDR), &usbdev));
@@ -105,10 +88,6 @@ static void init_peripherals(void) {
   mmio_region_t ibex_addr =
       mmio_region_from_addr(TOP_EARLGREY_RV_CORE_IBEX_CFG_BASE_ADDR);
   CHECK_DIF_OK(dif_rv_core_ibex_init(ibex_addr, &ibex));
-
-  CHECK_DIF_OK(dif_flash_ctrl_init_state(
-      &flash_ctrl,
-      mmio_region_from_addr(TOP_EARLGREY_FLASH_CTRL_CORE_BASE_ADDR)));
 
   // Enable all the alert_handler interrupts used in this test.
   rv_plic_testutils_irq_range_enable(&plic, kPlicTarget,
@@ -294,8 +273,8 @@ static void alert_handler_config_peripherals(uint32_t num_peripherals,
       .ping_timeout = ping_timeout,
   };
 
-  alert_handler_testutils_configure_all(&alert_handler, config,
-                                        kDifToggleEnabled);
+  CHECK_STATUS_OK(alert_handler_testutils_configure_all(&alert_handler, config,
+                                                        kDifToggleEnabled));
   // Enables alert handler irq.
   CHECK_DIF_OK(dif_alert_handler_irq_set_enabled(
       &alert_handler, kDifAlertHandlerIrqClassa, kDifToggleEnabled));
@@ -308,7 +287,7 @@ static void alert_handler_config_peripherals(uint32_t num_peripherals,
  * A utility function to wait enough until the alert handler pings a peripheral
  * alert
  */
-void wait_enough_for_alert_ping() {
+void wait_enough_for_alert_ping(void) {
   // wait enough
   if (kDeviceType == kDeviceFpgaCw310) {
     // NUM_ALERTS*2*margin_of_safety*(2**DW)*(1/kClockFreqPeripheralHz)
@@ -375,7 +354,7 @@ enum {
  * line to the CPU, which results in a call to this OTTF ISR. This ISR
  * overrides the default OTTF implementation.
  */
-void ottf_external_isr(void) {
+void ottf_external_isr(uint32_t *exc_info) {
   // We don't expect any interrupt to be fired.
   // If an interrupt is fired, the test will be ended.
   CHECK(false, "Unexpected external interrupt triggered.");
@@ -390,8 +369,8 @@ void ottf_external_isr(void) {
 bool test_main(void) {
   init_peripherals();
 
-  // A generic loop variable
-  int ii;
+  ret_sram_testutils_init();
+
   // To keep the test results
   bool is_cause;
   // To keep the random wait time
@@ -404,28 +383,24 @@ bool test_main(void) {
   size_t test_step_cnt;
   size_t peri_idx;
 
-  // Need a NVM counter to keep the test-step info
+  // Need a retention sram counter to keep the test-step info
   // between resets on the FPGA.
-  if (kDeviceType == kDeviceFpgaCw310) {
-    // Enable flash access
-    flash_ctrl_testutils_default_region_access(&flash_ctrl,
-                                               /*rd_en*/ true,
-                                               /*prog_en*/ true,
-                                               /*erase_en*/ true,
-                                               /*scramble_en*/ false,
-                                               /*ecc_en*/ false,
-                                               /*he_en*/ false);
-
-    test_step_cnt = flash_ctrl_testutils_counter_get(kCounterTestSteps);
-    if (test_step_cnt == 256) {
-      flash_ctrl_testutils_counter_init_zero(&flash_ctrl, kCounterTestSteps);
-      test_step_cnt = flash_ctrl_testutils_counter_get(kCounterTestSteps);
+  dif_rstmgr_reset_info_bitfield_t rst_info;
+  rst_info = rstmgr_testutils_reason_get();
+  rstmgr_testutils_reason_clear();
+  if (rst_info & kDifRstmgrResetInfoPor) {
+    // Initialize retention sram counter if running on Cw310.
+    if (kDeviceType == kDeviceFpgaCw310) {
+      CHECK_STATUS_OK(ret_sram_testutils_counter_clear(kCounterTestSteps));
     }
+  }
+  if (kDeviceType == kDeviceFpgaCw310) {
+    CHECK_STATUS_OK(
+        ret_sram_testutils_counter_get(kCounterTestSteps, &test_step_cnt));
   } else {
     // Initialize the test_step counter to zero for the simulation
     test_step_cnt = 0;
   }
-
   /* TEST PHASE #0: NEGATIVE TESTING (FPGA-ONLY)
 
     The timeout value is set to 2
@@ -437,7 +412,7 @@ bool test_main(void) {
       3- Wait long enough
       4- Confirm that ping_timeout has not been triggered
       5- Release the reset of the IP
-      6- Reset the the device to test the next peripheral
+      6- Reset the device to test the next peripheral
   */
   while (test_step_cnt < 1 * ARRAYSIZE(kPeripherals)) {
     // Run the negative test only on the FPGA
@@ -445,7 +420,8 @@ bool test_main(void) {
     if (kDeviceType == kDeviceFpgaCw310) {
       // Read the test_step_cnt and compute the test phase
       // amd the peripheral ID to test
-      test_step_cnt = flash_ctrl_testutils_counter_get(kCounterTestSteps);
+      CHECK_STATUS_OK(
+          ret_sram_testutils_counter_get(kCounterTestSteps, &test_step_cnt));
       test_phase = test_step_cnt / ARRAYSIZE(kPeripherals);
       peri_idx = test_step_cnt - (test_phase)*ARRAYSIZE(kPeripherals);
 
@@ -480,7 +456,7 @@ bool test_main(void) {
                                              kDifRstmgrSoftwareResetRelease));
 
       // Increment the test_step counter
-      flash_ctrl_testutils_counter_increment(&flash_ctrl, kCounterTestSteps);
+      CHECK_STATUS_OK(ret_sram_testutils_counter_increment(kCounterTestSteps));
       // Request system reset to unlock the alert handler config and test the
       // next peripheral
       CHECK_DIF_OK(dif_rstmgr_software_device_reset(&rstmgr));

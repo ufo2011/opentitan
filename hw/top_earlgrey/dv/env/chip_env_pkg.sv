@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,12 +19,12 @@ package chip_env_pkg;
   import dv_base_reg_pkg::*;
   import dv_lib_pkg::*;
   import dv_utils_pkg::*;
-  import flash_ctrl_pkg::*;
   import jtag_pkg::*;
   import jtag_agent_pkg::*;
   import jtag_riscv_agent_pkg::*;
   import jtag_dmi_agent_pkg::*;
   import jtag_rv_debugger_pkg::*;
+  import prim_secded_pkg::*;
   import rv_dm_regs_ral_pkg::*;
   import rv_dm_mem_ral_pkg::*;
   import rv_dm_reg_pkg::NrHarts;
@@ -32,8 +32,12 @@ package chip_env_pkg;
   import kmac_pkg::*;
   import aes_pkg::*;
   import lc_ctrl_state_pkg::*;
+  import lc_ctrl_token_pkg::*;
   import lc_ctrl_dv_utils_pkg::*;
   import mem_bkdr_util_pkg::*;
+  import rom_ctrl_bkdr_util_pkg::*;
+  import sram_ctrl_bkdr_util_pkg::*;
+  import otp_ctrl_mem_bkdr_util_pkg::*;
   import otp_ctrl_pkg::*;
   import spi_agent_pkg::*;
   import sram_ctrl_pkg::*;
@@ -44,45 +48,48 @@ package chip_env_pkg;
   import xbar_env_pkg::*;
   import top_earlgrey_pkg::*;
   import top_earlgrey_rnd_cnst_pkg::*;
-  import pwm_monitor_pkg::*;
-  import pwm_reg_pkg::NOutputs;
   import tl_main_pkg::ADDR_SPACE_RV_CORE_IBEX__CFG;
   import rv_core_ibex_reg_pkg::RV_CORE_IBEX_DV_SIM_WINDOW_OFFSET;
   import i2c_agent_pkg::*;
-  import pattgen_agent_pkg::*;
 
   // macro includes
   `include "uvm_macros.svh"
   `include "dv_macros.svh"
   `include "chip_hier_macros.svh"
 
-  // LC token paramters
+  // LC token parameters
   // LC sends two 64-bit msg as input token.
   localparam uint TokenWidthBit  = kmac_pkg::MsgWidth * 2;
   localparam uint TokenWidthByte = TokenWidthBit / 8;
 
+  // I3C Virtual Targets.
+  // The CSRs describe `I3cMaxTargets` Virtual Targets. How many of them an instance implements is
+  // its `NumTargets` parameter, which may differ between instances.
+  localparam uint I3cMaxTargets = i3c_reg_pkg::MaxTargets;
+
   // ROM digest parameters
   localparam uint RomDigestDw = 256;
-  localparam uint RomMaxCheckAddr = rom_ctrl_reg_pkg::ROM_CTRL_ROM_SIZE - (RomDigestDw / 8);
+  localparam uint RomMaxCheckAddr = top_earlgrey_pkg::TOP_EARLGREY_ROM_CTRL_ROM_SIZE_BYTES -
+                                    (RomDigestDw / 8);
 
   typedef virtual sw_logger_if         sw_logger_vif;
   typedef virtual sw_test_status_if    sw_test_status_vif;
   typedef virtual ast_supply_if        ast_supply_vif;
   typedef virtual ast_ext_clk_if       ast_ext_clk_vif;
+  typedef virtual usb20_if             usb20_vif;
 
   // Types of memories in the chip.
   //
   // RAM instances have support for up to 16 tiles. Actual number of tiles in use in the design is a
   // runtime setting in chip_env_cfg.
   typedef enum {
-    FlashBank0Data,
-    FlashBank1Data,
-    FlashBank0Info,
-    FlashBank1Info,
+    RramData,
+    RramInfo,
     ICacheWay0Tag,
     ICacheWay1Tag,
     ICacheWay0Data,
     ICacheWay1Data,
+    UsbdevBuf,
     OtbnDmem[16],
     OtbnImem,
     Otp,
@@ -91,18 +98,20 @@ package chip_env_pkg;
     Rom
   } chip_mem_e;
 
-  // On OpenTitan, we deal with 4 types of SW - ROM, the main test, the OTBN test and the OTP image.
+  // On Earlgrey, we deal with 6 types of SW.
   // This basically puts these SW types into 'slots' that the external regression tool can set.
+  // Note: This enum must be consistent across tops.
+  // Note: If this enum is updated, then also update the file `build_sw_collateral_for_sim.py`.
   typedef enum {
     SwTypeRom       = 0, // Ibex SW - first stage boot ROM.
-    SwTypeTestSlotA = 1, // Ibex SW - test SW in (flash) slot A.
-    SwTypeTestSlotB = 2, // Ibex SW - test SW in (flash) slot B.
+    SwTypeTestSlotA = 1, // Ibex SW - test SW in (NVM) slot A.
+    SwTypeTestSlotB = 2, // Ibex SW - test SW in (NVM) slot B.
     SwTypeOtbn      = 3, // Otbn SW
     SwTypeOtp       = 4, // Customized OTP image
     SwTypeDebug     = 5  // Debug SW - injected into SRAM.
   } sw_type_e;
 
-  // Our dvsim.py configuration always generates five base OTP images (in various lifecycle states)
+  // Our dvsim configuration always generates five base OTP images (in various lifecycle states)
   // to allow tests configurations to choose from. Additionally, we support specifying a custom OTP
   // image, via the `sw_images` plusarg, that is built by the SW build system.
   typedef enum {
@@ -111,6 +120,10 @@ package chip_env_pkg;
     OtpTypeLcStProd,          // Base OTP image in Prod lifecycle state.
     OtpTypeLcStRma,           // Base OTP image in RMA lifecycle state.
     OtpTypeLcStTestUnlocked0, // Base OTP image in TestUnlocked0 lifecycle state.
+    OtpTypeLcStTestUnlocked1, // Base OTP image in TestUnlocked1 lifecycle state.
+    OtpTypeLcStTestUnlocked2, // Base OTP image in TestUnlocked2 lifecycle state.
+    OtpTypeLcStTestLocked0, // Base OTP image in TestUnlocked0 lifecycle state.
+    OtpTypeLcStTestLocked1, // Base OTP image in TestUnlocked0 lifecycle state.
     OtpTypeCustom             // Custom OTP image specified via `sw_images` plusarg.
   } otp_type_e;
 
@@ -118,16 +131,24 @@ package chip_env_pkg;
   typedef enum int {
     LcInitialized,
     LcReady,
+    LcExtClockSwitched,
     LcTransitionSuccessful,
     LcTransitionCntError,
     LcTransitionError,
     LcTokenError,
-    LcFlashRmaError,
+    LcNvmRmaError,
     LcOtpError,
     LcStateError,
     LcBusIntegError,
     LcOtpPartitionError
   } lc_ctrl_status_e;
+
+  // Selects which power on reset pin(s) are pulled low to reset the chip.
+  typedef enum {
+    PorPinPorN,
+    PorPinPoraN,
+    PorPinBoth
+  } por_pin_e;
 
   typedef enum bit[1:0] {
     SysrstCtrlPadKey0 = 0,

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,8 +33,8 @@ class chip_sw_sysrst_ctrl_inputs_vseq extends chip_sw_base_vseq;
     bit [7:0] test_expected[1];
     test_phase[0] = phase;
     test_expected[0] = expected;
-    sw_symbol_backdoor_overwrite("kTestPhase", test_phase);
-    sw_symbol_backdoor_overwrite("kTestExpected", test_expected);
+    sw_symbol_backdoor_overwrite("kTestPhaseDV", test_phase);
+    sw_symbol_backdoor_overwrite("kTestExpectedDV", test_expected);
   endfunction
 
   virtual task body();
@@ -58,6 +58,7 @@ class chip_sw_sysrst_ctrl_inputs_vseq extends chip_sw_base_vseq;
 
       set_pads(pads_to_set);
       #1us;
+      wait_rram_rd_buf_rdy();
       write_test_phase_and_expected(current_phase, pads_to_set);
 
       `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInTest)

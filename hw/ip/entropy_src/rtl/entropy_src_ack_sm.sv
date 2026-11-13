@@ -1,15 +1,16 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Description: interface between a req/ack interface and a fifo
 //
 
+`include "prim_assert.sv"
+
 module entropy_src_ack_sm (
   input logic                clk_i,
   input logic                rst_ni,
 
-  input logic                enable_i,
   input logic                req_i,
   output logic               ack_o,
   input logic                fifo_not_empty_i,
@@ -31,21 +32,15 @@ module entropy_src_ack_sm (
     ack_sm_err_o = 1'b0;
     unique case (state_q)
       Idle: begin
-        if (enable_i) begin
-          if (req_i) begin
-            state_d = Wait;
-          end
+        if (req_i) begin
+          state_d = Wait;
         end
       end
       Wait: begin
-        if (!enable_i) begin
+        if (fifo_not_empty_i) begin
+          ack_o = 1'b1;
+          fifo_pop_o = 1'b1;
           state_d = Idle;
-        end else begin
-          if (fifo_not_empty_i) begin
-            ack_o = 1'b1;
-            fifo_pop_o = 1'b1;
-            state_d = Idle;
-          end
         end
       end
       Error: begin

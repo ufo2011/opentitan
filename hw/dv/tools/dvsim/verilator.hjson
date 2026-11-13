@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -51,8 +51,7 @@
   // TODO: Verilator has a few useful build switches. Need to figure out how to
   // pass them via FuseSoC.
 
-  build_opts: ["--flag=fileset_{design_level}",
-               "--target=sim",
+  build_opts: ["--target=sim",
                "--build-root={build_dir}",
                "--setup",
                "--build",
@@ -69,9 +68,7 @@
                // "--x-initial unique",
                ]
 
-  run_opts: [// Set random seed.
-             // "+verilator+seed+{seed}",
-             ]
+  run_opts: []
 
   // Supported wave dumping formats (in order of preference).
   supported_wave_formats: ["fst"]

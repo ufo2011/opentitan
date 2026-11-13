@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -45,12 +45,16 @@ ${hdr}
 %>\
 
   typedef struct packed {
-    % if r.is_homogeneous():
+    % if r.reinit is not None:
+    logic reinit;
+    % endif
+    % if r.is_homogeneous(inregwen=True):
       ## If we have a homogeneous register or multireg, there is just one field
       ## (possibly replicated many times). The typedef is for one copy of that
-      ## field.
+      ## field. An inregwen control field is internal, so it is excluded here.
 <%
-      field = r.get_field_list()[0]
+      field = [f for f in r.get_field_list()
+               if r0.inregwen is None or f.name != r0.inregwen][0]
       field_q_width = field.get_n_bits(r0.hwext, r0.hwre, ['q'])
       field_q_bits = lib.bitarray(field_q_width, 2)
 %>\
@@ -65,7 +69,7 @@ ${hdr}
       ## We are inhomogeneous, which means there is more than one different
       ## field. Generate a reg2hw typedef that packs together all the fields of
       ## the register.
-      % for f in r0.fields:
+      % for f in reversed(r0.fields):
 <%
           field_q_width = f.get_n_bits(r0.hwext, r0.hwre, ["q"])
 %>\
@@ -101,12 +105,13 @@ ${hdr}
 %>\
 
   typedef struct packed {
-    % if r.is_homogeneous():
+    % if r.is_homogeneous(inregwen=True):
       ## If we have a homogeneous register or multireg, there is just one field
       ## (possibly replicated many times). The typedef is for one copy of that
-      ## field.
+      ## field. An inregwen control field is internal, so it is excluded here.
 <%
-      field = r.get_field_list()[0]
+      field = [f for f in r.get_field_list()
+               if r0.inregwen is None or f.name != r0.inregwen][0]
       field_d_width = field.get_n_bits(r0.hwext, r0.hwre, ['d'])
       field_d_bits = lib.bitarray(field_d_width, 2)
 %>\
@@ -118,7 +123,7 @@ ${hdr}
       ## We are inhomogeneous, which means there is more than one different
       ## field. Generate a hw2reg typedef that packs together all the fields of
       ## the register.
-      % for f in r0.fields:
+      % for f in reversed(r0.fields):
 <%
           field_d_width = f.get_n_bits(r0.hwext, r0.hwre, ["d"])
 %>\
@@ -165,7 +170,7 @@ ${hdr}
 <%def name="reg2hw_for_iface(iface_name, iface_desc, for_iface, rb)">\
 <%
 lpfx = gen_rtl.get_type_name_pfx(block, iface_name)
-nbits = rb.get_n_bits(["q", "qe", "re"])
+nbits = rb.get_n_bits(["q", "qe", "re", "reinit"])
 packbit = 0
 
 addr_width = rb.get_addr_width()
@@ -185,11 +190,11 @@ reg_if_width = 2 + addr_width + data_width + data_byte_width
 <%
     r0 = gen_rtl.get_r0(r)
     struct_type = gen_rtl.get_reg_tx_type(block, r, False)
-    struct_width = r0.get_n_bits(['q', 'qe', 're'])
+    struct_width = r0.get_n_bits(['q', 'qe', 're', 'reinit'])
 
     if isinstance(r, MultiRegister):
-      struct_type += " [{}:0]".format(r.count - 1)
-      struct_width *= r.count
+      struct_type += " [{}:0]".format(len(r.pregs) - 1)
+      struct_width *= len(r.pregs)
 
     msb = nbits - packbit - 1
     lsb = msb - struct_width + 1
@@ -224,8 +229,8 @@ packbit = 0
     struct_width = r0.get_n_bits(['d', 'de'])
 
     if isinstance(r, MultiRegister):
-      struct_type += " [{}:0]".format(r.count - 1)
-      struct_width *= r.count
+      struct_type += " [{}:0]".format(len(r.pregs) - 1)
+      struct_width *= len(r.pregs)
 
     msb = nbits - packbit - 1
     lsb = msb - struct_width + 1
@@ -271,16 +276,30 @@ value = "{}'h {:x}".format(aw, r.offset)
     reg_width = reg.get_width()
     reg_msb = reg_width - 1
     reg_resval = "{}'h {:x}".format(reg_width, reg.resval)
+    resval_str = "parameter logic [{}:0] {} = {};".format(reg_msb, reg_resname(reg), reg_resval)
 %>\
-  parameter logic [${reg_msb}:0] ${reg_resname(reg)} = ${reg_resval};
+    % if len(resval_str) > 100-2:
+  parameter logic [${reg_msb}:0]
+      ${reg_resname(reg)} =
+      ${reg_resval};
+    % else:
+  ${resval_str}
+    % endif
     % for field in reg.fields:
       % if field.resval is not None:
 <%
     field_width = field.bits.width()
     field_msb = field_width - 1
     field_resval = "{}'h {:x}".format(field_width, field.resval)
+    resval_str = "parameter logic [{}:0] {} = {};".format(field_msb, field_resname(reg, field), field_resval)
 %>\
-  parameter logic [${field_msb}:0] ${field_resname(reg, field)} = ${field_resval};
+        % if len(resval_str) > 100-2:
+  parameter logic [${field_msb}:0]
+      ${field_resname(reg, field)} =
+      ${field_resval};
+        % else:
+  ${resval_str}
+        % endif
       % endif
     % endfor
   % endfor
@@ -301,14 +320,17 @@ value = "{}'h {:x}".format(aw, r.offset)
 
     offset_type = 'logic [{}-1:0]'.format(aw_name)
     size_type = 'int unsigned'
+    idx_type = 'int unsigned'
     max_type_len = max(len(offset_type), len(size_type))
 
     offset_type += ' ' * (max_type_len - len(offset_type))
     size_type += ' ' * (max_type_len - len(size_type))
+    idx_type += ' ' * (max_type_len - len(idx_type))
 
 %>\
   parameter ${offset_type} ${win_pfx}_OFFSET = ${base_txt_val};
   parameter ${size_type} ${win_pfx}_SIZE   = ${size_txt_val};
+  parameter ${idx_type} ${win_pfx}_IDX    = ${i};
 % endfor
 % endif
 </%def>\
@@ -363,6 +385,20 @@ package ${lblock}${"_" + block.alias_impl if block.alias_impl else ""}_reg_pkg;
 % for param_name, width in addr_widths.values():
   parameter int ${param_name} = ${width};
 % endfor
+
+  // Number of registers for every interface
+% for iface_name, rb in block.reg_blocks.items():
+  parameter int NumRegs${iface_name.title() if iface_name else ""} = ${len(rb.flat_regs)};
+% endfor
+% if len(block.alerts):
+
+  // Alert indices
+  typedef enum int {
+% for idx, alert in enumerate(block.alerts):
+    Alert${lib.Name.to_camel_case(alert.name)}Idx = ${idx}${"" if idx == len(block.alerts) - 1 else ","}
+% endfor
+  } ${block.name.lower()}_alert_idx_t;
+% endif
 <%
   just_default = len(block.reg_blocks) == 1 and None in block.reg_blocks
 %>\

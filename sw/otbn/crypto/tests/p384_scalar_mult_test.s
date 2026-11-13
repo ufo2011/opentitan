@@ -1,4 +1,4 @@
-/* Copyright lowRISC contributors. */
+/* Copyright lowRISC contributors (OpenTitan project). */
 /* Licensed under the Apache License, Version 2.0, see LICENSE for details. */
 /* SPDX-License-Identifier: Apache-2.0 */
 
@@ -17,103 +17,57 @@
 
 p384_scalar_mult_test:
 
-  /* set dmem pointer to point to x-coordinate */
-  la       x2, p1_x
-  la       x3, dptr_x
-  sw       x2, 0(x3)
-
-  /* set dmem pointer to point to y-coordinate */
-  la       x2, p1_y
-  la       x3, dptr_y
-  sw       x2, 0(x3)
-
-  /* set dmem pointer to point to scalar k */
-  la       x2, scalar
-  la       x3, dptr_k
-  sw       x2, 0(x3)
-
-  /* set dmem pointer to point to blinding parameter */
-  la       x2, blinding_param
-  la       x3, dptr_rnd
-  sw       x2, 0(x3)
+  /* Init all-zero register. */
+  bn.xor  w31, w31, w31
 
   /* call scalar point multiplication routine in P-384 lib */
-  jal      x1, scalar_mult_p384
+  jal      x1, p384_scalar_mult
 
-  /* load result to WDRs for comparison with reference */
-  li        x2, 0
-  la        x3, p1_x
+  /* load domain parameter p (modulus)
+     [w13, w12] = p = dmem[p384_p] */
+  li        x2, 12
+  la        x3, p384_p
   bn.lid    x2++, 0(x3)
   bn.lid    x2++, 32(x3)
-  la        x3, p1_y
+
+  /* load masked x-coordinate and its mask for unmasking
+     [w1, w0] <= dmem[ecdh_x0] = x_m
+     [w3, w2] <= dmem[ecdh_x1] = r_x */
+  li        x2, 0
+  la        x3, ecdh_x0
+  bn.lid    x2++, 0(x3)
+  bn.lid    x2++, 32(x3)
+  la        x3, ecdh_x1
   bn.lid    x2++, 0(x3)
   bn.lid    x2, 32(x3)
 
+  /* unmask x coordinate x = x_m + r_x mod p
+     [w1, w0] <= ([w1, w0] + [w3, w2]) mod p */
+  bn.add    w18, w0, w2
+  bn.addc   w19, w1, w3
+  bn.mov    w20, w31
+  jal       x1, p384_reduce_p
+  bn.mov    w0, w16
+  bn.mov    w1, w17
+
+  /* load masked y-coordinate and its mask for unmasking
+     [w5, w4] <= dmem[ecdh_y0] = y_m
+     [w7, w6] <= dmem[ecdh_y1] = r_y */
+  li        x2, 4
+  la        x3, ecdh_y0
+  bn.lid    x2++, 0(x3)
+  bn.lid    x2++, 32(x3)
+  la        x3, ecdh_y1
+  bn.lid    x2++, 0(x3)
+  bn.lid    x2, 32(x3)
+
+  /* unmask y coordinate y = y_m + r_y mod p
+     [w3, w2] <= ([w5, w4] + [w7, w6]) mod p */
+  bn.add    w18, w4, w6
+  bn.addc   w19, w5, w7
+  bn.mov    w20, w31
+  jal       x1, p384_reduce_p
+  bn.mov    w2, w16
+  bn.mov    w3, w17
+
   ecall
-
-
-.section .data
-
-/* point 1 x-cooridante p1_x */
-p1_x:
-  .word 0x1a11808b
-  .word 0x02e3d5a9
-  .word 0x440d8db6
-  .word 0x5ef02be3
-  .word 0x2a35de10
-  .word 0xdbdb132e
-  .word 0xf84e7899
-  .word 0x7dff4c2b
-  .word 0x24705317
-  .word 0x30eda4ab
-  .word 0xb44ba799
-  .word 0x3af8f1c5
-  .zero 16
-
-/* point 1 y-cooridante p1_y*/
-p1_y:
-  .word 0xa9f8b96e
-  .word 0x82f268be
-  .word 0x8e51c662
-  .word 0x92b9c4bb
-  .word 0x757d4493
-  .word 0x26b4d3c6
-  .word 0xf491007e
-  .word 0x92a5c72a
-  .word 0x8d8d8641
-  .word 0x87498a20
-  .word 0x0fe7dbde
-  .word 0x841e4949
-  .zero 16
-
-/* scalar k */
-scalar:
-  .word 0xe8791ba3
-  .word 0xf549e1f7
-  .word 0x893be358
-  .word 0x100794fe
-  .word 0xbc9db95d
-  .word 0xfd7ed624
-  .word 0xc60ebab6
-  .word 0x97ba9586
-  .word 0xa026b431
-  .word 0x37112316
-  .word 0x8b26eef1
-  .word 0xc1a0cf66
-  .zero 16
-
-   /* blinding parameter rnd */
- blinding_param:
-  .word 0xa82c85b0
-  .word 0x163ce1c8
-  .word 0x32518fd7
-  .word 0xf8a428cd
-  .word 0xf5b9d867
-  .word 0x00906f5f
-  .word 0x7387b4f2
-  .word 0xa2d3da7a
-  .word 0xebe0a647
-  .word 0xfb2ef7ca
-  .word 0x74249432
-  .word 0x230e5ff6
-  .zero 16

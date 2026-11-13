@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -12,6 +12,8 @@
                      "{dv_root}/tools/dvsim/fusesoc.hjson",
                      "{dv_root}/tools/dvsim/bazel.hjson",
                      "{dv_root}/tools/dvsim/{tool}.hjson"]
+
+  sv_flist_gen_flags: ["--mapping=lowrisc:prim_generic:all:0.1"]
 
   // Default directory structure for the output
   build_dir:          "{scratch_path}/{build_mode}"
@@ -75,8 +77,10 @@
   // Default list of things to export to shell
   exports: [
     { dv_root: "{dv_root}" },
+    { self_dir: "{self_dir}" },
     { SIMULATOR: "{tool}" },
     { GUI: "{gui}"},
+    { GUI_DEBUG: "{gui_debug}"},
     { WAVES: "{waves}" },
     { DUT_TOP: "{dut}" },
     { TB_TOP: "{tb}" },
@@ -100,7 +104,7 @@
   //     }
   //   ]
   //
-  // To use a build mode for a specific test, set the 'use_build_mode' key.
+  // To use a build mode for a specific test, set the 'build_mode' key.
   //
   build_modes: []
 

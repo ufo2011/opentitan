@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,7 @@ interface fi_ctr_fsm_if
     return intf_array.size();
   endfunction // get_if_size
 
-  // check which array we need to access and force or releae
+  // check which array we need to access and force or release
   function automatic void force_signal(int target, bit rel, bit [31:0] value);
     if (!rel) aes_ctr_fsm_cg_inst.sample(target);
     if (!rel) force_single_bit(target);
@@ -49,7 +49,9 @@ interface fi_ctr_fsm_if
       `uvm_fatal("fi_ctr_fsm_if", $sformatf("PATH NOT EXISTING %m"))
     end
     // read the value currently
-    uvm_hdl_read(intf_array[target], read);
+    if (!uvm_hdl_read(intf_array[target], read)) begin
+      `uvm_error("fi_ctr_fsm_if", $sformatf("Was not able to read %s", intf_array[target]))
+    end
     // always announce we are forcing something
     `uvm_info("if_ctr_fsm_if",
        $sformatf(" I am forcing target %d %s, value %b",target, intf_array[target], !read),UVM_LOW);
@@ -64,7 +66,17 @@ interface fi_ctr_fsm_if
 
 
   function automatic void release_single_bit(int target);
-    uvm_hdl_release(intf_array[target]);
+
+    //VCS coverage off
+    // pragma coverage off
+
+    if (!uvm_hdl_release(intf_array[target])) begin
+      `uvm_error("fi_ctr_fsm_if", $sformatf("Was not able to release %s", intf_array[target]))
+    end
+
+    //VCS coverage on
+    // pragma coverage on
+
     $asserton(0,"tb.dut");
   endfunction
 
@@ -75,7 +87,7 @@ interface fi_ctr_fsm_if
 
   covergroup aes_ctr_fsm_cg (int num_bins) with function sample(int target);
     // We want to see coverage per instance,
-    // but as the code are copies of eachother
+    // but as the code are copies of each other
     // we don't need every instance to achieve 100% coverage
     // a total of 100% is enough so we set the option
     // to merge the coverage of the instances

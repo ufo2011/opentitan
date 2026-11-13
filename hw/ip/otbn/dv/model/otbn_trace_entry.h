@@ -1,9 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 #ifndef OPENTITAN_HW_IP_OTBN_DV_MODEL_OTBN_TRACE_ENTRY_H_
 #define OPENTITAN_HW_IP_OTBN_DV_MODEL_OTBN_TRACE_ENTRY_H_
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -46,9 +47,10 @@ class OtbnTraceEntry {
     Exec,
     WipeInProgress,
     WipeComplete,
+    Stray,
   };
 
-  virtual ~OtbnTraceEntry(){};
+  virtual ~OtbnTraceEntry() {};
 
   // Parse a trace entry from the RTL into this object. On an error, print a
   // message to stderr and return false.

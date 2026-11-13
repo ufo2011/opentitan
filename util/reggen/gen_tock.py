@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -10,14 +10,15 @@ import logging as log
 import sys
 import textwrap
 import warnings
-from datetime import datetime
-from typing import Any, Dict, Optional, Set, TextIO
+from typing import Any, Optional, Set, TextIO
 
 from reggen.ip_block import IpBlock
 from reggen.multi_register import MultiRegister
 from reggen.params import LocalParam
 from reggen.register import Register
 from reggen.window import Window
+
+from version_file import VersionInformation
 
 REG_VISIBILITY = 'pub(crate)'
 FIELD_VISIBILITY = 'pub(crate)'
@@ -31,7 +32,7 @@ def indent(s: str, amount: int = 4) -> str:
     """Indents a multi-line string considering the depth of bracketing.
 
     This function assumes the input string is un-indented.  It will not
-    unindent an inapprorpiately indented string.
+    unindent an inappropriately indented string.
     """
     result = []
     indent = 0
@@ -95,12 +96,12 @@ def first_line(s: str) -> str:
 def format_comment(s: str) -> str:
     """Formats a string to comment wrapped to a 100 character line width
 
-    Returns wrapped string including newline and // comment characters.
+    Returns wrapped string including newline and /// comment characters.
     """
     comment = textwrap.wrap(s,
                             width=97,
-                            initial_indent='// ',
-                            subsequent_indent='// ')
+                            initial_indent='/// ',
+                            subsequent_indent='/// ')
     return '\n'.join(comment) + '\n'
 
 
@@ -118,6 +119,25 @@ def data_type(name: str, val: int, as_hex: bool) -> str:
         return "i32"
 
     return "u32"
+
+
+filler_no = 0
+
+
+def possibly_gen_filler(regout: TextIO, highest_address: Set[int],
+                        next_address: int) -> None:
+    r"""Tock requires any gaps between registers do be declared as a reserved field.
+    """
+
+    global filler_no
+    if len(highest_address) == 0:
+        hiaddr = 0
+    else:
+        hiaddr = sorted(highest_address)[-1]
+    if hiaddr >= next_address:
+        return
+    filler_no += 1
+    genout(regout, "(0x{:04x} => _reserved{}),\n", hiaddr, filler_no)
 
 
 def gen_const(outstr: TextIO,
@@ -196,13 +216,15 @@ def gen_field_definitions(
         if field.auto_split:
             for sub_field_id in range(field.bits.lsb, field.bits.width()):
                 genout(fieldout, "\n{} OFFSET({}) NUMBITS({}) [],",
-                       "{}_{}".format(field.name.upper(), sub_field_id), sub_field_id, 1)
+                       "{}_{}".format(field.name.upper(),
+                                      sub_field_id), sub_field_id, 1)
         else:
-            genout(fieldout, "\n{} OFFSET({}) NUMBITS({}) [", field.name.upper(),
-                   field.bits.lsb, field.bits.width())
+            genout(fieldout, "\n{} OFFSET({}) NUMBITS({}) [",
+                   field.name.upper(), field.bits.lsb, field.bits.width())
             if getattr(field, 'enum', None) is not None:
                 for enum in field.enum:
-                    genout(fieldout, "\n{} = {},", sanitize_name(enum.name).upper(), enum.value)
+                    genout(fieldout, "\n{} = {},",
+                           sanitize_name(enum.name).upper(), enum.value)
                 genout(fieldout, "\n],")
             else:
                 genout(fieldout, "],")
@@ -214,6 +236,7 @@ def gen_const_register(regout: TextIO, fieldout: TextIO, reg: Register,
                        block: IpBlock, rnames: Set[str],
                        existing_defines: Set[str], access_type: Set[str],
                        highest_address: Set[int]) -> None:
+    possibly_gen_filler(regout, highest_address, reg.offset)
     if not block.no_auto_intr and reg.name.startswith('INTR_'):
         rname = "INTR"
     else:
@@ -223,7 +246,7 @@ def gen_const_register(regout: TextIO, fieldout: TextIO, reg: Register,
     a = access(reg)
     access_type.add(a)
     highest_address.add(reg.offset + block.regwidth // 8)
-    genout(regout, format_comment(first_line(reg.desc)))
+    regout.write(format_comment(first_line(reg.desc)))
     genout(regout, "(0x{:04x} => {} {}: {}<u32, {}::Register>),\n", reg.offset,
            REG_VISIBILITY, reg.name.lower(), a, rname)
 
@@ -231,7 +254,8 @@ def gen_const_register(regout: TextIO, fieldout: TextIO, reg: Register,
 def gen_const_window(regout: TextIO, win: Window, block: IpBlock,
                      rnames: Set[str], existing_defines: Set[str],
                      access_type: Set[str], highest_address: Set[int]) -> None:
-    genout(regout, format_comment('Memory area: ' + first_line(win.desc)))
+    possibly_gen_filler(regout, highest_address, win.offset)
+    regout.write(format_comment('Memory area: ' + first_line(win.desc)))
     a = access(win)
     access_type.add(a)
     highest_address.add(win.offset + win.items * block.regwidth // 8)
@@ -250,7 +274,7 @@ def gen_rust_module_param(outstr: TextIO, param: LocalParam, module_name: str,
         return
 
     if param.desc is not None:
-        genout(outstr, format_comment(first_line(param.desc)))
+        outstr.write(format_comment(first_line(param.desc)))
     # Heuristic: if the name already has underscores, it's already snake_case,
     # otherwise, assume StudlyCaps and convert it to snake_case.
     param_name = param.name if '_' in param.name else to_snake_case(param.name)
@@ -265,10 +289,10 @@ def gen_const_module_params(outstr: TextIO, module_data: IpBlock,
     for param in module_data.params.get_localparams():
         gen_rust_module_param(outstr, param, module_name, existing_defines)
 
-    genout(outstr, format_comment(first_line("Register width")))
+    outstr.write(format_comment(first_line("Register width")))
     define_name = to_upper_snake_case(module_name + '_PARAM_REG_WIDTH')
     gen_const(outstr, define_name, '', register_width, existing_defines)
-    genout(outstr, '\n')
+    outstr.write('\n')
 
 
 def gen_const_multireg(regout: TextIO, fieldout: TextIO,
@@ -276,11 +300,12 @@ def gen_const_multireg(regout: TextIO, fieldout: TextIO,
                        rnames: Set[str], existing_defines: Set[str],
                        access_type: Set[str],
                        highest_address: Set[int]) -> None:
-    reg = multireg.regs[0]
+    reg = multireg.cregs[0]
+    possibly_gen_filler(regout, highest_address, reg.offset)
     rname = reg.name.upper()
     if rname.endswith("_0"):
         rname = rname[:-2]
-    rlen = len(multireg.regs)
+    rlen = len(multireg.cregs)
     genout(regout, format_comment(first_line(reg.desc)))
     a = access(reg)
     access_type.add(a)
@@ -303,7 +328,7 @@ def gen_const_interrupts(fieldout: TextIO, block: IpBlock, component: str,
 
 def gen_tock(block: IpBlock, outfile: TextIO, src_file: Optional[str],
              src_lic: Optional[str], src_copy: str,
-             version_stamp: Dict[str, str]) -> int:
+             version: VersionInformation) -> int:
     rnames = block.get_rnames()
 
     paramout = io.StringIO()
@@ -360,37 +385,38 @@ def gen_tock(block: IpBlock, outfile: TextIO, src_file: Optional[str],
     fieldstr = fieldout.getvalue()
     fieldout.close()
 
-    genout(outfile, '// Generated register constants for {}.\n', block.name)
     # Opensource council has approved dual-licensing the generated files under
     # both Apache and MIT licenses.
-    genout(outfile, '// This file is licensed under either of:\n')
+    # Since these generated files are meant to be imported into the Tock
+    # codebase, emit a header acceptable to Tock's license checker.
     genout(
         outfile,
-        '//   Apache License, Version 2.0 '
-        '(LICENSE-APACHE <http://www.apache.org/licenses/LICENSE-2.0>)\n'
+        "// Licensed under the Apache License, Version 2.0 or the MIT License.\n"
     )
-    genout(
-        outfile,
-        '//   MIT License (LICENSE-MIT <http://opensource.org/licenses/MIT>)\n'
-    )
+    # REUSE-IgnoreStart
+    genout(outfile, "// SPDX-License-Identifier: Apache-2.0 OR MIT\n")
+    genout(outfile, "// Copyright lowRISC contributors (OpenTitan project).\n")
+    # REUSE-IgnoreEnd
     genout(outfile, '\n')
+    genout(outfile, '// Generated register constants for {}.\n', block.name)
 
-    genout(outfile, '// Built for {}\n',
-           version_stamp.get('BUILD_GIT_VERSION', '<unknown>'))
-    genout(outfile, '// https://github.com/lowRISC/opentitan/tree/{}\n',
-           version_stamp.get('BUILD_SCM_REVISION', '<unknown>'))
-    genout(outfile, '// Tree status: {}\n',
-           version_stamp.get('BUILD_SCM_STATUS', '<unknown>'))
-    tm = int(version_stamp.get('BUILD_TIMESTAMP', 0))
-    dt = datetime.utcfromtimestamp(tm) if tm else datetime.utcnow()
-    genout(outfile, '// Build date: {}\n\n', dt.isoformat())
+    if version.scm_version() is not None:
+        genout(outfile, '// Built for {}\n', version.scm_version())
+    if version.scm_revision() is not None:
+        genout(outfile, '// https://github.com/lowRISC/opentitan/tree/{}\n',
+               version.scm_revision())
+    if version.scm_status() is not None:
+        genout(outfile, '// Tree status: {}\n', version.scm_status())
 
     if src_file:
         genout(outfile, '// Original reference file: {}\n', src_file)
 
     for access in sorted(access_type):
         genout(outfile, "use kernel::utilities::registers::{};\n", access)
-    genout(outfile, "use kernel::utilities::registers::{{register_bitfields, register_structs}};\n")
+    genout(
+        outfile,
+        "use kernel::utilities::registers::{{register_bitfields, register_structs}};\n"
+    )
 
     outfile.write(indent(paramstr))
     outfile.write(indent(regstr))

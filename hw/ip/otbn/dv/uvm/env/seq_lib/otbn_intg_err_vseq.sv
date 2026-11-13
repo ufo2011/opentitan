@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,10 @@ class otbn_intg_err_vseq extends otbn_base_vseq;
   `uvm_object_utils(otbn_intg_err_vseq)
 
   `uvm_object_new
+
+  // A flag whether the injected fault leads to a delayed escalation. Some escalation sources are
+  // flopped in the RTL to improve timing. Overwrite this in the deriving class.
+  protected bit expect_delayed_escalation = 0;
 
   // Wait until the integrity-checked signal is used (otherwise an injected error would not have any
   // consequences) or an internal timeout expires.  The `used_words` output indicates which words
@@ -53,7 +57,6 @@ class otbn_intg_err_vseq extends otbn_base_vseq;
   endtask
 
   task body();
-    uvm_reg_data_t             act_val;
     string                     elf_path;
     bit [BaseWordsPerWLEN-1:0] used_words;
     bit [BaseWordsPerWLEN-1:0] corrupted_words;
@@ -81,9 +84,19 @@ class otbn_intg_err_vseq extends otbn_base_vseq;
 
     inject_errors(used_words, corrupted_words);
 
+    if (expect_delayed_escalation) begin
+      // Due to the delayed escalation, the faulted instruction still commits but with wrong values.
+      // We must signal to the ISS that the result can be off.
+      cfg.model_agent_cfg.vif.tolerate_result_mismatch(1);
+
+      // Injecting the error can lead to SW errors which escalate immediately.
+      handle_sw_error_during_delayed_hw_escalation(); // This resumes on the next clk posedge
+    end
+
     // Notify the model about the integrity violation error.
+    // The HW escalation must happen on the rising edge. Otherwise the model is informed too late.
     if (|(corrupted_words & used_words)) begin
-      otbn_pkg::err_bits_t err_bits;
+      err_bits_reg_t err_bits;
       err_bits = '{reg_intg_violation: 1'b1, default: 1'b0};
       cfg.model_agent_cfg.vif.send_err_escalation(err_bits);
     end
@@ -92,33 +105,19 @@ class otbn_intg_err_vseq extends otbn_base_vseq;
     release_force();
 
     if (|(corrupted_words & used_words)) begin
-      // OTBN should now do a secure wipe. Give it up to 400 cycles to do so (because it needs to go
-      // twice over all registers and reseed URND in between, the time of which depends on the delay
-      // configured in the EDN model).
-      cfg.clk_rst_vif.wait_n_clks(400);
+      // OTBN should now do a secure wipe. Give it up to 4000 cycles to do so (because it needs to
+      // go twice over all registers and reseed URND in between, the time of which depends on the
+      // delay configured in the EDN model).
+      cfg.clk_rst_vif.wait_n_clks(4000);
 
       // We should now be in a locked state after the secure wipe.
       `DV_CHECK_FATAL(cfg.model_agent_cfg.vif.status == otbn_pkg::StatusLocked);
-
-      // The scoreboard will have seen the transition to locked state and inferred that it should
-      // see a fatal alert. However, it doesn't really have a way to ensure that we keep generating
-      // them.  Wait for 3 fatal alerts and also read STATUS, ERR_BITS and FATAL_ALERT_CAUSE in
-      // parallel.
-      fork
-        begin
-          csr_utils_pkg::csr_rd(.ptr(ral.status), .value(act_val));
-          csr_utils_pkg::csr_rd(.ptr(ral.err_bits), .value(act_val));
-          csr_utils_pkg::csr_rd(.ptr(ral.fatal_alert_cause), .value(act_val));
-        end
-        begin
-          repeat (3) wait_alert_trigger("fatal", .wait_complete(1));
-        end
-      join
+      reset_if_locked();
+    end else begin
+      // Reset and finish sequence.
+      do_apply_reset = 1'b1;
+      dut_init("HARD");
     end
-
-    // Reset and finish sequence.
-    do_apply_reset = 1'b1;
-    dut_init("HARD");
   endtask
 
 endclass

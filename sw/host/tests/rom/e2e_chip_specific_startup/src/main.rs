@@ -1,38 +1,39 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #![allow(clippy::bool_assert_comparison)]
+
+use std::time::Duration;
+
 use anyhow::Result;
+use clap::Parser;
+
 use opentitanlib::app::TransportWrapper;
-use opentitanlib::chip::boolean::MultiBitBool4;
-use opentitanlib::dif::lc_ctrl::DifLcCtrlState;
 use opentitanlib::execute_test;
 use opentitanlib::test_utils::e2e_command::TestCommand;
 use opentitanlib::test_utils::epmp::constants::*;
 use opentitanlib::test_utils::epmp::{Epmp, EpmpAddressRange, EpmpEntry, EpmpRegionKind};
 use opentitanlib::test_utils::init::InitializeTest;
-use opentitanlib::test_utils::rpc::{UartRecv, UartSend};
+use opentitanlib::test_utils::rpc::{ConsoleRecv, ConsoleSend};
 use opentitanlib::uart::console::UartConsole;
-use std::time::Duration;
-use structopt::StructOpt;
+use ot_hal::dif::lc_ctrl::DifLcCtrlState;
+use ot_hal::util::multibits::MultiBitBool4;
 
 mod chip_specific_startup;
 use chip_specific_startup::ChipStartup;
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 struct Opts {
-    #[structopt(flatten)]
+    #[command(flatten)]
     init: InitializeTest,
 
-    #[structopt(
-        long, parse(try_from_str=humantime::parse_duration),
-        default_value = "10s",
-        help = "Console receive timeout",
-    )]
+    /// Console receive timeout.
+    #[arg(long, value_parser = humantime::parse_duration, default_value = "10s")]
     timeout: Duration,
 
-    #[structopt(long, help = "OTP is unprogrammed; be permissive with OTP values")]
+    /// OTP is unprogrammed; be permissive with OTP values.
+    #[arg(long)]
     otp_unprogrammed: bool,
 }
 
@@ -66,7 +67,9 @@ fn check_jitter(opts: &Opts, cs: &ChipStartup) -> Result<()> {
         MultiBitBool4::True => assert_eq!(cs.jitter, true),
         _ => {
             if opts.otp_unprogrammed {
-                log::info!("CREATOR_SW_CFG_AST_JITTER_EN is neither True nor False:  Checking for jitter enabled.");
+                log::info!(
+                    "CREATOR_SW_CFG_AST_JITTER_EN is neither True nor False:  Checking for jitter enabled."
+                );
                 assert_eq!(cs.jitter, true)
             } else {
                 assert!(en.is_known_value());
@@ -160,14 +163,6 @@ fn check_epmp(_opts: &Opts, cs: &ChipStartup) -> Result<()> {
             range: _
         }
     ));
-    assert!(matches!(
-        epmp.entry[12],
-        EpmpEntry {
-            cfg: _,
-            kind: EpmpRegionKind::Off,
-            range: _
-        }
-    ));
 
     // Epmp entries for ROM: .text, all of ROM, peripheral address space.
     assert!(matches!(
@@ -175,15 +170,15 @@ fn check_epmp(_opts: &Opts, cs: &ChipStartup) -> Result<()> {
         EpmpEntry {
             cfg: EPMP_CFG_LRX,
             kind: EpmpRegionKind::Tor,
-            range: EpmpAddressRange(0x8000, _)
+            range: EpmpAddressRange(0x40000, _)
         }
     ));
     assert!(matches!(
         epmp.entry[2],
         EpmpEntry {
             cfg: EPMP_CFG_LRO,
-            kind: EpmpRegionKind::Napot,
-            range: EpmpAddressRange(0x8000, 0x10000)
+            kind: EpmpRegionKind::Tor,
+            range: EpmpAddressRange(_, 0x70000)
         }
     ));
     assert!(matches!(
@@ -212,14 +207,23 @@ fn check_epmp(_opts: &Opts, cs: &ChipStartup) -> Result<()> {
             range: EpmpAddressRange(0x1000_0000, 0x1002_0000)
         }
     ));
+    // Secondary SRAM, mapped contiguously after main SRAM.
+    assert!(matches!(
+        epmp.entry[12],
+        EpmpEntry {
+            cfg: EPMP_CFG_LRW,
+            kind: EpmpRegionKind::Napot,
+            range: EpmpAddressRange(0x1002_0000, 0x1003_0000)
+        }
+    ));
 
-    // Flash execution: mapped by ROM when choosing a ROM_EXT.
+    // NVM execution: mapped by ROM when choosing a ROM_EXT.
     assert!(matches!(
         epmp.entry[4],
         EpmpEntry {
             cfg: EPMP_CFG_LRX,
             kind: EpmpRegionKind::Tor,
-            range: EpmpAddressRange(0x2000_0400, _)
+            range: EpmpAddressRange(0x3000_0400, _)
         }
     ));
     assert!(matches!(
@@ -227,7 +231,7 @@ fn check_epmp(_opts: &Opts, cs: &ChipStartup) -> Result<()> {
         EpmpEntry {
             cfg: EPMP_CFG_LRO,
             kind: EpmpRegionKind::Napot,
-            range: EpmpAddressRange(0x2000_0000, 0x2010_0000)
+            range: EpmpAddressRange(0x3000_0000, 0x3020_0000)
         }
     ));
     // Debug: only enabled for Test, Dev and RMA states:
@@ -293,7 +297,8 @@ fn check_sram(_opts: &Opts, cs: &ChipStartup) -> Result<()> {
     log::info!("lc_state = {:#x}", lc_state);
     assert!(cs.sram.scr_key_valid);
     match lc_state {
-        DifLcCtrlState::Dev
+        DifLcCtrlState::TestUnlocked0
+        | DifLcCtrlState::Dev
         | DifLcCtrlState::Prod
         | DifLcCtrlState::ProdEnd
         | DifLcCtrlState::Rma => {
@@ -320,10 +325,10 @@ fn test_chip_specific_startup(opts: &Opts, transport: &TransportWrapper) -> Resu
     // BootstrapOptions first.
     //let uart = opts.init.uart_params.create(&transport)?;
     let uart = transport.uart("console")?;
-    let _ = UartConsole::wait_for(&*uart, r"Running [^\r\n]*", opts.timeout)?;
+    let _ = UartConsole::wait_for(&*uart, r"Running ", opts.timeout)?;
 
     TestCommand::ChipStartup.send(&*uart)?;
-    let response = ChipStartup::recv(&*uart, opts.timeout, false)?;
+    let response = ChipStartup::recv(&*uart, opts.timeout, false, false)?;
     log::info!("{:#x?}", response);
 
     check_ast(opts, &response)?;
@@ -336,7 +341,7 @@ fn test_chip_specific_startup(opts: &Opts, transport: &TransportWrapper) -> Resu
 }
 
 fn main() -> Result<()> {
-    let opts = Opts::from_args();
+    let opts = Opts::parse();
     opts.init.init_logging();
 
     let transport = opts.init.init_target()?;

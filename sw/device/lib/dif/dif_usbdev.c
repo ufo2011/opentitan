@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,9 @@
 #include <assert.h>
 
 #include "sw/device/lib/base/bitfield.h"
+#include "sw/device/lib/base/memory.h"
 
-#include "usbdev_regs.h"  // Generated.
+#include "hw/top/usbdev_regs.h"  // Generated.
 
 /**
  * Definition in the header file (and probably other places) must be updated if
@@ -187,10 +188,11 @@ static dif_result_t endpoint_functionality_enable(const dif_usbdev_t *usbdev,
     return kDifBadArg;
   }
 
-  uint32_t reg_val = mmio_region_read32(usbdev->base_addr, reg_offset);
+  uint32_t reg_val =
+      mmio_region_read32(usbdev->base_addr, (ptrdiff_t)reg_offset);
   reg_val = bitfield_bit32_write(reg_val, kEndpointHwInfos[endpoint].bit_index,
                                  dif_toggle_to_bool(new_state));
-  mmio_region_write32(usbdev->base_addr, reg_offset, reg_val);
+  mmio_region_write32(usbdev->base_addr, (ptrdiff_t)reg_offset, reg_val);
   return kDifOk;
 }
 
@@ -254,27 +256,44 @@ dif_result_t dif_usbdev_configure(const dif_usbdev_t *usbdev,
   return kDifOk;
 }
 
-dif_result_t dif_usbdev_fill_available_fifo(
+dif_result_t dif_usbdev_fill_available_fifos(
     const dif_usbdev_t *usbdev, dif_usbdev_buffer_pool_t *buffer_pool) {
   if (usbdev == NULL || buffer_pool == NULL) {
     return kDifBadArg;
   }
 
-  // Remove buffers from the pool and write them to the AV FIFO until it is full
-  while (true) {
+  // Remove buffers from the pool and write as many as possible into the FIFOs
+  while (!buffer_pool_is_empty(buffer_pool)) {
     uint32_t status =
         mmio_region_read32(usbdev->base_addr, USBDEV_USBSTAT_REG_OFFSET);
-    bool av_full = bitfield_bit32_read(status, USBDEV_USBSTAT_AV_FULL_BIT);
-    if (av_full || buffer_pool_is_empty(buffer_pool)) {
-      break;
+    // Prioritize available SETUP buffers
+    uint32_t av_setup_depth =
+        bitfield_field32_read(status, USBDEV_USBSTAT_AV_SETUP_DEPTH_FIELD);
+    if (av_setup_depth >= 2) {
+      // Available SETUP Buffer FIFO is okay, what about the OUT buffers?
+      bool av_out_full =
+          bitfield_bit32_read(status, USBDEV_USBSTAT_AV_OUT_FULL_BIT);
+      if (av_out_full) {
+        break;
+      }
     }
     uint8_t buffer_id;
     if (!buffer_pool_remove(buffer_pool, &buffer_id)) {
       return kDifError;
     }
-    uint32_t reg_val =
-        bitfield_field32_write(0, USBDEV_AVBUFFER_BUFFER_FIELD, buffer_id);
-    mmio_region_write32(usbdev->base_addr, USBDEV_AVBUFFER_REG_OFFSET, reg_val);
+    if (av_setup_depth >= 2) {
+      // Supply Available OUT Buffer
+      uint32_t reg_val =
+          bitfield_field32_write(0, USBDEV_AVOUTBUFFER_BUFFER_FIELD, buffer_id);
+      mmio_region_write32(usbdev->base_addr, USBDEV_AVOUTBUFFER_REG_OFFSET,
+                          reg_val);
+    } else {
+      // Supply Available SETUP Buffer
+      uint32_t reg_val = bitfield_field32_write(
+          0, USBDEV_AVSETUPBUFFER_BUFFER_FIELD, buffer_id);
+      mmio_region_write32(usbdev->base_addr, USBDEV_AVSETUPBUFFER_REG_OFFSET,
+                          reg_val);
+    }
   }
 
   return kDifOk;
@@ -290,8 +309,36 @@ dif_result_t dif_usbdev_endpoint_setup_enable(const dif_usbdev_t *usbdev,
 dif_result_t dif_usbdev_endpoint_out_enable(const dif_usbdev_t *usbdev,
                                             uint8_t endpoint,
                                             dif_toggle_t new_state) {
-  return endpoint_functionality_enable(usbdev, USBDEV_RXENABLE_OUT_REG_OFFSET,
-                                       endpoint, new_state);
+  if (usbdev == NULL || !is_valid_endpoint(endpoint) ||
+      !dif_is_valid_toggle(new_state)) {
+    return kDifBadArg;
+  }
+
+  // For compatibility with earlier hardware, we must read back the state of the
+  // other OUT enables because they will _all_ be updated by any write.
+  uint32_t reg_val =
+      mmio_region_read32(usbdev->base_addr, USBDEV_RXENABLE_OUT_REG_OFFSET);
+
+  reg_val = bitfield_bit32_write(reg_val, kEndpointHwInfos[endpoint].bit_index,
+                                 dif_toggle_to_bool(new_state));
+
+  // More recent hardware supports conditional updating of the OUT enables.
+  //
+  // Update only the specified endpoint by setting 'preserve' for all other OUT
+  // endpoints. This avoids a race between firmware and the USB device in the
+  // event of `set_nak_out` functionality being used.
+  bitfield_field32_t preserve_field = {
+      .mask = USBDEV_RXENABLE_OUT_PRESERVE_MASK,
+      .index = USBDEV_RXENABLE_OUT_PRESERVE_OFFSET};
+
+  uint32_t preserved_endpoints = USBDEV_RXENABLE_OUT_PRESERVE_MASK &
+                                 ~(1u << kEndpointHwInfos[endpoint].bit_index);
+
+  reg_val =
+      bitfield_field32_write(reg_val, preserve_field, preserved_endpoints);
+  mmio_region_write32(usbdev->base_addr, USBDEV_RXENABLE_OUT_REG_OFFSET,
+                      reg_val);
+  return kDifOk;
 }
 
 dif_result_t dif_usbdev_endpoint_set_nak_out_enable(const dif_usbdev_t *usbdev,
@@ -389,13 +436,16 @@ dif_result_t dif_usbdev_recv(const dif_usbdev_t *usbdev,
       mmio_region_read32(usbdev->base_addr, USBDEV_RXFIFO_REG_OFFSET);
   // Init packet info
   *info = (dif_usbdev_rx_packet_info_t){
-      .endpoint = bitfield_field32_read(fifo_entry, USBDEV_RXFIFO_EP_FIELD),
+      .endpoint =
+          (uint8_t)bitfield_field32_read(fifo_entry, USBDEV_RXFIFO_EP_FIELD),
       .is_setup = bitfield_bit32_read(fifo_entry, USBDEV_RXFIFO_SETUP_BIT),
-      .length = bitfield_field32_read(fifo_entry, USBDEV_RXFIFO_SIZE_FIELD),
+      .length =
+          (uint8_t)bitfield_field32_read(fifo_entry, USBDEV_RXFIFO_SIZE_FIELD),
   };
   // Init buffer struct
   *buffer = (dif_usbdev_buffer_t){
-      .id = bitfield_field32_read(fifo_entry, USBDEV_RXFIFO_BUFFER_FIELD),
+      .id = (uint8_t)bitfield_field32_read(fifo_entry,
+                                           USBDEV_RXFIFO_BUFFER_FIELD),
       .offset = 0,
       .remaining_bytes = info->length,
       .type = kDifUsbdevBufferTypeRead,
@@ -547,12 +597,14 @@ dif_result_t dif_usbdev_send(const dif_usbdev_t *usbdev, uint8_t endpoint,
       config_in_val, USBDEV_CONFIGIN_0_BUFFER_0_FIELD, buffer->id);
   config_in_val = bitfield_field32_write(
       config_in_val, USBDEV_CONFIGIN_0_SIZE_0_FIELD, buffer->offset);
-  mmio_region_write32(usbdev->base_addr, config_in_reg_offset, config_in_val);
+  mmio_region_write32(usbdev->base_addr, (ptrdiff_t)config_in_reg_offset,
+                      config_in_val);
 
   // Mark the packet as ready for transmission
   config_in_val =
       bitfield_bit32_write(config_in_val, USBDEV_CONFIGIN_0_RDY_0_BIT, true);
-  mmio_region_write32(usbdev->base_addr, config_in_reg_offset, config_in_val);
+  mmio_region_write32(usbdev->base_addr, (ptrdiff_t)config_in_reg_offset,
+                      config_in_val);
 
   // Mark the buffer as stale. It will be returned to the free buffer pool
   // in dif_usbdev_get_tx_status once transmission is complete.
@@ -566,7 +618,8 @@ dif_result_t dif_usbdev_get_tx_sent(const dif_usbdev_t *usbdev,
   if (usbdev == NULL || sent == NULL) {
     return kDifBadArg;
   }
-  *sent = mmio_region_read32(usbdev->base_addr, USBDEV_IN_SENT_REG_OFFSET);
+  *sent = (uint16_t)mmio_region_read32(usbdev->base_addr,
+                                       USBDEV_IN_SENT_REG_OFFSET);
   return kDifOk;
 }
 
@@ -580,11 +633,11 @@ dif_result_t dif_usbdev_clear_tx_status(const dif_usbdev_t *usbdev,
   uint32_t config_in_reg_offset =
       kEndpointHwInfos[endpoint].config_in_reg_offset;
   uint32_t config_in_reg_val =
-      mmio_region_read32(usbdev->base_addr, config_in_reg_offset);
-  uint8_t buffer = bitfield_field32_read(config_in_reg_val,
-                                         USBDEV_CONFIGIN_0_BUFFER_0_FIELD);
+      mmio_region_read32(usbdev->base_addr, (ptrdiff_t)config_in_reg_offset);
+  uint8_t buffer = (uint8_t)bitfield_field32_read(
+      config_in_reg_val, USBDEV_CONFIGIN_0_BUFFER_0_FIELD);
 
-  mmio_region_write32(usbdev->base_addr, config_in_reg_offset,
+  mmio_region_write32(usbdev->base_addr, (ptrdiff_t)config_in_reg_offset,
                       1u << USBDEV_CONFIGIN_0_PEND_0_BIT);
   // Clear IN_SENT bit (rw1c).
   mmio_region_write32(usbdev->base_addr, USBDEV_IN_SENT_REG_OFFSET,
@@ -610,7 +663,7 @@ dif_result_t dif_usbdev_get_tx_status(const dif_usbdev_t *usbdev,
 
   // Read the configin register.
   uint32_t config_in_val =
-      mmio_region_read32(usbdev->base_addr, config_in_reg_offset);
+      mmio_region_read32(usbdev->base_addr, (ptrdiff_t)config_in_reg_offset);
 
   // Check the status of the packet.
   if (bitfield_bit32_read(config_in_val, USBDEV_CONFIGIN_0_RDY_0_BIT)) {
@@ -654,7 +707,62 @@ dif_result_t dif_usbdev_address_get(const dif_usbdev_t *usbdev, uint8_t *addr) {
   uint32_t reg_val =
       mmio_region_read32(usbdev->base_addr, USBDEV_USBCTRL_REG_OFFSET);
   // Note: Size of address is 7 bits.
-  *addr = bitfield_field32_read(reg_val, USBDEV_USBCTRL_DEVICE_ADDRESS_FIELD);
+  *addr = (uint8_t)bitfield_field32_read(reg_val,
+                                         USBDEV_USBCTRL_DEVICE_ADDRESS_FIELD);
+
+  return kDifOk;
+}
+
+dif_result_t dif_usbdev_data_toggle_out_read(const dif_usbdev_t *usbdev,
+                                             uint16_t *toggles) {
+  if (usbdev == NULL || toggles == NULL) {
+    return kDifBadArg;
+  }
+
+  uint32_t reg_val =
+      mmio_region_read32(usbdev->base_addr, USBDEV_OUT_DATA_TOGGLE_REG_OFFSET);
+  // Note: only 12 OUT endpoints defined.
+  *toggles = (uint16_t)reg_val;
+
+  return kDifOk;
+}
+
+dif_result_t dif_usbdev_data_toggle_in_read(const dif_usbdev_t *usbdev,
+                                            uint16_t *toggles) {
+  if (usbdev == NULL || toggles == NULL) {
+    return kDifBadArg;
+  }
+
+  uint32_t reg_val =
+      mmio_region_read32(usbdev->base_addr, USBDEV_IN_DATA_TOGGLE_REG_OFFSET);
+  // Note: only 12 OUT endpoints defined.
+  *toggles = (uint16_t)reg_val;
+
+  return kDifOk;
+}
+
+dif_result_t dif_usbdev_data_toggle_out_write(const dif_usbdev_t *usbdev,
+                                              uint16_t mask, uint16_t state) {
+  if (usbdev == NULL) {
+    return kDifBadArg;
+  }
+
+  // Note: only 12 OUT endpoints defined.
+  mmio_region_write32(usbdev->base_addr, USBDEV_OUT_DATA_TOGGLE_REG_OFFSET,
+                      ((uint32_t)mask << 16) | state);
+
+  return kDifOk;
+}
+
+dif_result_t dif_usbdev_data_toggle_in_write(const dif_usbdev_t *usbdev,
+                                             uint16_t mask, uint16_t state) {
+  if (usbdev == NULL) {
+    return kDifBadArg;
+  }
+
+  // Note: only 12 OUT endpoints defined.
+  mmio_region_write32(usbdev->base_addr, USBDEV_IN_DATA_TOGGLE_REG_OFFSET,
+                      ((uint32_t)mask << 16) | state);
 
   return kDifOk;
 }
@@ -664,8 +772,13 @@ dif_result_t dif_usbdev_clear_data_toggle(const dif_usbdev_t *usbdev,
   if (usbdev == NULL) {
     return kDifBadArg;
   }
-  mmio_region_write32(usbdev->base_addr, USBDEV_DATA_TOGGLE_CLEAR_REG_OFFSET,
-                      1u << endpoint);
+
+  uint32_t reg_val = (uint32_t)1u << (endpoint + 16u);
+  mmio_region_write32(usbdev->base_addr, USBDEV_OUT_DATA_TOGGLE_REG_OFFSET,
+                      reg_val);
+  mmio_region_write32(usbdev->base_addr, USBDEV_IN_DATA_TOGGLE_REG_OFFSET,
+                      reg_val);
+
   return kDifOk;
 }
 
@@ -678,7 +791,8 @@ dif_result_t dif_usbdev_status_get_frame(const dif_usbdev_t *usbdev,
   uint32_t reg_val =
       mmio_region_read32(usbdev->base_addr, USBDEV_USBSTAT_REG_OFFSET);
   // Note: size of frame index is 11 bits.
-  *frame_index = bitfield_field32_read(reg_val, USBDEV_USBSTAT_FRAME_FIELD);
+  *frame_index =
+      (uint8_t)bitfield_field32_read(reg_val, USBDEV_USBSTAT_FRAME_FIELD);
 
   return kDifOk;
 }
@@ -747,29 +861,35 @@ dif_result_t dif_usbdev_status_get_sense(const dif_usbdev_t *usbdev,
   return kDifOk;
 }
 
-dif_result_t dif_usbdev_status_get_available_fifo_depth(
-    const dif_usbdev_t *usbdev, uint8_t *depth) {
-  if (usbdev == NULL || depth == NULL) {
+dif_result_t dif_usbdev_status_get_available_fifo_depths(
+    const dif_usbdev_t *usbdev, uint8_t *setup_depth, uint8_t *out_depth) {
+  if (usbdev == NULL || setup_depth == NULL || out_depth == NULL) {
     return kDifBadArg;
   }
 
   uint32_t reg_val =
       mmio_region_read32(usbdev->base_addr, USBDEV_USBSTAT_REG_OFFSET);
-  // Note: Size of available FIFO depth is 3 bits.
-  *depth = bitfield_field32_read(reg_val, USBDEV_USBSTAT_AV_DEPTH_FIELD);
+  // Note: Size of Available SETUP FIFO depth is 3 bits.
+  *setup_depth = (uint8_t)bitfield_field32_read(
+      reg_val, USBDEV_USBSTAT_AV_SETUP_DEPTH_FIELD);
+  // Note: Size of Available OUT FIFO depth is 4 bits.
+  *out_depth = (uint8_t)bitfield_field32_read(
+      reg_val, USBDEV_USBSTAT_AV_OUT_DEPTH_FIELD);
 
   return kDifOk;
 }
 
 dif_result_t dif_usbdev_status_get_available_fifo_full(
-    const dif_usbdev_t *usbdev, bool *is_full) {
-  if (usbdev == NULL || is_full == NULL) {
+    const dif_usbdev_t *usbdev, bool *setup_is_full, bool *out_is_full) {
+  if (usbdev == NULL || setup_is_full == NULL || out_is_full == NULL) {
     return kDifBadArg;
   }
 
   uint32_t reg_val =
       mmio_region_read32(usbdev->base_addr, USBDEV_USBSTAT_REG_OFFSET);
-  *is_full = bitfield_bit32_read(reg_val, USBDEV_USBSTAT_AV_FULL_BIT);
+  *setup_is_full =
+      bitfield_bit32_read(reg_val, USBDEV_USBSTAT_AV_SETUP_FULL_BIT);
+  *out_is_full = bitfield_bit32_read(reg_val, USBDEV_USBSTAT_AV_OUT_FULL_BIT);
 
   return kDifOk;
 }
@@ -782,8 +902,9 @@ dif_result_t dif_usbdev_status_get_rx_fifo_depth(const dif_usbdev_t *usbdev,
 
   uint32_t reg_val =
       mmio_region_read32(usbdev->base_addr, USBDEV_USBSTAT_REG_OFFSET);
-  // Note: Size of RX FIFO depth is 3 bits.
-  *depth = bitfield_field32_read(reg_val, USBDEV_USBSTAT_RX_DEPTH_FIELD);
+  // Note: Size of RX FIFO depth is 4 bits.
+  *depth =
+      (uint8_t)bitfield_field32_read(reg_val, USBDEV_USBSTAT_RX_DEPTH_FIELD);
 
   return kDifOk;
 }
@@ -845,6 +966,8 @@ dif_result_t dif_usbdev_get_wake_status(const dif_usbdev_t *usbdev,
       bitfield_bit32_read(reg_val, USBDEV_WAKE_EVENTS_DISCONNECTED_BIT);
   status->bus_reset =
       bitfield_bit32_read(reg_val, USBDEV_WAKE_EVENTS_BUS_RESET_BIT);
+  status->bus_not_idle =
+      bitfield_bit32_read(reg_val, USBDEV_WAKE_EVENTS_BUS_NOT_IDLE_BIT);
   return kDifOk;
 }
 
@@ -918,5 +1041,111 @@ dif_result_t dif_usbdev_set_phy_pins_state(
   }
   mmio_region_write32(usbdev->base_addr, USBDEV_PHY_PINS_DRIVE_REG_OFFSET,
                       reg_val);
+  return kDifOk;
+}
+
+dif_result_t dif_usbdev_buffer_raw_write(const dif_usbdev_t *usbdev, uint8_t id,
+                                         const uint8_t *src, size_t src_len) {
+  if (usbdev == NULL || src == NULL || misalignment32_of((uintptr_t)src) ||
+      src_len > USBDEV_BUFFER_ENTRY_SIZE_BYTES) {
+    return kDifBadArg;
+  }
+
+  // We're writing to the start of the buffer.
+  ptrdiff_t buffer_offset = (ptrdiff_t)get_buffer_addr(id, 0U);
+  const uint32_t *restrict ews = (uint32_t *)(src + (src_len & ~15u));
+  const uint32_t *restrict ws = (uint32_t *)src;
+
+  // Transfer blocks of 4 x 32-bit words at a time; use the mmio_ routines for
+  // compliance and to operate correctly with the DIF mocks, although this
+  // results in transfers taking 50% longer because of the additional addressing
+  // arithmetic and increased loop overheads.
+  while (ws < ews) {
+    mmio_region_write32(usbdev->base_addr, buffer_offset, ws[0]);
+    mmio_region_write32(usbdev->base_addr, buffer_offset + 4, ws[1]);
+    mmio_region_write32(usbdev->base_addr, buffer_offset + 8, ws[2]);
+    mmio_region_write32(usbdev->base_addr, buffer_offset + 12, ws[3]);
+    buffer_offset += 16;
+    ws += 4;
+  }
+  src_len &= 15u;
+
+  if (src_len) {
+    // Remaining whole words
+    ews = ws + (src_len >> 2);
+    while (ws < ews) {
+      mmio_region_write32(usbdev->base_addr, buffer_offset, *ws++);
+      buffer_offset += 4;
+    }
+    src_len &= 3u;
+    if (src_len) {
+      // Remaining individual bytes
+      const uint8_t *restrict bs = (uint8_t *)ws;
+      uint32_t d = bs[0];
+      if (src_len > 1) {
+        d |= ((uint32_t)bs[1] << 8);
+        if (src_len > 2) {
+          d |= ((uint32_t)bs[2] << 16);
+        }
+      }
+      // Note: we can only perform full 32-bit writes to the packet buffer but
+      // any additional byte(s) will be ignored. Attempting byte-level writes
+      // would raise exceptions.
+      mmio_region_write32(usbdev->base_addr, buffer_offset, d);
+    }
+  }
+
+  return kDifOk;
+}
+
+dif_result_t dif_usbdev_buffer_raw_read(const dif_usbdev_t *usbdev, uint8_t id,
+                                        uint8_t *dst, size_t dst_len) {
+  if (usbdev == NULL || dst == NULL || misalignment32_of((uintptr_t)dst) ||
+      dst_len > USBDEV_BUFFER_ENTRY_SIZE_BYTES) {
+    return kDifBadArg;
+  }
+
+  // We're reading from the start of the packet buffer.
+  ptrdiff_t buffer_offset = (ptrdiff_t)get_buffer_addr(id, 0U);
+  const uint32_t *restrict ewd = (uint32_t *)(dst + (dst_len & ~15u));
+  uint32_t *restrict wd = (uint32_t *)dst;
+
+  // Transfer blocks of 4 x 32-bit words at a time; use the mmio_ routines for
+  // compliance and to operate correctly with the DIF mocks, although this
+  // results in transfers taking 50% longer because of the additional addressing
+  // arithmetic and increased loop overheads.
+  while (wd < ewd) {
+    wd[0] = mmio_region_read32(usbdev->base_addr, buffer_offset);
+    wd[1] = mmio_region_read32(usbdev->base_addr, buffer_offset + 4);
+    wd[2] = mmio_region_read32(usbdev->base_addr, buffer_offset + 8);
+    wd[3] = mmio_region_read32(usbdev->base_addr, buffer_offset + 12);
+    buffer_offset += 16;
+    wd += 4;
+  }
+  dst_len &= 15u;
+
+  if (dst_len) {
+    // Remaining whole words
+    ewd = wd + (dst_len >> 2);
+    while (wd < ewd) {
+      *wd++ = mmio_region_read32(usbdev->base_addr, buffer_offset);
+      buffer_offset += 4;
+    }
+    dst_len &= 3u;
+    if (dst_len) {
+      // Remaining individual bytes
+      // Note: we can only perform full 32-bit reads from the packet buffer.
+      uint8_t *restrict bd = (uint8_t *)wd;
+      uint32_t d = mmio_region_read32(usbdev->base_addr, buffer_offset);
+      bd[0] = (uint8_t)d;
+      if (dst_len > 1) {
+        bd[1] = (uint8_t)(d >> 8);
+        if (dst_len > 2) {
+          bd[2] = (uint8_t)(d >> 16);
+        }
+      }
+    }
+  }
+
   return kDifOk;
 }

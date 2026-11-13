@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ class spi_segment_item extends uvm_sequence_item;
 
   // num dummy cycles
   int                           num_dummy          = 0;
-  //num_addr_bytes
+  // num_addr_bytes
   int                           num_cmd_bytes      = 4;
 
   // transaction len
@@ -35,9 +35,23 @@ class spi_segment_item extends uvm_sequence_item;
   spi_segment_type_e            seg_type           = Data;
   rand spi_host_command_t       command_reg;
   rand bit                [7:0] spi_data      [$];
+  // The value of the CSID register when the scoreboard saw the COMMAND write
+  int unsigned                  csid               = 0;
 
   constraint command_reg_direction_c {
     //make sure the direction matches the segtype /cmd address are always tx/standard
+
+    // Alternative command just generates any kind of allowed segment combination
+    if (cmd inside {AltCmd} && (seg_type inside {Dummy, Data})) {
+      // Bidirectional commands only allow in standard speed
+      (command_reg.direction == Bidir) -> (command_reg.mode == Standard);
+      command_reg.direction dist {
+        None   := 25,
+        TxOnly := 25,
+        RxOnly := 25,
+        Bidir  := 25
+      };
+    } else
     if ((cmd inside {ReadStd}) && (seg_type inside {Dummy, Data})) {
       command_reg.direction dist {
         RxOnly := rx_only_weight,
@@ -86,13 +100,14 @@ class spi_segment_item extends uvm_sequence_item;
       command_reg.len == num_cmd_bytes - 1;
     } else
     if (seg_type == Dummy) {
-      command_reg.len == num_dummy - 1;
+      (num_dummy==0) -> command_reg.len == 0;
+      (num_dummy!=0) -> command_reg.len == num_dummy - 1;
     } else {
       command_reg.len inside {[spi_len_min - 1 : spi_len_max - 1]};
     }
 
     // ensure we only half or full word writes
-    (command_reg.len + 1) % 2 == 0;
+    !(seg_type == Dummy) -> (command_reg.len + 1) % 2 == 0;
     // default set keep transaction going
     command_reg.csaat == 1;
   }
@@ -126,6 +141,7 @@ class spi_segment_item extends uvm_sequence_item;
     command_reg.mode      = rhs_.command_reg.mode;
     command_reg.len       = rhs_.command_reg.len;
     spi_data              = rhs_.spi_data;
+    csid                  = rhs_.csid;
   endfunction
 
 
@@ -146,6 +162,7 @@ class spi_segment_item extends uvm_sequence_item;
     txt = {txt, $sformatf("\n ----| Mode: %s", command_reg.mode.name)};
     txt = {txt, $sformatf("\n ----| CSAAT: %d", command_reg.csaat)};
     txt = {txt, $sformatf("\n ----| Direction: %s", command_reg.direction.name)};
+    txt = {txt, $sformatf("\n ----| CSID: %0d", csid)};
     txt = {txt, $sformatf("\n ----| DATA |----")};
     foreach (spi_data[i]) begin
       txt = {txt, $sformatf("\n ----| [%d] %2h |----", i, spi_data[i])};

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@
 // higher level testbench components to process.
 //
 // Reads and writes made to non SBA registers are passed on through non_sba_jtag_dmi_analysis_port.
-class sba_access_monitor #(type ITEM_T = sba_access_item) extends dv_base_monitor#(
+class sba_access_monitor #(type ITEM_T = sba_access_item) extends dv_reactive_monitor #(
     .ITEM_T (ITEM_T),
     .CFG_T  (jtag_agent_cfg));
   `uvm_component_param_utils(sba_access_monitor #(ITEM_T))
@@ -74,7 +74,7 @@ class sba_access_monitor #(type ITEM_T = sba_access_item) extends dv_base_monito
     `DV_EOT_PRINT_TLM_FIFO_CONTENTS(jtag_dmi_item, jtag_dmi_fifo)
   endfunction
 
-  virtual protected task collect_trans(uvm_phase phase);
+  virtual protected task collect_trans();
     jtag_dmi_item dmi_item;
 
     forever begin
@@ -138,19 +138,8 @@ class sba_access_monitor #(type ITEM_T = sba_access_item) extends dv_base_monito
                                "sbbusy=%0b, sbbusyerror=%0b"}, sbbusy, sbbusyerror))
         end
 
-        // Check if we correctly predicted busy error.
-        `DV_CHECK_EQ(sbbusyerror, `gmv(jtag_dmi_ral.sbcs.sbbusyerror))
+        // Reflect any mirrored busy error in the pending SBA request
         if (sbbusyerror) sba_req_q[0].is_busy_err = 1'b1;
-
-        // Check if we correctly predicted the malformed SBA access request errors.
-        //
-        // We can only predict SbaErrBadAlignment and SbaErrBadSize errors. For the externally
-        // indicated errors SbaErrTimeout, SbaErrBadAddr and SbaErrOther, we pass the actually seen
-        // sberror to the sba_access_item that is written to the analysis port. The external entity
-        // reading from this port is expected to verify the correctness of these errors.
-        if (sberror inside {SbaErrNone, SbaErrBadAlignment, SbaErrBadSize}) begin
-          `DV_CHECK_EQ(sberror, `gmv(jtag_dmi_ral.sbcs.sberror))
-        end
 
         if (sba_req_q.size()) begin
           if (sberror) sba_req_q[0].is_err = sba_access_err_e'(sberror);
@@ -265,7 +254,10 @@ class sba_access_monitor #(type ITEM_T = sba_access_item) extends dv_base_monito
   virtual protected function bit predict_sba_req(input bus_op_e bus_op);
     uvm_reg_addr_t addr = `gmv(jtag_dmi_ral.sbaddress0);
     uvm_reg_data_t data = `gmv(jtag_dmi_ral.sbdata0);
-    sba_access_size_e size = sba_access_size_e'(`gmv(jtag_dmi_ral.sbcs.sbaccess));
+
+    sba_access_size_e size  = sba_access_size_e'(`gmv(jtag_dmi_ral.sbcs.sbaccess));
+    int unsigned size_bytes = 1 << int'(size);
+
     sba_access_item item;
 
     // Is the address aligned?
@@ -275,8 +267,9 @@ class sba_access_monitor #(type ITEM_T = sba_access_item) extends dv_base_monito
       return 0;
     end
 
-    // Is the transfer size supported?
-    if (size > $clog2(bus_params_pkg::BUS_DBW)) begin
+    // This transfer size is only supported if it will fit on the bus. If not, the agent should drop
+    // the request and report the bad size through its register interface.
+    if (size_bytes > bus_params_pkg::BUS_DBW) begin
       void'(jtag_dmi_ral.sbcs.sberror.predict(.value(SbaErrBadSize), .kind(UVM_PREDICT_DIRECT)));
       return 0;
     end

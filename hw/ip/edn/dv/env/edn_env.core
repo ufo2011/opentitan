@@ -1,5 +1,5 @@
 CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 name: "lowrisc:dv:edn_env:0.1"
@@ -23,7 +23,6 @@ filesets:
       - seq_lib/edn_base_vseq.sv: {is_include_file: true}
       - seq_lib/edn_common_vseq.sv: {is_include_file: true}
       - seq_lib/edn_smoke_vseq.sv: {is_include_file: true}
-      - seq_lib/edn_regwen_vseq.sv: {is_include_file: true}
       - seq_lib/edn_genbits_vseq.sv: {is_include_file: true}
       - seq_lib/edn_stress_all_vseq.sv: {is_include_file: true}
       - seq_lib/edn_intr_vseq.sv: {is_include_file: true}
@@ -39,10 +38,11 @@ generate:
     parameters:
       name: edn
       ip_hjson: ../../data/edn.hjson
+    position: prepend
 
 targets:
   default:
     filesets:
       - files_dv
     generate:
-      - ral
+      - "!chip_level ? (ral)"

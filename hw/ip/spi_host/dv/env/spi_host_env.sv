@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,13 +26,18 @@ class spi_host_env extends cip_base_env #(
        "spi_passthrough_vif", cfg.spi_passthrough_vif)) begin
       `uvm_fatal(get_full_name(), "failed to get spi_passthrough_if from uvm_config_db")
     end
-  endfunction : build_phase
+
+    if (!uvm_config_db#(virtual spi_host_fsm_if)::get(this, "", "fast_prescaler_bound_if",
+                                                      cfg.force_spi_fsm_vif))
+      `uvm_fatal(`gfn, "failed to get fast_prescaler_bound_if from uvm_config_db")
+ endfunction : build_phase
 
   function void connect_phase(uvm_phase phase);
     super.connect_phase(phase);
     if (cfg.en_scb) begin
-      m_spi_agent.monitor.host_analysis_port.connect(scoreboard.host_data_fifo.analysis_export);
-      m_spi_agent.monitor.device_analysis_port.connect(scoreboard.device_data_fifo.analysis_export);
+      cfg.m_spi_agent_cfg.enable_plain_sampling = 1;
+      m_spi_agent.monitor.plain_sampling_analysis_port.connect(
+                                                      scoreboard.plain_data_fifo.analysis_export);
     end
     if (cfg.is_active && cfg.m_spi_agent_cfg.is_active) begin
       virtual_sequencer.spi_sequencer_h = m_spi_agent.sequencer;

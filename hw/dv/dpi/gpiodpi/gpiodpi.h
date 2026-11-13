@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,9 @@
 
 #include <svdpi.h>
 
+#ifdef __cplusplus
 extern "C" {
+#endif
 
 /**
  * Allocate a new GPIO DPI interface, returned as an opaque pointer.
@@ -47,5 +49,7 @@ uint32_t gpiodpi_host_to_device_tick(void *ctx_void, svBitVecVal *gpio_oe,
  */
 void gpiodpi_close(void *ctx_void);
 
+#ifdef __cplusplus
 }  // extern "C"
+#endif
 #endif  // OPENTITAN_HW_DV_DPI_GPIODPI_GPIODPI_H_

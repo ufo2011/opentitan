@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
 import re
 import subprocess
 import tempfile
-from typing import Any, BinaryIO, Dict, IO, List, Optional, TextIO, Tuple
+from typing import BinaryIO, IO, List, Optional, TextIO, Tuple
 
 from elftools.elf.elffile import ELFFile  # type: ignore
-from util.design.secded_gen import ecc_encode_some, load_secded_config  # type: ignore
+from util.design.secded_gen import ecc_encode_many  # type: ignore
 
 
 class MemChunk:
@@ -47,21 +47,24 @@ class MemChunk:
                 toks.append(f'{word:0{word_chars}X}')
             outfile.write(' '.join(toks) + '\n')
 
-    def add_ecc32(self, config: Dict[str, Any]) -> None:
+    def add_ecc32(self, *, expect_repeats: bool = True) -> None:
         '''Add ECC32 integrity bits
 
         This extends the input words (which are assumed to be 32-bit) by 7
         bits, to make 39-bit words.
 
+        `expect_repeats` indicates whether repeated ROM words should be
+        expected. This is typically the case if ROM is not already scrambled.
+        This setting only impacts ECC encoding performance.
+
         '''
-        self.words = ecc_encode_some(config, 'inv_hsiao', 32, self.words)[0]
+        self.words = ecc_encode_many('inv_hsiao', 32, self.words, cache=expect_repeats)[0]
 
 
 class MemFile:
     def __init__(self, width: int, chunks: List[MemChunk]):
         self.width = width
         self.chunks = chunks
-        self.config = load_secded_config()
 
     def __str__(self) -> str:
         return ('MemFile(width={}, chunks_len={})'
@@ -109,7 +112,7 @@ class MemFile:
     def _load_preproc(width: int, infile: IO[str]) -> 'MemFile':
         '''Load a pre-processed file'''
         chunks = []
-        next_chunk = None  # type: Optional[MemChunk]
+        next_chunk: Optional[MemChunk] = None
         for line in infile:
             # If the line is empty or whitespace, skip it.
             if not line or line.isspace():
@@ -166,7 +169,7 @@ class MemFile:
     def load_elf32(infile: BinaryIO, base_addr: int) -> 'MemFile':
         '''Read a little-endian 32-bit ELF file'''
         elf_file = ELFFile(infile)
-        segments = []  # type: List[Tuple[int, int, bytes]]
+        segments: List[Tuple[int, int, bytes]] = []
         for segment in elf_file.iter_segments():
             seg_type = segment['p_type']
 
@@ -213,7 +216,7 @@ class MemFile:
         # Merge any adjacent segments, bridging any sub-word gaps. This doesn't
         # do any other right padding: we'll do that on the final pass that
         # converts to 32-bit words.
-        merged_segments = []  # type: List[Tuple[int, int, bytes]]
+        merged_segments: List[Tuple[int, int, bytes]] = []
         next_word = 0
         for lma, top, data in segments:
             # Round the LMA down to the previous word boundary. The non-overlap
@@ -248,7 +251,7 @@ class MemFile:
         # Assemble the bytes in each segment into little-endian 32-bit words.
         # Zero-extend any partial word at the end of a segment. Because of the
         # merging in the previous pass, we know this won't cause any overlaps.
-        chunks = []  # type: List[MemChunk]
+        chunks: List[MemChunk] = []
         for lma_word, _, data in merged_segments:
             words = []
             word = 0
@@ -311,19 +314,23 @@ class MemFile:
 
         return MemFile(self.width, [acc])
 
-    def add_ecc32(self) -> None:
+    def add_ecc32(self, *, expect_repeats: bool = True) -> None:
         '''Add ECC32 integrity bits
 
         This extends the input words (which are assumed to be 32-bit) by 7
         bits, to make 39-bit words.
 
+        `expect_repeats` indicates whether repeated ROM words should be
+        expected. This is typically the case if ROM is not already scrambled.
+        This setting only impacts ECC encoding performance.
+
         '''
         assert self.width <= 32
         for chunk in self.chunks:
-            chunk.add_ecc32(self.config)
+            chunk.add_ecc32(expect_repeats=expect_repeats)
         self.width = 39
 
-    def collisions(self) -> List[Tuple[int, int]]:
+    def collisions(self) -> list[tuple[int, int]]:
         '''Find "collisions" in the scrambled memory
 
         This looks at all pairs of words in the memory, looking for addresses
@@ -331,16 +338,17 @@ class MemFile:
         such addresses where addr0 < addr1 and in ascending order of addr0.
 
         '''
-        ret = []
-        for idx0, chunk0 in enumerate(self.chunks):
-            for off0, word0 in enumerate(chunk0.words):
-                for diff_idx, chunk1 in enumerate(self.chunks[idx0:]):
-                    first_off1 = 0 if diff_idx else off0 + 1
-                    for diff_off, word1 in enumerate(chunk1.words[first_off1:]):
-                        off1 = first_off1 + diff_off
+        # A map from word to a set of addresss that hold that word.
+        word_to_addr: dict[int, list[int]] = {}
 
-                        if word0 == word1:
-                            addr0 = chunk0.base_addr + off0
-                            addr1 = chunk1.base_addr + off1
-                            ret.append((addr0, addr1))
+        # Construct the map by walking through all the locations in memory
+        for idx, chunk in enumerate(self.chunks):
+            for off, word in enumerate(chunk.words):
+                word_to_addr.setdefault(word, []).append(chunk.base_addr + off)
+
+        # Now extract any pairs of addresses that share a word.
+        ret = []
+        for word, addrs in word_to_addr.items():
+            for addr1 in addrs[1:]:
+                ret.append((addrs[0], addr1))
         return ret

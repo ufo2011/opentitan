@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 // Test hardware and software reset
@@ -39,7 +39,7 @@ class adc_ctrl_fsm_reset_vseq extends adc_ctrl_base_vseq;
   constraint counters_c {
     pwrup_time inside {[0 : 2 ** ADC_CTRL_PWRUP_TIME_WIDTH - 1]};
     wakeup_time inside {[0 : 2 ** ADC_CTRL_WAKEUP_TIME_WIDTH - 1]};
-    np_sample_cnt inside {[1 : 2 ** ADC_CTRL_SAMPLE_CTL_WIDTH - 1]};
+    np_sample_cnt dist {[1 : 35] := 1, [36 : 2 ** ADC_CTRL_SAMPLE_CTL_WIDTH - 1] := 3};
     lp_sample_cnt inside {[1 : 2 ** ADC_CTRL_LP_SAMPLE_CTL_WIDTH - 1]};
 
     // Set up backdoor load values
@@ -49,10 +49,13 @@ class adc_ctrl_fsm_reset_vseq extends adc_ctrl_base_vseq;
       wakeup_time_load_val == 0;
     }
 
-    if (np_sample_cnt > 20) {
-      np_sample_cnt_load_val inside {[np_sample_cnt - 3 : np_sample_cnt - 1]};
+    if (np_sample_cnt > 35) {
+      np_sample_cnt_load_val dist{
+        (2 ** ADC_CTRL_SAMPLE_CTL_WIDTH - 1) := 1,
+        [np_sample_cnt - 3 : np_sample_cnt - 1] := 4
+      };
     } else {
-      np_sample_cnt_load_val == 0;
+      np_sample_cnt_load_val inside {[0:32]};
     }
 
     if (lp_sample_cnt > 3) {
@@ -90,23 +93,39 @@ class adc_ctrl_fsm_reset_vseq extends adc_ctrl_base_vseq;
     `DV_ASSERT_CTRL_REQ("ADC_CTRL_FSM_A_CTRL", 1)
   endtask
 
+  function void set_named_field(uvm_reg csr, string name, uvm_reg_data_t value);
+    uvm_reg_field fld = csr.get_field_by_name(name);
+    if (!fld) begin
+      `uvm_fatal(`gfn, $sformatf("Register %s has no field called %s.", csr.get_name(), name))
+    end
+
+    fld.set(value);
+  endfunction
+
+  // Configure a filter so that it will match every possible input.
+  task set_filter_to_always_match(uvm_reg filter_ctrl_csr);
+    uvm_status_e status;
+
+    set_named_field(filter_ctrl_csr, "min_v", 0);
+    set_named_field(filter_ctrl_csr, "max_v", 1023);
+    set_named_field(filter_ctrl_csr, "cond",  0);
+    set_named_field(filter_ctrl_csr, "en",    1);
+    filter_ctrl_csr.update(status);
+
+    if (status != UVM_IS_OK) begin
+      `uvm_error(`gfn,
+                 $sformatf("Failed to update filter register (in %s)", filter_ctrl_csr.get_name()))
+    end
+  endtask
 
   virtual task body();
     uvm_reg_data_t rdata;
     // Make sure ADC is off
     csr_wr(ral.adc_en_ctl, 'h0);
 
-    // Make sure filters will always match
-    ral.adc_chn0_filter_ctl[0].min_v.set(0);
-    ral.adc_chn0_filter_ctl[0].max_v.set(1023);
-    ral.adc_chn0_filter_ctl[0].cond.set(ADC_CTRL_FILTER_COND_IN);
-    ral.adc_chn0_filter_ctl[0].en.set(1);
-    ral.adc_chn1_filter_ctl[0].min_v.set(0);
-    ral.adc_chn1_filter_ctl[0].max_v.set(1023);
-    ral.adc_chn1_filter_ctl[0].cond.set(ADC_CTRL_FILTER_COND_IN);
-    ral.adc_chn1_filter_ctl[0].en.set(1);
-    csr_wr(ral.adc_chn0_filter_ctl[0], ral.adc_chn0_filter_ctl[0].get());
-    csr_wr(ral.adc_chn1_filter_ctl[0], ral.adc_chn1_filter_ctl[0].get());
+    // Make sure ony filter on each channel will always match
+    set_filter_to_always_match(ral.adc_chn0_filter_ctl[0]);
+    set_filter_to_always_match(ral.adc_chn1_filter_ctl[0]);
 
     repeat (num_trans) begin
       // Set up sample counts

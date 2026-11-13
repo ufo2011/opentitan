@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,12 +6,18 @@
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_kmac.h"
 #include "sw/device/lib/runtime/log.h"
+#include "sw/device/lib/testing/entropy_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-OTTF_DEFINE_TEST_CONFIG(.enable_concurrency = false,
-                        .can_clobber_uart = false, );
+#include "hw/top/kmac_regs.h"  // Generated.
+
+static_assert(kDtKmacCount >= 1,
+              "This test requires at least one KMAC instance");
+
+static dt_kmac_t kTestKmac = (dt_kmac_t)0;
+
+OTTF_DEFINE_TEST_CONFIG();
 
 /**
  * Struct to pack timeout values.
@@ -53,6 +59,8 @@ enum {
   kKmacTimeoutTestCount = ARRAYSIZE(kTestTimeoutVals),
   // Maxiumum digest size in bytes
   kKmacDigestLenMax = 100,
+  kKmacEntropyHashThresholdStall = 2,
+  kNumIterationsStall = kKmacEntropyHashThresholdStall,
 };
 
 /**
@@ -111,13 +119,116 @@ const kmac_test_t kKmacTestVector = {
     .digest_len_is_fixed = false,
 };
 
-bool test_main(void) {
+// Function to disable entropy complex
+status_t disable_entropy_complex(void) {
+  // Using entropy test utility to stop all EDN0, EDN1, CSRNG, and the Entropy
+  // Source
+  TRY(entropy_testutils_stop_all());
+  LOG_INFO("The entire entropy complex is stopped");
+  return OK_STATUS();
+}
+
+// Function to enable entropy complex
+status_t enable_entropy_complex(void) {
+  // Using entropy test utility to enable all EDN0, EDN1, CSRNG, and the
+  // Entropy Source
+  TRY(entropy_testutils_auto_mode_init());
+  LOG_INFO("The entire entropy complex is enabled");
+  return OK_STATUS();
+}
+
+status_t test_kmac_entropy_stall(void) {
+  LOG_INFO("Running KMAC ENTROPY STALL test...");
+
+  // Initialize KMAC HWIP
+  dif_kmac_t kmac;
+  CHECK_DIF_OK(dif_kmac_init_from_dt(kTestKmac, &kmac));
+
+  // Configure KMAC to use EDN entropy
+  dif_kmac_config_t config = {
+      .entropy_mode = kDifKmacEntropyModeEdn,
+      .entropy_fast_process = false,
+      .entropy_hash_threshold = kKmacEntropyHashThresholdStall,
+      .message_big_endian = false,
+      .output_big_endian = false,
+      .sideload = false,
+      .msg_mask = false,
+      .entropy_prescaler = 0x3ff,
+      .entropy_wait_timer = 0xffff,
+  };
+
+  // Handle string encoding
+  dif_kmac_customization_string_t str_buffer;
+  CHECK_DIF_OK(dif_kmac_customization_string_init(
+      kKmacTestVector.customization_string,
+      kKmacTestVector.customization_string_len, &str_buffer));
+
+  // When customization_string is empty, use NULL to activate empty str path
+  dif_kmac_customization_string_t *str_buffer_ptr =
+      kKmacTestVector.customization_string_len == 0 ? NULL : &str_buffer;
+
+  size_t test_digest_len =
+      kKmacTestVector.digest_len_is_fixed ? kKmacTestVector.digest_len : 0;
+
+  uint32_t hash_ctr;
+  CHECK_DIF_OK(dif_kmac_get_hash_counter(&kmac, &hash_ctr));
+  for (size_t i = 0; i < kNumIterationsStall; i++) {
+    LOG_INFO("loop_ctr = %d", i);
+
+    if (i == kKmacEntropyHashThresholdStall - 1) {
+      LOG_INFO("Disabling entropy complex to trigger a stall");
+      TRY(disable_entropy_complex());
+    }
+
+    TRY(dif_kmac_configure(&kmac, config));
+
+    dif_kmac_operation_state_t kmac_operation_state;
+    TRY(dif_kmac_mode_kmac_start(&kmac, &kmac_operation_state,
+                                 kKmacTestVector.mode, test_digest_len,
+                                 &kKmacTestVector.key, str_buffer_ptr));
+
+    TRY(dif_kmac_absorb(&kmac, &kmac_operation_state, kKmacTestVector.message,
+                        kKmacTestVector.message_len, NULL));
+    CHECK(kKmacDigestLenMax >= kKmacTestVector.digest_len);
+
+    uint32_t out[kKmacDigestLenMax];
+    if (i == kKmacEntropyHashThresholdStall - 1) {
+      // Manually issue a squeeze command to check whether KMAC stalls if
+      // entropy complex is disabled.
+      uint32_t cmd_reg = bitfield_field32_write(0, KMAC_CMD_CMD_FIELD,
+                                                KMAC_CMD_CMD_VALUE_PROCESS);
+      mmio_region_write32(kmac.base_addr, KMAC_CMD_REG_OFFSET, cmd_reg);
+      kmac_operation_state.squeezing = true;
+      // Check status.
+      dif_kmac_status_t kmac_status;
+      CHECK_DIF_OK(dif_kmac_get_status(&kmac, &kmac_status));
+      TRY_CHECK(kmac_status.sha3_state != kDifKmacSha3StateSqueezing,
+                "KMAC not stalling");
+      LOG_INFO("KMAC stalled as expected after disabling entropy complex");
+      // Re-enable entropy complex and check whether we can resume operation.
+      TRY(enable_entropy_complex());
+      CHECK_DIF_OK(dif_kmac_get_status(&kmac, &kmac_status));
+      TRY_CHECK(kmac_status.sha3_state == kDifKmacSha3StateSqueezing,
+                "KMAC not in squeeze state");
+      LOG_INFO("KMAC is is squeeze state after enabling entropy complex");
+    } else {
+      TRY(dif_kmac_squeeze(&kmac, &kmac_operation_state, out,
+                           kKmacTestVector.digest_len,
+                           /*processed=*/NULL, /*capacity=*/NULL));
+    }
+    // Flush out the result and check correctness
+    CHECK_DIF_OK(dif_kmac_end(&kmac, &kmac_operation_state));
+  }
+
+  return OK_STATUS();
+}
+
+status_t test_kmac_entropy(void) {
   LOG_INFO("Running KMAC ENTROPY test...");
 
   // Initialize KMAC HWIP
   dif_kmac_t kmac;
-  CHECK_DIF_OK(
-      dif_kmac_init(mmio_region_from_addr(TOP_EARLGREY_KMAC_BASE_ADDR), &kmac));
+  CHECK_DIF_OK(dif_kmac_init_from_dt(kTestKmac, &kmac));
 
   // Configure KMAC to use EDN entropy
   dif_kmac_config_t config = {
@@ -167,9 +278,9 @@ bool test_main(void) {
 
     // This is where timeout might happen, so we handle dif return manually
     uint32_t out[kKmacDigestLenMax];
-    dif_result_t res =
-        dif_kmac_squeeze(&kmac, &kmac_operation_state, out,
-                         kKmacTestVector.digest_len, /*processed=*/NULL);
+    dif_result_t res = dif_kmac_squeeze(&kmac, &kmac_operation_state, out,
+                                        kKmacTestVector.digest_len,
+                                        /*processed=*/NULL, /*capacity=*/NULL);
 
     // It is OK to get kDifError at this point because of possible timeout
     CHECK(res == kDifOk || res == kDifError);
@@ -180,7 +291,8 @@ bool test_main(void) {
         dif_kmac_irq_is_pending(&kmac, kDifKmacIrqKmacErr, &irq_err_pending));
     if (irq_err_pending) {
       dif_kmac_error_t err_status;
-      CHECK_DIF_OK(dif_kmac_get_error(&kmac, &err_status));
+      uint32_t err_info;
+      CHECK_DIF_OK(dif_kmac_get_error(&kmac, &err_status, &err_info));
       CHECK(err_status == kDifErrorEntropyWaitTimerExpired,
             "Error other than EDN timeout occurred.");
       LOG_INFO("EDN timed out.");
@@ -222,5 +334,14 @@ bool test_main(void) {
     LOG_INFO("hash_ctr = %d", hash_ctr);
   }
 
-  return true;
+  return OK_STATUS();
+}
+
+bool test_main(void) {
+  static status_t result;
+
+  EXECUTE_TEST(result, test_kmac_entropy);
+  EXECUTE_TEST(result, test_kmac_entropy_stall);
+
+  return status_ok(result);
 }

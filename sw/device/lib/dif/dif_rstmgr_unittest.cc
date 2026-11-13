@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include "sw/device/lib/dif/dif_base.h"
 #include "sw/device/lib/dif/dif_test_base.h"
 
-#include "rstmgr_regs.h"  // Generated.
+#include "hw/top/rstmgr_regs.h"  // Generated.
 
 namespace dif_rstmgr_unittest {
 namespace {

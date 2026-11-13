@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,18 +10,44 @@ class chip_base_vseq #(
   .COV_T              (chip_env_cov),
   .VIRTUAL_SEQUENCER_T(chip_virtual_sequencer)
 );
-  `uvm_object_utils(chip_base_vseq)
+  `uvm_object_param_utils(chip_base_vseq#(RAL_T))
 
   jtag_dmi_reg_block jtag_dmi_ral;
 
-  // knobs to enable pre_start routines
-
-  // knobs to enable post_start routines
-
-  // various knobs to enable certain routines
-
   // Local queue for holding received UART TX data.
   byte uart_tx_data_q[$];
+
+  // Indicates the first power up of the chip.
+  bit is_first_pwrup = 1'b1;
+
+  // Skip POR_N and PORA_N: required for closed source test
+  bit skip_por_n_during_first_pwrup = 0;
+
+  // Should the AST actually be programmed?
+  bit do_creator_sw_cfg_ast_cfg = 1;
+
+  // An event that is triggered by a reset_agent that tracks the reset line for rom_ctrl. If set,
+  // this can be used by m_skip_middle_vseq (so that it causes rom_ctrl to skip over the middle of
+  // ROM when building the initial digest after each reset).
+  uvm_event m_reset_event;
+
+  // A sequencer that can be used to drive items that cause rom_ctrl to skip over the middle of ROM
+  // when it reads the contents to pass to KMAC for a digest. If this is non-null then m_reset_event
+  // and m_override_digest_sequencer should also be non-null. If so, the values will be used to
+  // configure m_skip_middle_vseq, which avoids reading the middle of ROM when computing the initial
+  // digest.
+  rom_ctrl_env_pkg::rom_ctrl_addr_force_sequencer_t m_addr_force_sequencer;
+
+  // A sequencer that can be used to drive items that override responses from KMAC to rom_ctrl. If
+  // this is non-null then m_reset_event and m_addr_force_sequencer should also be non-null. If so,
+  // the values will be used to configure m_skip_middle_vseq, which avoids reading the middle of ROM
+  // when computing the initial digest.
+  rom_ctrl_env_pkg::rom_ctrl_kmac_rsp_force_sequencer_t m_override_digest_sequencer;
+
+  // A sequence that will be created and run if m_reset_event, m_addr_force_sequencer and
+  // m_override_digest_sequencer are non-null. This will cause rom_ctrl to skip over the middle of
+  // ROM when creating the digest after a reset.
+  local rom_ctrl_env_pkg::rom_ctrl_skip_middle_with_digest_vseq m_skip_middle_vseq;
 
   `uvm_object_new
 
@@ -32,11 +58,21 @@ class chip_base_vseq #(
 
   task post_start();
     do_clear_all_interrupts = 0;
-    super.post_start();
+
+    fork
+      super.post_start();
+
+      // If m_skip_middle_vseq is non-null, it was started at the start of body. That sequence won't
+      // end of its own accord, so we need to tell it to stop before this vseq completes.
+      if (m_skip_middle_vseq != null) begin
+        m_skip_middle_vseq.abort();
+        m_skip_middle_vseq.wait_for_sequence_state(UVM_FINISHED | UVM_STOPPED);
+        m_skip_middle_vseq = null;
+      end
+    join
   endtask
 
   virtual task apply_reset(string kind = "HARD");
-    lc_ctrl_state_pkg::lc_state_e lc_state;
     callback_vseq.pre_apply_reset();
     // Note: The JTAG reset does not have a dedicated pad and is muxed with other chip IOs.
     // These IOs have pad attributes that are driven from registers, and as long as
@@ -45,11 +81,13 @@ class chip_base_vseq #(
     // have to assert the main reset before that (release can happen in a randomized way
     // via the apply_reset task later on).
     // assert_por_reset();
-    `uvm_info(`gfn, "Asserting POR_N", UVM_LOW)
-    cfg.chip_vif.por_n_if.drive(0);
-    #10us;  // TODO: revisit this.
-    cfg.chip_vif.por_n_if.drive(1);
-    `uvm_info(`gfn, "POR_N complete", UVM_LOW)
+    void'($value$plusargs("skip_por_n_during_first_pwrup=%0b", skip_por_n_during_first_pwrup));
+    if (!(skip_por_n_during_first_pwrup && is_first_pwrup)) begin
+      assert_por_pins();
+      #10us;  // TODO: revisit this.
+      release_por_pins();
+      `uvm_info(`gfn, "Power on reset complete", UVM_LOW)
+    end
     // TODO: Cannot assert different types of resets in parallel; due to randomization
     // resets de-assert at different times. If the main rst_n de-asserts before others,
     // the CPU starts executing right away which can cause breakages.
@@ -60,14 +98,31 @@ class chip_base_vseq #(
   endtask
 
   virtual task apply_resets_concurrently(int reset_duration_ps = 0);
-    cfg.chip_vif.por_n_if.drive(0);
+    assert_por_pins();
     // At least 6 AON clock cycles.
     // TODO: Tentatively this is set to 100us. Fetch the individual clock freqs from AST via
     // chip_vif.
     reset_duration_ps = max2(reset_duration_ps, 100_000_000 /* 100us */);
     super.apply_resets_concurrently(reset_duration_ps);
-    cfg.chip_vif.por_n_if.drive(1);
+    release_por_pins();
   endtask
+
+  // Pulls POR_N, PORA_N or both low. The chip is in power on reset as long as one of them is low.
+  function void assert_por_pins();
+    por_pin_e por_pin;
+    `DV_CHECK_STD_RANDOMIZE_FATAL(por_pin)
+    if (cfg.en_cov) cov.por_pin_cg.sample(por_pin);
+    `uvm_info(`gfn, $sformatf("Asserting power on reset with %0s", por_pin.name()), UVM_LOW)
+    if (por_pin != PorPinPoraN) cfg.chip_vif.por_n_if.drive(0);
+    if (por_pin != PorPinPorN) cfg.chip_vif.pora_n_if.drive(0);
+  endfunction
+
+  // Drives both POR_N and PORA_N high.
+  // TODO: Consider a staggered release of POR_N and PORA_N.
+  function void release_por_pins();
+    cfg.chip_vif.por_n_if.drive(1);
+    cfg.chip_vif.pora_n_if.drive(1);
+  endfunction
 
   chip_callback_vseq callback_vseq;
 
@@ -76,7 +131,10 @@ class chip_base_vseq #(
   // having to rely on a ROM software build prior to running the simulation.
   virtual function void random_rom_init_with_digest();
     bit [TL_DW-1:0] rnd_data;
+    rom_ctrl_bkdr_util rom;
+
     `uvm_info(`gfn, "Random ROM init with digest", UVM_MEDIUM)
+    `downcast(rom, cfg.mem_bkdr_util_h[Rom])
 
     // Randomize the memory contents.
     //
@@ -85,18 +143,11 @@ class chip_base_vseq #(
     // that we also need to pick ECC values that match.
     for (int addr = 0; addr < RomMaxCheckAddr; addr += TL_DW/8) begin
       `DV_CHECK_STD_RANDOMIZE_FATAL(rnd_data)
-      cfg.mem_bkdr_util_h[Rom].rom_encrypt_write32_integ(
-          addr,
-          rnd_data,
-          top_earlgrey_rnd_cnst_pkg::RndCnstRomCtrlScrKey,
-          top_earlgrey_rnd_cnst_pkg::RndCnstRomCtrlScrNonce,
-          1'b1); // Enable scrambling.
+      rom.rom_encrypt_write32_integ(addr, rnd_data, 1'b1);
     end
 
     // Update the ROM digest.
-    cfg.mem_bkdr_util_h[Rom].update_rom_digest(
-        top_earlgrey_rnd_cnst_pkg::RndCnstRomCtrlScrKey,
-        top_earlgrey_rnd_cnst_pkg::RndCnstRomCtrlScrNonce);
+    rom.update_rom_digest();
   endfunction
 
   // Iniitializes the DUT.
@@ -105,7 +156,7 @@ class chip_base_vseq #(
   // cycle) and  performs immediate post-reset steps to prime the design for stimulus. The
   // base class method invoked by super.dut_init() applies the reset.
   virtual task dut_init(string reset_kind = "HARD");
-    bit otp_clear_hw_cfg, otp_clear_secret0, otp_clear_secret1, otp_clear_secret2;
+    bit otp_clear_hw_cfg0, otp_clear_secret0, otp_clear_secret1, otp_clear_secret2;
     // Connect the external clock source if the test needs it.
     //
     // TODO: This is a functional interface which should ideally be connected only in the extended
@@ -122,44 +173,51 @@ class chip_base_vseq #(
     cfg.chip_vif.enable_spi_host = 1;
 
     // Initialize all memories via backdoor.
-    cfg.mem_bkdr_util_h[FlashBank0Info].set_mem();
-    cfg.mem_bkdr_util_h[FlashBank1Info].set_mem();
+    cfg.mem_bkdr_util_h[RramInfo].clear_mem();
     // Backdoor load the OTP image.
     cfg.mem_bkdr_util_h[Otp].load_mem_from_file(cfg.otp_images[cfg.use_otp_image]);
     // Plusargs to selectively clear the provisioning state of some of the OTP partitions.
     // This is useful in tests that make front-door accesses for provisioning purposes.
-    void'($value$plusargs("otp_clear_hw_cfg=%0d", otp_clear_hw_cfg));
+    void'($value$plusargs("otp_clear_hw_cfg0=%0d", otp_clear_hw_cfg0));
     void'($value$plusargs("otp_clear_secret0=%0d", otp_clear_secret0));
     void'($value$plusargs("otp_clear_secret1=%0d", otp_clear_secret1));
     void'($value$plusargs("otp_clear_secret2=%0d", otp_clear_secret2));
-    if (otp_clear_hw_cfg) begin
-        cfg.mem_bkdr_util_h[Otp].otp_clear_hw_cfg_partition();
+    if (otp_clear_hw_cfg0) begin
+        otp_clear_hw_cfg0_partition(cfg.mem_bkdr_util_h[Otp]);
     end
     if (otp_clear_secret0) begin
-        cfg.mem_bkdr_util_h[Otp].otp_clear_secret0_partition();
+        otp_clear_secret0_partition(cfg.mem_bkdr_util_h[Otp]);
     end
     if (otp_clear_secret1) begin
-        cfg.mem_bkdr_util_h[Otp].otp_clear_secret1_partition();
+        otp_clear_secret1_partition(cfg.mem_bkdr_util_h[Otp]);
     end
     if (otp_clear_secret2) begin
-        cfg.mem_bkdr_util_h[Otp].otp_clear_secret2_partition();
+        otp_clear_secret2_partition(cfg.mem_bkdr_util_h[Otp]);
     end
 
-    initialize_otp_sig_verify();
+    initialize_otp_lc_state();
     initialize_otp_creator_sw_cfg_ast_cfg();
     // Initialize selected memories to all 0. This is required for some chip-level tests such as
     // otbn_mem_scramble that may intentionally read memories before writing them. Reading these
-    // memories still triggeres ECC integrity errors that need to be handled by the test.
+    // memories still triggers ECC integrity errors that need to be handled by the test.
     cfg.mem_bkdr_util_h[OtbnImem].clear_mem();
     for (int ram_idx = 0; ram_idx < cfg.num_otbn_dmem_tiles; ram_idx++) begin
       cfg.mem_bkdr_util_h[chip_mem_e'(OtbnDmem0 + ram_idx)].clear_mem();
     end
-
+    // Early cpu init
+    if (cfg.early_cpu_init) cpu_init();
     // Bring the chip out of reset.
     super.dut_init(reset_kind);
     alert_ping_en_shorten();
     callback_vseq.post_dut_init();
+
+    // Clear once upon the chip exiting the first reset.
+    is_first_pwrup = 0;
   endtask
+
+  // Place holder for cpu_init task
+  // initial implementation is in chip_sw_base_vseq.sv
+  virtual task cpu_init();endtask
 
   virtual task dut_shutdown();
     // check for pending chip operations and wait for them to complete
@@ -183,7 +241,7 @@ class chip_base_vseq #(
     csr_spinwait(.ptr(ral.rom_ctrl_regs.digest[0]), .exp_data(0), .compare_op(CompareOpNe),
                  .backdoor(1), .spinwait_delay_ns(1000));
     `uvm_info(`gfn, "rom_ctrl check done after reset", UVM_HIGH)
-    csr_spinwait(.ptr(ral.lc_ctrl.status.ready), .exp_data(1), .backdoor(1),
+    csr_spinwait(.ptr(ral.lc_ctrl_regs.status.ready), .exp_data(1), .backdoor(1),
                  .spinwait_delay_ns(1000));
     `uvm_info(`gfn, "lc_ctrl has been initialized", UVM_HIGH)
   endtask
@@ -204,9 +262,84 @@ class chip_base_vseq #(
       random_rom_init_with_digest();
     `endif
     do_dut_init = do_dut_init_save;
+
+    // If we are going to skip the middle of ROM, we will also need to override the value that comes
+    // back from KMAC with the value that has been written to ROM itself. Waiting until after
+    // writing random data to ROM means that we'll get the expected digest.
+    maybe_start_skip_middle_vseq();
+
     // Now safe to do DUT init.
     if (do_dut_init) dut_init();
   endtask
+
+  // If either m_addr_force_sequencer or m_override_digest_sequencer has been supplied, start a
+  // sequence that causes rom_ctrl to skip over the middle of ROM when it computes its initial
+  // digest.
+  local task maybe_start_skip_middle_vseq();
+    import rom_ctrl_env_pkg::rom_ctrl_skip_middle_with_digest_vseq;
+
+    int unsigned                   desired_addr;
+    bit [kmac_pkg::AppDigestW-1:0] expected_digest;
+
+    if (m_addr_force_sequencer != null) begin
+      if (m_reset_event == null) begin
+        `uvm_fatal(get_full_name(),
+                   "m_addr_force_sequencer is set but m_reset_event is null.")
+      end
+      if (m_override_digest_sequencer == null) begin
+        `uvm_fatal(get_full_name(),
+                   "m_addr_force_sequencer is set but m_override_digest_sequencer is null.")
+      end
+    end
+    if (m_override_digest_sequencer != null) begin
+      if (m_addr_force_sequencer == null) begin
+        `uvm_fatal(get_full_name(),
+                   "m_override_digest_sequencer is set but m_addr_force_sequencer is null.")
+      end
+    end
+
+    // Either both sequencers have been supplied or neither. If neither, there is nothing more for
+    // this task to do.
+    if (m_addr_force_sequencer == null) return;
+
+    m_skip_middle_vseq =
+      rom_ctrl_skip_middle_with_digest_vseq::type_id::create("m_skip_middle_vseq");
+
+    m_skip_middle_vseq.set_reset_event(m_reset_event);
+    m_skip_middle_vseq.set_sequencers(m_addr_force_sequencer, m_override_digest_sequencer);
+
+    // Jump to a destination address that's slightly before the end of the words that will be sent
+    // to KMAC. The last 8 contain an expected digest (which is not sent to kmac) and we want to be
+    // a few earlier than that, in order that a small pipeline gets filled correctly at the end of
+    // the pass through the ROM.
+    desired_addr = (cfg.m_rom_ctrl_env_cfg.get_rom_size_bytes() / 4) - 20;
+    expected_digest = cfg.m_rom_ctrl_env_cfg.get_expected_digest();
+
+    if (!m_skip_middle_vseq.randomize() with {
+          // This (arbitrary) small value controls when the "skip" will happen. Picking 10 ensures
+          // that the first ten words will be read properly before we jump.
+          m_start_addr == 10;
+          m_desired_addr == local::desired_addr;
+          m_digest == local::expected_digest;
+        }) begin
+      `uvm_fatal(get_full_name(), "Failed to randomise m_skip_middle_vseq.")
+    end
+
+    fork
+      m_skip_middle_vseq.start(null);
+    join_none
+  endtask
+
+  // If m_skip_middle_vseq is not null, update that sequence's expected digest (which it will use
+  // when forcing the value of the response from kmac).
+  //
+  // This is needed if ROM has been modified by a backdoor after the initial call to
+  // maybe_start_skip_middle_vseq configured m_skip_middle_vseq.
+  protected function void update_skip_middle_vseq_digest();
+    if (m_skip_middle_vseq != null) begin
+      m_skip_middle_vseq.update_digest(cfg.m_rom_ctrl_env_cfg.get_expected_digest());
+    end
+  endfunction
 
   // Configures and connects the UART agent for driving data over RX and receiving data on TX.
   //
@@ -225,8 +358,7 @@ class chip_base_vseq #(
                                              bit enable_tx_monitor = 1'b1,
                                              bit enable_rx_monitor = 1'b0,
                                              bit en_parity = 1'b0,
-                                             bit odd_parity = 1'b0,
-                                             baud_rate_e baud_rate = cfg.uart_baud_rate);
+                                             bit odd_parity = 1'b0);
     if (enable) begin
       `uvm_info(`gfn, $sformatf("Configuring and connecting UART%0d", uart_idx), UVM_LOW)
       cfg.m_uart_agent_cfgs[uart_idx].set_parity(en_parity, odd_parity);
@@ -257,7 +389,7 @@ class chip_base_vseq #(
   // This is done to speed up the simulation while achieving coverage on alert pings to various
   // blocks.
   // TODO; plusargs should be sought in a singla place (we do it in the base test class).
-  // TODO: Nothing may happen after calling this function, becuase it internally fetches a plusarg
+  // TODO: Nothing may happen after calling this function, because it internally fetches a plusarg
   // which can result in a nop. Refactor this later.
   task alert_ping_en_shorten();
     bit shorten_ping_en;
@@ -268,22 +400,17 @@ class chip_base_vseq #(
     end
   endtask : alert_ping_en_shorten
 
-  // Initialize the OTP creator SW cfg region to use otbn for signature verification.
-  virtual function void initialize_otp_sig_verify();
-    // Use otbn mod_exp implementation for signature
-    // verification. See the definition of `hardened_bool_t` in
-    // sw/device/lib/base/hardened.h.
-    cfg.mem_bkdr_util_h[Otp].write32(otp_ctrl_reg_pkg::CreatorSwCfgSigverifyRsaModExpIbexEnOffset,
-                                     32'h1d4);
-  endfunction : initialize_otp_sig_verify
+  // OTP life cycle initialization placeholder. Used by the `chip_prim_tl_access` test.
+  // Regular test cases should use the OTP load infrastructure.
+  virtual function void initialize_otp_lc_state();
+
+  endfunction
 
   // Initialize the OTP creator SW cfg region with AST configuration data.
   virtual function void initialize_otp_creator_sw_cfg_ast_cfg();
-    // The knob controls whether the AST is actually programmed.
-    if (cfg.do_creator_sw_cfg_ast_cfg) begin
-      cfg.mem_bkdr_util_h[Otp].write32(otp_ctrl_reg_pkg::CreatorSwCfgAstInitEnOffset,
-                                       prim_mubi_pkg::MuBi4True);
-    end
+    cfg.mem_bkdr_util_h[Otp].write32(otp_ctrl_reg_pkg::CreatorSwCfgAstInitEnOffset,
+                                     (do_creator_sw_cfg_ast_cfg ?
+                                      prim_mubi_pkg::MuBi4True : prim_mubi_pkg::MuBi4False));
 
     // Ensure that the allocated size of the AST cfg region in OTP is equal to the number of AST
     // registers to be programmed.
@@ -306,7 +433,7 @@ class chip_base_vseq #(
     logic [31:0] chk_vector;
 
     // Set rom_exec_en only when we are not in RAW state.
-    lc_state = cfg.mem_bkdr_util_h[Otp].otp_read_lc_partition_state();
+    lc_state = otp_read_lc_partition_state(cfg.mem_bkdr_util_h[Otp]);
 
     // If we are already 1, we cannot set to 0.
     // This should probably be relocated to mem_bkdr_util eventually as an option for writes
@@ -324,9 +451,11 @@ class chip_base_vseq #(
     int unsigned expected_data[int unsigned];
     int offmax = mem.get_size() - 1;
     int sizemax = offmax / 4;
+    rom_ctrl_bkdr_util rom;
 
     `uvm_info(`gfn, $sformatf("Mem writes to %s %0d times", mem.get_full_name(), max_access),
               UVM_MEDIUM)
+    `downcast(rom, cfg.mem_bkdr_util_h[Rom])
 
     for (int i = 0; i < max_access; ++i) begin
       int unsigned offset = $urandom_range(sizemax, 0);
@@ -341,9 +470,7 @@ class chip_base_vseq #(
       end else begin  // if (mem.get_access() == "RW")
         // deposit random data to rom
         int byte_addr = offset * 4;
-        cfg.mem_bkdr_util_h[Rom].rom_encrypt_write32_integ(
-            .addr(byte_addr), .data(wdata), .key(RndCnstRomCtrlScrKey),
-            .nonce(RndCnstRomCtrlScrNonce), .scramble_data(1));
+        rom.rom_encrypt_write32_integ(.addr(byte_addr), .data(wdata), .scramble_data(1));
       end
     end
 
@@ -364,13 +491,20 @@ class chip_base_vseq #(
 
   endtask : test_mem_rw
 
-  // POR_N needs to stay asserted for at least 6 AON clock cycles.
+  // The power on reset needs to stay asserted for at least 6 AON clock cycles.
   task assert_por_reset(int delay = 0);
     repeat (delay) @cfg.chip_vif.pwrmgr_low_power_if.fast_cb;
-    cfg.chip_vif.por_n_if.drive(0);
+    assert_por_pins();
     repeat (6) @cfg.chip_vif.pwrmgr_low_power_if.cb;
     cfg.clk_rst_vif.wait_clks(10);
-    cfg.chip_vif.por_n_if.drive(1);
+    release_por_pins();
   endtask // assert_por_reset
+
+  // The chip_csr_mem_rw_with_rand_reset test checks all CSRs back to back and without opening a
+  // window for applying a reset. This may take a much longer time than the default 10_000 clock
+  // cycles used in cip_base_vseq.sv.
+  virtual function int wait_cycles_with_no_outstanding_accesses();
+    return 250_000;
+  endfunction
 
 endclass : chip_base_vseq

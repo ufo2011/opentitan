@@ -1,14 +1,22 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
+// AON timer top module which instantiates the registers, the aon_core module
+// and connects up all the inputs and outputs.
 
 `include "prim_assert.sv"
 
 module aon_timer import aon_timer_reg_pkg::*;
 #(
-  parameter logic [NumAlerts-1:0] AlertAsyncOn = {NumAlerts{1'b1}}
+  parameter logic [NumAlerts-1:0]           AlertAsyncOn              = {NumAlerts{1'b1}},
+  // Number of cycles a differential skew is tolerated on the alert signal
+  parameter int unsigned                    AlertSkewCycles           = 1,
+  parameter bit                             EnableRacl                = 1'b0,
+  parameter bit                             RaclErrorRsp              = EnableRacl,
+  parameter top_racl_pkg::racl_policy_sel_t RaclPolicySelVec[NumRegs] = '{NumRegs{0}}
 ) (
+  // Clock and reset signals
   input  logic                clk_i,
   input  logic                clk_aon_i,
   input  logic                rst_ni,
@@ -21,6 +29,10 @@ module aon_timer import aon_timer_reg_pkg::*;
   // Alerts
   input  prim_alert_pkg::alert_rx_t [NumAlerts-1:0] alert_rx_i,
   output prim_alert_pkg::alert_tx_t [NumAlerts-1:0] alert_tx_o,
+
+  // RACL interface
+  input  top_racl_pkg::racl_policy_vec_t racl_policies_i,
+  output top_racl_pkg::racl_error_log_t  racl_error_o,
 
   // clk_i domain
   input  lc_ctrl_pkg::lc_tx_t lc_escalate_en_i,
@@ -35,7 +47,7 @@ module aon_timer import aon_timer_reg_pkg::*;
   // async domain
   input  logic                sleep_mode_i
 );
-
+  // Local parameters for wakeup and watchdog
   localparam int AON_WKUP = 0;
   localparam int AON_WDOG = 1;
 
@@ -44,7 +56,7 @@ module aon_timer import aon_timer_reg_pkg::*;
   aon_timer_hw2reg_t         hw2reg;
   // Register write signals
   logic                      aon_wkup_count_reg_wr;
-  logic [31:0]               aon_wkup_count_wr_data;
+  logic [63:0]               aon_wkup_count_wr_data;
   logic                      aon_wdog_count_reg_wr;
   logic [31:0]               aon_wdog_count_wr_data;
   // Other sync signals
@@ -78,13 +90,19 @@ module aon_timer import aon_timer_reg_pkg::*;
     .q_o     (aon_sleep_mode)
   );
 
-  assign hw2reg.wkup_count.de = aon_wkup_count_reg_wr;
-  assign hw2reg.wkup_count.d  = aon_wkup_count_wr_data;
-  assign hw2reg.wdog_count.de = aon_wdog_count_reg_wr;
-  assign hw2reg.wdog_count.d  = aon_wdog_count_wr_data;
+  assign hw2reg.wkup_count_lo.de = aon_wkup_count_reg_wr;
+  assign hw2reg.wkup_count_hi.de = aon_wkup_count_reg_wr;
+  assign hw2reg.wkup_count_lo.d  = aon_wkup_count_wr_data[31:0];
+  assign hw2reg.wkup_count_hi.d  = aon_wkup_count_wr_data[63:32];
+  assign hw2reg.wdog_count.de    = aon_wdog_count_reg_wr;
+  assign hw2reg.wdog_count.d     = aon_wdog_count_wr_data;
 
-  // registers instantiation
-  aon_timer_reg_top u_reg (
+  // Register instantiations
+  aon_timer_reg_top #(
+    .EnableRacl(EnableRacl),
+    .RaclErrorRsp(RaclErrorRsp),
+    .RaclPolicySelVec(RaclPolicySelVec)
+  ) u_reg (
     .clk_i,
     .rst_ni,
     .clk_aon_i,
@@ -96,9 +114,11 @@ module aon_timer import aon_timer_reg_pkg::*;
     .reg2hw,
     .hw2reg,
 
+    .racl_policies_i,
+    .racl_error_o,
+
     // SEC_CM: BUS.INTEGRITY
-    .intg_err_o (alerts[0]),
-    .devmode_i  (1'b1)
+    .intg_err_o (alerts[0])
   );
 
   ////////////
@@ -113,6 +133,7 @@ module aon_timer import aon_timer_reg_pkg::*;
   for (genvar i = 0; i < NumAlerts; i++) begin : gen_alert_tx
     prim_alert_sender #(
       .AsyncOn(AlertAsyncOn[i]),
+      .SkewCycles(AlertSkewCycles),
       .IsFatal(1'b1)
     ) u_prim_alert_sender (
       .clk_i,
@@ -159,17 +180,13 @@ module aon_timer import aon_timer_reg_pkg::*;
   // Wakeup Signals //
   ////////////////////
 
-  // Wakeup request is set by HW and cleared by SW
-  // The wakeup cause is always captured and only sent out when the system has entered sleep mode
+  // Wakeup request is set by HW and cleared by SW.
+  // The wakeup cause is always captured and only sent out when the system has entered sleep mode.
   assign hw2reg.wkup_cause.de = aon_wkup_intr_set | aon_wdog_intr_set;
   assign hw2reg.wkup_cause.d  = 1'b1;
 
-  // cause register resides in AON domain.
+  // Cause register resides in AON domain.
   assign wkup_req_o = reg2hw.wkup_cause.q;
-
-  // The wakeup signal is not latched in the pwrmgr so must be held until acked by software
-  `ASSERT(WkupStable_A, wkup_req_o |=> wkup_req_o ||
-      $fell(reg2hw.wkup_cause.q) && !aon_sleep_mode, clk_aon_i, !rst_aon_ni)
 
   ////////////////////////
   // Interrupt Handling //
@@ -179,7 +196,7 @@ module aon_timer import aon_timer_reg_pkg::*;
 
   prim_flop #(
     .Width      (2),
-    .ResetValue (2'b 00)
+    .ResetValue (2'b00)
   ) u_aon_intr_flop (
     .clk_i  (clk_aon_i),
     .rst_ni (rst_aon_ni),
@@ -189,8 +206,8 @@ module aon_timer import aon_timer_reg_pkg::*;
 
   prim_edge_detector #(
     .Width      (2),
-    .ResetValue (2'b 00),
-    .EnSync     (1'b 1)
+    .ResetValue (2'b00),
+    .EnSync     (1'b1)
   ) u_intr_sync (
     .clk_i,
     .rst_ni,
@@ -201,8 +218,17 @@ module aon_timer import aon_timer_reg_pkg::*;
   );
 
   // Registers to interrupt
-  assign intr_test_qe           = reg2hw.intr_test.wkup_timer_expired.qe |
-                                  reg2hw.intr_test.wdog_timer_bark.qe;
+  assign intr_test_qe           = reg2hw.intr_test.wkup_timer_expired.qe;
+
+  // The fields of a register all have the same value for their "qe" signals, so we just pick one
+  // of them. This assertion checks that we don't miss writes if the register top changes and the
+  // "unused_extra_qe" signal avoids a lint error (because the lint tool doesn't expand the
+  // assertion).
+  `ASSERT(IntrTestFieldsQeMatch_A,
+          reg2hw.intr_test.wkup_timer_expired.qe == reg2hw.intr_test.wdog_timer_bark.qe)
+  logic unused_extra_qe;
+  assign unused_extra_qe = reg2hw.intr_test.wdog_timer_bark.qe;
+
   assign intr_test_q [AON_WKUP] = reg2hw.intr_test.wkup_timer_expired.q;
   assign intr_state_q[AON_WKUP] = reg2hw.intr_state.wkup_timer_expired.q;
   assign intr_test_q [AON_WDOG] = reg2hw.intr_test.wdog_timer_bark.q;
@@ -219,6 +245,7 @@ module aon_timer import aon_timer_reg_pkg::*;
   ) u_intr_hw (
     .clk_i,
     .rst_ni,
+
     .event_intr_i           (intr_set),
     .reg2hw_intr_enable_q_i (2'b11),
     .reg2hw_intr_test_q_i   (intr_test_q),
@@ -233,14 +260,14 @@ module aon_timer import aon_timer_reg_pkg::*;
   assign intr_wkup_timer_expired_o = intr_out[AON_WKUP];
   assign intr_wdog_timer_bark_o = intr_out[AON_WDOG];
 
-  // The interrupt line can be routed as nmi as well.
+  // The interrupt line can also be routed as NMI (non-maskable interrupt).
   assign nmi_wdog_timer_bark_o = intr_wdog_timer_bark_o;
 
   ///////////////////
   // Reset Request //
   ///////////////////
 
-  // Once set, the reset request remains asserted until the next aon reset
+  // Once set, the reset request remains asserted until the next AON reset.
   assign aon_rst_req_d = aon_rst_req_set | aon_rst_req_q;
 
   always_ff @(posedge clk_aon_i or negedge rst_aon_ni) begin
@@ -263,6 +290,8 @@ module aon_timer import aon_timer_reg_pkg::*;
   `ASSERT_KNOWN(AlertsKnown_A, alert_tx_o)
   `ASSERT_KNOWN(IntrWkupKnown_A, intr_wkup_timer_expired_o)
   `ASSERT_KNOWN(IntrWdogKnown_A, intr_wdog_timer_bark_o)
+  `ASSERT_KNOWN(NmiWdogKnown_A, nmi_wdog_timer_bark_o)
+  `ASSERT_KNOWN(RaclErrorKnown_A, racl_error_o.valid)
   // clk_aon_i domain
   `ASSERT_KNOWN(WkupReqKnown_A, wkup_req_o, clk_aon_i, !rst_aon_ni)
   `ASSERT_KNOWN(RstReqKnown_A, aon_timer_rst_req_o, clk_aon_i, !rst_aon_ni)

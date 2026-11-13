@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 """Generate the initial testplan for the listed countermeasures."""
@@ -9,7 +9,7 @@ from pathlib import Path
 import hjson  # type: ignore
 from mako import exceptions  # type: ignore
 from mako.lookup import TemplateLookup  # type: ignore
-from pkg_resources import resource_filename
+import importlib.resources
 
 from reggen.ip_block import IpBlock
 
@@ -51,7 +51,8 @@ def gen_sec_cm_testplan(block: IpBlock, outdir: str) -> int:
 
         return 0
 
-    lookup = TemplateLookup(directories=[resource_filename('reggen', '.')])
+    lookup = TemplateLookup(
+        directories=[str(importlib.resources.files('reggen'))])
     sec_cm_testplan_tpl = lookup.get_template('sec_cm_testplan.hjson.tpl')
     with open(outfile, 'w', encoding='UTF-8') as f:
         try:

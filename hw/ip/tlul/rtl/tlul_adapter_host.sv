@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -40,6 +40,7 @@ module tlul_adapter_host
   input  logic [DataIntgWidth-1:0]   wdata_intg_i,
   input  logic [top_pkg::TL_DBW-1:0] be_i,
   input  mubi4_t                     instr_type_i,
+  input  logic [RsvdWidth-1:0]       user_rsvd_i,
 
   output logic                       valid_o,
   output logic [top_pkg::TL_DW-1:0]  rdata_o,
@@ -50,7 +51,7 @@ module tlul_adapter_host
   output tl_h2d_t                    tl_o,
   input  tl_d2h_t                    tl_i
 );
-  localparam int WordSize = $clog2(top_pkg::TL_DBW);
+  localparam int unsigned WordSize = $clog2(top_pkg::TL_DBW);
 
   logic [top_pkg::TL_AIW-1:0] tl_source;
   logic [top_pkg::TL_DBW-1:0] tl_be;
@@ -61,6 +62,7 @@ module tlul_adapter_host
   end else begin : g_multiple_reqs
     localparam int ReqNumW  = $clog2(MAX_REQS);
     localparam int unsigned MaxSource = MAX_REQS - 1;
+    localparam logic [ReqNumW-1:0] ReqNumOne = ReqNumW'(1'b1);
 
     logic [ReqNumW-1:0] source_d;
     logic [ReqNumW-1:0] source_q;
@@ -80,7 +82,7 @@ module tlul_adapter_host
         if (source_q == MaxSource[ReqNumW-1:0]) begin
           source_d = '0;
         end else  begin
-          source_d = source_q + 1;
+          source_d = source_q + ReqNumOne;
         end
       end
     end
@@ -103,7 +105,7 @@ module tlul_adapter_host
     a_source:  tl_source,
     a_address: {addr_i[31:WordSize], {WordSize{1'b0}}},
     a_data:    wdata_i,
-    a_user:    '{default: '0, data_intg: wdata_intg_i, instr_type: instr_type_i},
+    a_user:    '{default: '0, data_intg: wdata_intg_i, instr_type: instr_type_i, rsvd: user_rsvd_i},
     d_ready:   1'b1
   };
 
@@ -158,6 +160,7 @@ module tlul_adapter_host
   // pragma coverage off
   localparam int OutstandingReqCntW =
     (MAX_REQS == 2 ** $clog2(MAX_REQS)) ? $clog2(MAX_REQS) + 1 : $clog2(MAX_REQS);
+  localparam logic [OutstandingReqCntW-1:0] OutstandingReqCntOne = OutstandingReqCntW'(1'b1);
 
   logic [OutstandingReqCntW-1:0] outstanding_reqs_q;
   logic [OutstandingReqCntW-1:0] outstanding_reqs_d;
@@ -166,9 +169,9 @@ module tlul_adapter_host
     outstanding_reqs_d = outstanding_reqs_q;
 
     if ((req_i && gnt_o) && !valid_o) begin
-      outstanding_reqs_d = outstanding_reqs_q + 1;
+      outstanding_reqs_d = outstanding_reqs_q + OutstandingReqCntOne;
     end else if (!(req_i && gnt_o) && valid_o) begin
-      outstanding_reqs_d = outstanding_reqs_q - 1;
+      outstanding_reqs_d = outstanding_reqs_q - OutstandingReqCntOne;
     end
   end
 

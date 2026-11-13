@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,22 +8,49 @@
 class chip_stub_cpu_base_vseq extends chip_base_vseq;
   `uvm_object_utils(chip_stub_cpu_base_vseq)
 
+  // Control which JTAG to mux on the pads, if any. Subclasses may wish to override this choice.
+  protected chip_jtag_tap_e select_jtag = JtagTapNone;
+
   `uvm_object_new
 
   virtual task pre_start();
     // In top-level uart RX pin may be selected in pinmux. CSR tests may randomly enable line
     // loopback, which will connect TX with RX. If RX isn't enabled in pinmux, it will be 0.
-    // moniter will start to check the TX data when it changes from 1 to 0. But the length of 0 may
-    // be not right in CSR test, which causes a protocal error on TX
+    // monitor will start to check the TX data when it changes from 1 to 0. But the length of 0 may
+    // be not right in CSR test, which causes a protocol error on TX
     // In block-level, we always tie RX to 1 (idle) in CSR test so that we don't need to disable TX
     // monitor in block-level
     foreach (cfg.m_uart_agent_cfgs[i]) cfg.m_uart_agent_cfgs[i].en_tx_monitor = 0;
 
-    // Deselect JTAG interface.
-    if (cfg.jtag_riscv_map != null || cfg.use_jtag_dmi == 1) begin
-      cfg.chip_vif.tap_straps_if.drive(JtagTapRvDm);
-    end else begin
-      cfg.chip_vif.tap_straps_if.drive(JtagTapNone);
+    // The environment config might have an extra uvm_reg_map that represents registers accessible
+    // over JTAG. If so, and the JTAG riscv_agent is enabled, then drive TAP straps to configure
+    // which JTAG interface will be muxed onto the pads.
+    //
+    // Subclasses might pick that interface before calling super.pre_start. If not, allow the
+    // decision to be configured by passing a plusarg.
+    if (cfg.jtag_riscv_map != null || cfg.m_jtag_riscv_agent_cfg.use_jtag_dmi == 1) begin
+      // Set from_plusarg to equal select_jtag (which might have been set by a subclass). This gets
+      // overridden by the DV_GET_ENUM_PLUSARG macro below if the +select_jtag plusarg was provided.
+      chip_jtag_tap_e from_plusarg = select_jtag;
+
+      `DV_GET_ENUM_PLUSARG(chip_common_pkg::chip_jtag_tap_e, from_plusarg, "select_jtag")
+
+      if (select_jtag != JtagTapNone) begin
+        // The select_jtag variable must have been set by the subclass. Check that there hasn't been
+        // a +select_jtag plusarg with a different value (we don't support that sort of override).
+        if (select_jtag != from_plusarg) begin
+          `uvm_error(get_name(),
+                     $sformatf({"Cannot use +select_jtag with this sequence: the JTAG interface ",
+                                "was already configured as %p."},
+                               select_jtag))
+        end
+      end else begin
+        // The select_jtag variable has not been overridden by the subclass. If there has been a
+        // +select_jtag plusarg, use the provided value.
+        select_jtag = from_plusarg;
+      end
+
+      cfg.chip_vif.tap_straps_if.drive(select_jtag);
     end
     enable_asserts_in_hw_reset_rand_wr = 0;
     super.pre_start();
@@ -32,8 +59,8 @@ class chip_stub_cpu_base_vseq extends chip_base_vseq;
   task post_start();
     super.post_start();
 
-    if (cfg.use_jtag_dmi == 0) begin
-      // Random CSR rw might trigger alert. Some alerts will conintuously be triggered until reset
+    if (cfg.m_jtag_riscv_agent_cfg.use_jtag_dmi == 0) begin
+      // Random CSR rw might trigger alert. Some alerts will continuously be triggered until reset
       // applied, which will cause alert_monitor phase_ready_to_end timeout.
       apply_reset();
     end
@@ -48,6 +75,13 @@ class chip_stub_cpu_base_vseq extends chip_base_vseq;
     super.post_apply_reset(reset_kind);
     // Wait until rom_ctrl and lc_ctrl have finished to ensure stub_cpu
     // does not conflict with any background power-up activity
+
+    // Add extra guard for closed source env.
+    // Closed source has long reset period (> 1ms).
+    // If `wait_rom_check_done()` is called during the reset period,
+    // this task pass without checking and causes false failure.
+    // wait for aon clock to make sure reset is de-asserted.
+    @cfg.chip_vif.aon_clk_por_rst_if.cb;
     `uvm_info(`gfn, "Wait for ROM check to complete", UVM_MEDIUM)
     wait_rom_check_done();
   endtask
@@ -56,7 +90,7 @@ class chip_stub_cpu_base_vseq extends chip_base_vseq;
     super.dut_init(reset_kind);
     // Program the AST with the configuration data loaded in OTP creator SW config region.
     `uvm_info(`gfn, "Perform AST configuration", UVM_MEDIUM)
-    if (cfg.use_jtag_dmi == 0) do_ast_cfg();
+    if (cfg.m_jtag_riscv_agent_cfg.use_jtag_dmi == 0) do_ast_cfg();
   endtask
 
   // Write AST registers with the configuration data backdoor loaded into OTP creator SW cfg region.

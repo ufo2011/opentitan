@@ -1,8 +1,8 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-load("//rules:opentitan.bzl", "OPENTITAN_CPU")
+load("//rules/opentitan:defs.bzl", "OPENTITAN_CPU")
 load("//rules:cross_platform.bzl", "dual_cc_library", "dual_inputs")
 
 package(default_visibility = ["//visibility:public"])
@@ -29,6 +29,7 @@ dual_cc_library(
         shared = [
             "//sw/device/lib/base:math",
             "//sw/device/lib/base:stdasm",
+            "//sw/device/lib/base:macros",
         ],
     ),
 )
@@ -41,6 +42,7 @@ cc_library(
     deps = [
         "//sw/device/lib/arch:device",
         "//sw/device/lib/base:csr",
+        "//sw/device/lib/base:macros",
         "//sw/device/lib/base:math",
         "//sw/device/lib/base:stdasm",
     ],
@@ -90,7 +92,17 @@ cc_library(
         "//sw/device/lib/base:macros",
         "//sw/device/lib/base:memory",
         "//sw/device/lib/base:status",
+        "//sw/device/lib/runtime:hart",
+    ],
+)
+
+cc_library(
+    name = "print_uart",
+    srcs = ["print_uart.c"],
+    hdrs = ["print_uart.h"],
+    deps = [
         "//sw/device/lib/dif:uart",
+        "//sw/device/lib/runtime:print",
     ],
 )
 
@@ -99,7 +111,7 @@ cc_test(
     srcs = ["print_unittest.cc"],
     deps = [
         ":print",
-        "@com_google_absl//absl/strings:str_format",
+        "@abseil-cpp//absl/strings:str_format",
         "@googletest//:gtest_main",
     ],
 )

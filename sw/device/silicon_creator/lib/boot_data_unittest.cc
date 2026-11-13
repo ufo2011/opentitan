@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,9 +13,8 @@
 #include "sw/device/silicon_creator/lib/drivers/mock_otp.h"
 #include "sw/device/silicon_creator/testing/rom_test.h"
 
-#include "flash_ctrl_regs.h"
+#include "hw/top/otp_ctrl_regs.h"
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "otp_ctrl_regs.h"
 
 bool operator==(flash_ctrl_perms_t lhs, flash_ctrl_perms_t rhs) {
   return std::memcmp(&lhs, &rhs, sizeof(flash_ctrl_perms_t)) == 0;
@@ -33,9 +32,11 @@ constexpr boot_data_t kValidEntry0 = {
                0x00000000, 0x11111111, 0x22222222, 0x33333333, 0x44444444},
     .is_valid = kBootDataValidEntry,
     .identifier = kBootDataIdentifier,
+    .version = kBootDataVersion2,
     .counter = kBootDataDefaultCounterVal,
     .min_security_version_rom_ext = 0,
     .min_security_version_bl0 = 0,
+    .primary_bl0_slot = kBootSlotA,
 };
 
 /**
@@ -46,7 +47,23 @@ constexpr boot_data_t kValidEntry1 = {
                0x44444444, 0x33333333, 0x22222222, 0x11111111, 0x00000000},
     .is_valid = kBootDataValidEntry,
     .identifier = kBootDataIdentifier,
+    .version = kBootDataVersion2,
     .counter = kBootDataDefaultCounterVal + 1,
+    .min_security_version_rom_ext = 0,
+    .min_security_version_bl0 = 0,
+    .primary_bl0_slot = kBootSlotA,
+};
+
+/**
+ * Example version 1 boot data entry.
+ */
+constexpr boot_data_t kValidEntryV1 = {
+    .digest = {kBootDataIdentifier, kBootDataIdentifier, kBootDataIdentifier,
+               0x00000000, 0x11111111, 0x22222222, 0x33333333, 0x44444444},
+    .is_valid = kBootDataValidEntry,
+    .identifier = kBootDataIdentifier,
+    .version = kBootDataVersion1,
+    .counter = kBootDataDefaultCounterVal,
     .min_security_version_rom_ext = 0,
     .min_security_version_bl0 = 0,
 };
@@ -59,9 +76,11 @@ constexpr boot_data_t kDefaultEntry = {
                0xcc761df1, 0xff42f0f2, 0x3f1955ee, 0x9465b3e7, 0x81ce0fdb},
     .is_valid = kBootDataValidEntry,
     .identifier = kBootDataIdentifier,
+    .version = kBootDataVersion2,
     .counter = kBootDataDefaultCounterVal,
     .min_security_version_rom_ext = 0x01234567,
     .min_security_version_bl0 = 0x89abcdef,
+    .primary_bl0_slot = kBootSlotA,
 };
 
 namespace boot_data_unittest {
@@ -105,7 +124,7 @@ class BootDataTest : public rom_test::RomTest {
    * @param count  Optionally the number of values expected to be read from the
    *               start of the entry. Useful for expecting sniffs.
    */
-  void ExpectRead(flash_ctrl_info_page_t page, size_t index,
+  void ExpectRead(const flash_ctrl_info_page_t *page, size_t index,
                   std::array<uint32_t, kBootDataNumWords> data,
                   rom_error_t error) {
     size_t offset = index * sizeof(boot_data_t);
@@ -134,7 +153,7 @@ class BootDataTest : public rom_test::RomTest {
    * @param error Value to be returned by the read.
    */
   template <size_t N>
-  void ExpectSniff(flash_ctrl_info_page_t page, size_t index,
+  void ExpectSniff(const flash_ctrl_info_page_t *page, size_t index,
                    std::array<uint32_t, N> data, rom_error_t error) {
     static_assert(N > 3, "Data must be at least three words for a sniff");
 
@@ -162,27 +181,25 @@ class BootDataTest : public rom_test::RomTest {
     constexpr size_t kDigestRegionSize =
         sizeof(boot_data_t) - kDigestRegionOffset;
 
-    EXPECT_CALL(hmac_, sha256_init());
-
-    // Check the post-digest data we're computing with matches what's given.
-    EXPECT_CALL(hmac_, sha256_update(_, kDigestRegionSize))
-        .WillOnce(DoAll([boot_data](const void *digest_region, size_t size) {
-          int digest_region_cmp = std::memcmp(
-              digest_region,
-              reinterpret_cast<const char *>(&boot_data) + kDigestRegionOffset,
-              kDigestRegionSize);
-          EXPECT_EQ(digest_region_cmp, 0);
-          return kErrorOk;
-        }));
-
     // If mocking as invalid, break the digest.
     hmac_digest_t digest = boot_data.digest;
     if (!valid) {
       digest.digest[0] += 1;
     }
 
-    EXPECT_CALL(hmac_, sha256_final(_))
-        .WillOnce(DoAll(SetArgPointee<0>(digest), Return(kErrorOk)));
+    // Check the post-digest data we're computing with matches what's given.
+    EXPECT_CALL(hmac_, sha256(_, kDigestRegionSize, _))
+        .WillOnce(DoAll([boot_data, kDigestRegionSize, digest](
+                            const void *digest_region, size_t size,
+                            hmac_digest_t *digest_) {
+          int digest_region_cmp = std::memcmp(
+              digest_region,
+              reinterpret_cast<const char *>(&boot_data) + kDigestRegionOffset,
+              kDigestRegionSize);
+          EXPECT_EQ(digest_region_cmp, 0);
+          EXPECT_EQ(size, kDigestRegionSize);
+          *digest_ = digest;
+        }));
   }
 
   /**
@@ -194,7 +211,7 @@ class BootDataTest : public rom_test::RomTest {
    * @param write Expected setting for the `.write` permission.
    * @param erase Expected setting for the `.erase` permission.
    */
-  void ExpectPermsSet(flash_ctrl_info_page_t page, bool read, bool write,
+  void ExpectPermsSet(const flash_ctrl_info_page_t *page, bool read, bool write,
                       bool erase) {
     flash_ctrl_perms_t perms = {
         .read = read ? kMultiBitBool4True : kMultiBitBool4False,
@@ -215,8 +232,9 @@ class BootDataTest : public rom_test::RomTest {
    * @param reads Function given the `page` containing expectations of the reads
    *              happening there.
    */
-  void ExpectPageScan(flash_ctrl_info_page_t page,
-                      std::function<void(flash_ctrl_info_page_t)> reads) {
+  void ExpectPageScan(
+      const flash_ctrl_info_page_t *page,
+      std::function<void(const flash_ctrl_info_page_t *)> reads) {
     ExpectPermsSet(page, true, false, false);
     reads(page);
     ExpectPermsSet(page, false, false, false);
@@ -246,7 +264,7 @@ class BootDataTest : public rom_test::RomTest {
     // #2. Non-erased and bootable but invalid digest.
     // #3. Entry with sniffed area erased but the rest not.
     // #4. Fully erased entry.
-    return [=](flash_ctrl_info_page_t page) {
+    return [=](const flash_ctrl_info_page_t *page) {
       // Expect to sniff each entry, fully reading if it could be erased.
       ExpectSniff(page, 0, non_erased_entry_, kErrorOk);
       ExpectSniff(page, 1, boot_data_raw, kErrorOk);
@@ -313,8 +331,8 @@ class BootDataReadTest : public BootDataTest {};
 
 TEST_F(BootDataReadTest, ReadBothValidTest1) {
   // Expect both pages to be checked, with both giving valid entries.
-  ExpectPageScan(kFlashCtrlInfoPageBootData0, EntryPage(kValidEntry0));
-  ExpectPageScan(kFlashCtrlInfoPageBootData1, EntryPage(kValidEntry1));
+  ExpectPageScan(&kFlashCtrlInfoPageBootData0, EntryPage(kValidEntry0));
+  ExpectPageScan(&kFlashCtrlInfoPageBootData1, EntryPage(kValidEntry1));
 
   boot_data_t boot_data = {{0}};
   EXPECT_EQ(boot_data_read(kLcStateTest, &boot_data), kErrorOk);
@@ -324,8 +342,8 @@ TEST_F(BootDataReadTest, ReadBothValidTest1) {
 
 TEST_F(BootDataReadTest, ReadBothValidTest2) {
   // Same as above, but swap which page contains `test_entry_1`.
-  ExpectPageScan(kFlashCtrlInfoPageBootData0, EntryPage(kValidEntry1));
-  ExpectPageScan(kFlashCtrlInfoPageBootData1, EntryPage(kValidEntry0));
+  ExpectPageScan(&kFlashCtrlInfoPageBootData0, EntryPage(kValidEntry1));
+  ExpectPageScan(&kFlashCtrlInfoPageBootData1, EntryPage(kValidEntry0));
 
   boot_data_t boot_data = {{0}};
   EXPECT_EQ(boot_data_read(kLcStateTest, &boot_data), kErrorOk);
@@ -335,8 +353,8 @@ TEST_F(BootDataReadTest, ReadBothValidTest2) {
 
 TEST_F(BootDataReadTest, ReadOneEntryTest) {
   // Expect both pages to be searched, but give only a valid entry for one.
-  ExpectPageScan(kFlashCtrlInfoPageBootData0, EntryPage(kValidEntry0));
-  ExpectPageScan(kFlashCtrlInfoPageBootData1, ErasedPage());
+  ExpectPageScan(&kFlashCtrlInfoPageBootData0, EntryPage(kValidEntry0));
+  ExpectPageScan(&kFlashCtrlInfoPageBootData1, ErasedPage());
 
   boot_data_t boot_data = {{0}};
   EXPECT_EQ(boot_data_read(kLcStateTest, &boot_data), kErrorOk);
@@ -345,8 +363,8 @@ TEST_F(BootDataReadTest, ReadOneEntryTest) {
 
 TEST_F(BootDataReadTest, ReadOneValidTest) {
   // Expect both pages to be searched, but give only a valid entry for one.
-  ExpectPageScan(kFlashCtrlInfoPageBootData0, EntryPage(kValidEntry0));
-  ExpectPageScan(kFlashCtrlInfoPageBootData1, EntryPage(kValidEntry1, false));
+  ExpectPageScan(&kFlashCtrlInfoPageBootData0, EntryPage(kValidEntry0));
+  ExpectPageScan(&kFlashCtrlInfoPageBootData1, EntryPage(kValidEntry1, false));
 
   boot_data_t boot_data = {{0}};
   EXPECT_EQ(boot_data_read(kLcStateTest, &boot_data), kErrorOk);
@@ -357,8 +375,8 @@ TEST_F(BootDataReadTest, ReadOneValidTest) {
 
 TEST_F(BootDataReadTest, ReadErasedDefaultTest) {
   // Expect both pages to be searched, but give no entry for either.
-  ExpectPageScan(kFlashCtrlInfoPageBootData0, ErasedPage());
-  ExpectPageScan(kFlashCtrlInfoPageBootData1, ErasedPage());
+  ExpectPageScan(&kFlashCtrlInfoPageBootData0, ErasedPage());
+  ExpectPageScan(&kFlashCtrlInfoPageBootData1, ErasedPage());
 
   // Expect to fall back to loading the default entry.
   ExpectAllowedInProdCheck(false);
@@ -371,8 +389,8 @@ TEST_F(BootDataReadTest, ReadErasedDefaultTest) {
 
 TEST_F(BootDataReadTest, ReadInvalidDefaultTest) {
   // Expect both pages to be searched, but give invalid entries for both.
-  ExpectPageScan(kFlashCtrlInfoPageBootData0, EntryPage(kValidEntry0, false));
-  ExpectPageScan(kFlashCtrlInfoPageBootData1, EntryPage(kValidEntry1, false));
+  ExpectPageScan(&kFlashCtrlInfoPageBootData0, EntryPage(kValidEntry0, false));
+  ExpectPageScan(&kFlashCtrlInfoPageBootData1, EntryPage(kValidEntry1, false));
 
   // Expect to fall back to loading the default entry.
   ExpectAllowedInProdCheck(false);
@@ -385,8 +403,8 @@ TEST_F(BootDataReadTest, ReadInvalidDefaultTest) {
 
 TEST_F(BootDataReadTest, ReadDefaultAllowedInProdTest) {
   // Expect both pages to be searched, but give no entry for either.
-  ExpectPageScan(kFlashCtrlInfoPageBootData0, ErasedPage());
-  ExpectPageScan(kFlashCtrlInfoPageBootData1, ErasedPage());
+  ExpectPageScan(&kFlashCtrlInfoPageBootData0, ErasedPage());
+  ExpectPageScan(&kFlashCtrlInfoPageBootData1, ErasedPage());
 
   // Expect to fall back to loading the default entry (allowed in prod).
   ExpectAllowedInProdCheck(true);
@@ -399,8 +417,8 @@ TEST_F(BootDataReadTest, ReadDefaultAllowedInProdTest) {
 
 TEST_F(BootDataReadTest, ReadDefaultNotAllowedInProdTest) {
   // Expect both pages to be searched, but give no entry for either.
-  ExpectPageScan(kFlashCtrlInfoPageBootData0, ErasedPage());
-  ExpectPageScan(kFlashCtrlInfoPageBootData1, ErasedPage());
+  ExpectPageScan(&kFlashCtrlInfoPageBootData0, ErasedPage());
+  ExpectPageScan(&kFlashCtrlInfoPageBootData1, ErasedPage());
 
   // Expect to fall back to loading the default entry (now allowed in prod).
   ExpectAllowedInProdCheck(false);
@@ -408,6 +426,22 @@ TEST_F(BootDataReadTest, ReadDefaultNotAllowedInProdTest) {
 
   boot_data_t boot_data = {{0}};
   EXPECT_EQ(boot_data_read(kLcStateProd, &boot_data), kErrorBootDataNotFound);
+}
+
+TEST_F(BootDataReadTest, ReadV1AsV2Test) {
+  // Expect both to be searched, but only provide an entry in one.
+  ExpectPageScan(&kFlashCtrlInfoPageBootData0, EntryPage(kValidEntryV1));
+  ExpectPageScan(&kFlashCtrlInfoPageBootData1, ErasedPage());
+
+  // Expect a new digest computation on version 2 of the boot data.
+  ExpectDigestCompute(kValidEntry0, true);
+
+  // Expect to read the version 1 boot data.
+  boot_data_t boot_data = {{0}};
+  EXPECT_EQ(boot_data_read(kLcStateTest, &boot_data), kErrorOk);
+  EXPECT_EQ(boot_data, kValidEntry0);
+
+  EXPECT_EQ(boot_data, kValidEntry0);
 }
 
 }  // namespace

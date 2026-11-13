@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -64,6 +64,31 @@ py_binary(
     srcs = ["otbn_sim_test.py"],
     deps = [
         "//hw/ip/otbn/util/shared:check",
+        "//hw/ip/otbn/util/shared:mem_layout",
         "//hw/ip/otbn/util/shared:reg_dump",
+        requirement("pyelftools"),
+    ],
+)
+
+py_binary(
+    name = "otbn_fi_campaign",
+    srcs = ["otbn_fi_campaign.py"],
+    imports = ["../dv/otbnsim"],
+    deps = [
+        "//hw/ip/otbn/dv/otbnsim/sim:load_elf",
+        "//hw/ip/otbn/dv/otbnsim/sim:standalonesim",
+        requirement("pyelftools"),
+    ],
+)
+
+py_binary(
+    name = "otbn_tvla_campaign",
+    srcs = ["otbn_tvla_campaign.py"],
+    data = ["//hw/ip/otbn/dv/otbnsim:standalone"],
+    imports = ["../dv/otbnsim"],
+    deps = [
+        "//hw/ip/otbn/dv/otbnsim/sim:load_elf",
+        "//hw/ip/otbn/dv/otbnsim/sim:standalonesim",
+        requirement("pyelftools"),
     ],
 )

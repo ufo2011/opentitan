@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -24,7 +24,6 @@
   ral_spec: "{proj_root}/hw/ip/pattgen/data/pattgen.hjson"
 
   // Import additional common sim cfg files.
-  // TODO: remove imported cfgs that do not apply.
   import_cfgs: [// Project wide common sim cfg file
                 "{proj_root}/hw/dv/tools/dvsim/common_sim_cfg.hjson",
                 // Common CIP test lists
@@ -48,6 +47,7 @@
   // Pattgen coverage exclusion
   xcelium_cov_refine_files: ["{proj_root}/hw/ip/pattgen/dv/cov/pattgen_cov.vRefine"]
 
+  // Enable cdc instrumentation.
   run_opts: ["+cdc_instrumentation_enabled=1"]
 
   // List of test specifications.
@@ -70,6 +70,11 @@
     {
       name: cnt_rollover
       uvm_test_seq: pattgen_cnt_rollover_vseq
+    }
+
+    {
+      name: pattgen_inactive_level
+      uvm_test_seq: pattgen_inactive_level_vseq
     }
   ]
 

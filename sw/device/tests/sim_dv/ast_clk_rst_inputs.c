@@ -1,9 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sw/device/lib/base/memory.h"
 #include "sw/device/lib/base/mmio.h"
+#include "sw/device/lib/dif/dif_adc_ctrl.h"
 #include "sw/device/lib/dif/dif_alert_handler.h"
 #include "sw/device/lib/dif/dif_aon_timer.h"
 #include "sw/device/lib/dif/dif_clkmgr.h"
@@ -16,14 +17,16 @@
 #include "sw/device/lib/testing/alert_handler_testutils.h"
 #include "sw/device/lib/testing/aon_timer_testutils.h"
 #include "sw/device/lib/testing/clkmgr_testutils.h"
+#include "sw/device/lib/testing/entropy_src_testutils.h"
+#include "sw/device/lib/testing/entropy_testutils.h"
 #include "sw/device/lib/testing/pwrmgr_testutils.h"
 #include "sw/device/lib/testing/rstmgr_testutils.h"
 #include "sw/device/lib/testing/rv_plic_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
+#include "hw/top/sensor_ctrl_regs.h"
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "sensor_ctrl_regs.h"
 #include "sw/device/lib/testing/autogen/isr_testutils.h"
 
 #define kAlertSet true
@@ -48,39 +51,46 @@ static volatile const uint8_t kChannel1MaxHighByte;
 static volatile const uint8_t kChannel1MinLowByte;
 static volatile const uint8_t kChannel1MinHighByte;
 
-static const uint32_t kPlicTarget = kTopEarlgreyPlicTargetIbex0;
-
 static dif_sensor_ctrl_t sensor_ctrl;
 static dif_alert_handler_t alert_handler;
 static dif_aon_timer_t aon_timer;
 static dif_rv_plic_t rv_plic;
-static dif_rv_plic_t plic;
 static dif_pwrmgr_t pwrmgr;
 static dif_rstmgr_t rstmgr;
 static dif_entropy_src_t entropy_src;
-static dif_pwrmgr_wakeup_reason_t wakeup_reason;
 
 static dif_clkmgr_t clkmgr;
 static dif_adc_ctrl_t adc_ctrl;
 
+static const dt_adc_ctrl_t kAdcCtrlDt = 0;
+static_assert(kDtAdcCtrlCount == 1, "this test expects a adc_ctrl");
+static const dt_clkmgr_t kClkmgrDt = 0;
+static_assert(kDtClkmgrCount == 1, "this test expects a clkmgr");
+static const dt_rstmgr_t kRstmgrDt = 0;
+static_assert(kDtRstmgrCount == 1, "this test expects a rstmgr");
+static const dt_pwrmgr_t kPwrmgrDt = 0;
+static_assert(kDtPwrmgrCount == 1, "this test expects a pwrmgr");
+static_assert(kDtAonTimerCount == 1, "this test expects an aon_timer");
+static const dt_aon_timer_t kAonTimerDt = 0;
+static_assert(kDtEntropySrcCount == 1, "this test expects an entropy_src");
+static const dt_entropy_src_t kEntropySrcDt = 0;
+static const dt_alert_handler_t kAlertHandlerDt = 0;
+static_assert(kDtAlertHandlerCount == 1,
+              "this library expects exactly one alert_handler");
+static const dt_rv_plic_t kRvPlicDt = 0;
+static_assert(kDtRvPlicCount == 1, "this test expects exactly one rv_plic");
+static const dt_sensor_ctrl_t kSensorCtrlDt = 0;
+static_assert(kDtSensorCtrlCount >= 1, "this test expects a sensor_ctrl");
+
 static volatile bool interrupt_serviced = false;
 static bool first_adc_setup = true;
-
-static plic_isr_ctx_t plic_ctx = {.rv_plic = &plic,
-                                  .hart_id = kTopEarlgreyPlicTargetIbex0};
-
-static pwrmgr_isr_ctx_t pwrmgr_isr_ctx = {
-    .pwrmgr = &pwrmgr,
-    .plic_pwrmgr_start_irq_id = kTopEarlgreyPlicIrqIdPwrmgrAonWakeup,
-    .expected_irq = kDifPwrmgrIrqWakeup,
-    .is_only_irq = true};
 
 enum {
   /**
    * The size of the buffer used in firmware to process the entropy bits in
    * firmware override mode.
    */
-  kEntropyFifoBufferSize = 32,
+  kEntropyFifoBufferSize = 16,
 };
 
 enum {
@@ -139,7 +149,7 @@ static void check_alert_state(dif_toggle_t fatal) {
       &alert_handler, kTopEarlgreyAlertIdSensorCtrlRecovAlert));
   CHECK_DIF_OK(dif_alert_handler_alert_acknowledge(
       &alert_handler, kTopEarlgreyAlertIdSensorCtrlFatalAlert));
-};
+}
 
 /**
  *  First configure fatality of the desired event.
@@ -151,6 +161,10 @@ static void check_alert_state(dif_toggle_t fatal) {
  */
 static void test_event(uint32_t idx, dif_toggle_t fatal, bool set_event) {
   if (set_event) {
+    // Enable the alert on the sensor_ctrl side
+    CHECK_DIF_OK(
+        dif_sensor_ctrl_set_alert_en(&sensor_ctrl, idx, kDifToggleEnabled));
+
     // Configure event fatality
     CHECK_DIF_OK(dif_sensor_ctrl_set_alert_fatal(&sensor_ctrl, idx, fatal));
 
@@ -174,58 +188,51 @@ static void test_event(uint32_t idx, dif_toggle_t fatal, bool set_event) {
 
     // check whether alert handler captured the event
     check_alert_state(fatal);
-  }
-};
 
-void init_units() {
-  CHECK_DIF_OK(dif_pwrmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_PWRMGR_AON_BASE_ADDR), &pwrmgr));
-  CHECK_DIF_OK(dif_rstmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR), &rstmgr));
-  CHECK_DIF_OK(dif_entropy_src_init(
-      mmio_region_from_addr(TOP_EARLGREY_ENTROPY_SRC_BASE_ADDR), &entropy_src));
-  CHECK_DIF_OK(dif_aon_timer_init(
-      mmio_region_from_addr(TOP_EARLGREY_AON_TIMER_AON_BASE_ADDR), &aon_timer));
-  CHECK_DIF_OK(dif_rv_plic_init(
-      mmio_region_from_addr(TOP_EARLGREY_RV_PLIC_BASE_ADDR), &rv_plic));
-  CHECK_DIF_OK(dif_sensor_ctrl_init(
-      mmio_region_from_addr(TOP_EARLGREY_SENSOR_CTRL_BASE_ADDR), &sensor_ctrl));
-  CHECK_DIF_OK(dif_alert_handler_init(
-      mmio_region_from_addr(TOP_EARLGREY_ALERT_HANDLER_BASE_ADDR),
-      &alert_handler));
-  CHECK_DIF_OK(dif_rv_plic_init(
-      mmio_region_from_addr(TOP_EARLGREY_RV_PLIC_BASE_ADDR), &plic));
-  CHECK_DIF_OK(dif_clkmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_CLKMGR_AON_BASE_ADDR), &clkmgr));
-  CHECK_DIF_OK(dif_adc_ctrl_init(
-      mmio_region_from_addr(TOP_EARLGREY_ADC_CTRL_AON_BASE_ADDR), &adc_ctrl));
+    // Disable the alert on the sensor_ctrl side
+    CHECK_DIF_OK(
+        dif_sensor_ctrl_set_alert_en(&sensor_ctrl, idx, kDifToggleDisabled));
+  }
+}
+
+void init_units(void) {
+  CHECK_DIF_OK(dif_pwrmgr_init_from_dt(kPwrmgrDt, &pwrmgr));
+  CHECK_DIF_OK(dif_rstmgr_init_from_dt(kRstmgrDt, &rstmgr));
+  CHECK_DIF_OK(dif_entropy_src_init_from_dt(kEntropySrcDt, &entropy_src));
+  CHECK_DIF_OK(dif_aon_timer_init_from_dt(kAonTimerDt, &aon_timer));
+  CHECK_DIF_OK(dif_rv_plic_init_from_dt(kRvPlicDt, &rv_plic));
+  CHECK_DIF_OK(dif_sensor_ctrl_init_from_dt(kSensorCtrlDt, &sensor_ctrl));
+  CHECK_DIF_OK(dif_alert_handler_init_from_dt(kAlertHandlerDt, &alert_handler));
+  CHECK_DIF_OK(dif_clkmgr_init_from_dt(kClkmgrDt, &clkmgr));
+  CHECK_DIF_OK(dif_adc_ctrl_init_from_dt(kAdcCtrlDt, &adc_ctrl));
 }
 
 /**
  *  configure adc module
  */
 static void configure_adc_ctrl(const dif_adc_ctrl_t *adc_ctrl) {
-  int wake_up_time_aon_cycles;
-  int power_up_time_aon_cycles;
+  uint32_t wake_up_time_aon_cycles = 0;
+  uint32_t power_up_time_aon_cycles = 0;
 
-  power_up_time_aon_cycles =
-      aon_timer_testutils_get_aon_cycles_from_us(kPowerUpTimeInUs);
-  wake_up_time_aon_cycles =
-      aon_timer_testutils_get_aon_cycles_from_us(kWakeUpTimeInUs);
+  CHECK_STATUS_OK(aon_timer_testutils_get_aon_cycles_32_from_us(
+      kPowerUpTimeInUs, &power_up_time_aon_cycles));
+  CHECK_STATUS_OK(aon_timer_testutils_get_aon_cycles_32_from_us(
+      kWakeUpTimeInUs, &wake_up_time_aon_cycles));
   CHECK_DIF_OK(dif_adc_ctrl_set_enabled(adc_ctrl, kDifToggleDisabled));
   CHECK_DIF_OK(dif_adc_ctrl_reset(adc_ctrl));
   CHECK_DIF_OK(dif_adc_ctrl_configure(
-      adc_ctrl, (dif_adc_ctrl_config_t){
-                    .mode = kDifAdcCtrlLowPowerScanMode,
-                    .num_low_power_samples = kNumLowPowerSamples,
-                    .num_normal_power_samples = kNumNormalPowerSamples,
-                    .power_up_time_aon_cycles = power_up_time_aon_cycles,
-                    .wake_up_time_aon_cycles = wake_up_time_aon_cycles}));
+      adc_ctrl,
+      (dif_adc_ctrl_config_t){
+          .mode = kDifAdcCtrlLowPowerScanMode,
+          .num_low_power_samples = kNumLowPowerSamples,
+          .num_normal_power_samples = kNumNormalPowerSamples,
+          .power_up_time_aon_cycles = (uint8_t)power_up_time_aon_cycles + 1,
+          .wake_up_time_aon_cycles = wake_up_time_aon_cycles}));
 }
 
 static void en_plic_irqs(dif_rv_plic_t *plic) {
   top_earlgrey_plic_irq_id_t plic_irqs[] = {
-      kTopEarlgreyPlicIrqIdAdcCtrlAonMatchDone};
+      kTopEarlgreyPlicIrqIdAdcCtrlMatchPending};
 
   for (uint32_t i = 0; i < ARRAYSIZE(plic_irqs); ++i) {
     CHECK_DIF_OK(dif_rv_plic_irq_set_enabled(
@@ -242,17 +249,17 @@ static void en_plic_irqs(dif_rv_plic_t *plic) {
 
 void adc_setup(bool first_adc_setup) {
   // Enable adc interrupts.
-  CHECK_DIF_OK(dif_adc_ctrl_irq_set_enabled(&adc_ctrl, kDifAdcCtrlIrqMatchDone,
-                                            kDifToggleEnabled));
+  CHECK_DIF_OK(dif_adc_ctrl_irq_set_enabled(
+      &adc_ctrl, kDifAdcCtrlIrqMatchPending, kDifToggleEnabled));
 
   uint16_t channel0_filter0_max =
-      (kChannel0MaxHighByte << 8) | kChannel0MaxLowByte;
+      ((uint16_t)(kChannel0MaxHighByte << 8)) | kChannel0MaxLowByte;
   uint16_t channel0_filter0_min =
-      (kChannel0MinHighByte << 8) | kChannel0MinLowByte;
+      ((uint16_t)(kChannel0MinHighByte << 8)) | kChannel0MinLowByte;
   uint16_t channel1_filter0_max =
-      (kChannel1MaxHighByte << 8) | kChannel1MaxLowByte;
+      ((uint16_t)(kChannel1MaxHighByte << 8)) | kChannel1MaxLowByte;
   uint16_t channel1_filter0_min =
-      (kChannel1MinHighByte << 8) | kChannel1MinLowByte;
+      ((uint16_t)(kChannel1MinHighByte << 8)) | kChannel1MinLowByte;
 
   if (first_adc_setup) {
     // Setup ADC configuration.
@@ -261,7 +268,7 @@ void adc_setup(bool first_adc_setup) {
     CHECK_DIF_OK(dif_adc_ctrl_reset(&adc_ctrl));
   }
 
-  en_plic_irqs(&plic);
+  en_plic_irqs(&rv_plic);
   // Setup ADC filters. There is one filter for each channel.
   CHECK_DIF_OK(dif_adc_ctrl_configure_filter(
       &adc_ctrl, kDifAdcCtrlChannel0,
@@ -293,27 +300,10 @@ void adc_setup(bool first_adc_setup) {
   }
 }
 
-void entropy_config(dif_entropy_src_config_t entropy_src_config) {
-  CHECK_DIF_OK(dif_entropy_src_set_enabled(&entropy_src, kDifToggleDisabled));
-
-  const dif_entropy_src_fw_override_config_t fw_override_config = {
-      .entropy_insert_enable = true,
-      .buffer_threshold = kEntropyFifoBufferSize,
-  };
-
-  CHECK_DIF_OK(dif_entropy_src_fw_override_configure(
-      &entropy_src, fw_override_config, kDifToggleEnabled));
-
-  CHECK_DIF_OK(dif_entropy_src_configure(&entropy_src, entropy_src_config,
-                                         kDifToggleEnabled));
-}
-
 void ast_enter_sleep_states_and_check_functionality(
-    dif_pwrmgr_domain_config_t pwrmgr_config,
-    dif_entropy_src_config_t entropy_src_config, uint32_t alert_idx) {
+    dif_pwrmgr_domain_config_t pwrmgr_config, uint32_t alert_idx) {
   bool deepsleep;
-  int read_fifo_depth_val;
-  bool clock_check_status;
+  uint32_t read_fifo_depth_val = 0;
   uint32_t unhealthy_fifos, errors, alerts;
 
   const dif_edn_t edn0 = {
@@ -327,8 +317,18 @@ void ast_enter_sleep_states_and_check_functionality(
     deepsleep = false;
   }
 
-  if (pwrmgr_testutils_is_wakeup_reason(&pwrmgr, kDifNoWakeup)) {
-    entropy_config(entropy_src_config);
+  dif_pwrmgr_request_sources_t adc_ctrl_wakeup_sources;
+  CHECK_DIF_OK(dif_pwrmgr_find_request_source(
+      &pwrmgr, kDifPwrmgrReqTypeWakeup, dt_adc_ctrl_instance_id(kAdcCtrlDt),
+      kDtAdcCtrlWakeupWkupReq, &adc_ctrl_wakeup_sources));
+
+  if (UNWRAP(pwrmgr_testutils_is_wakeup_reason(&pwrmgr, kDifNoWakeup)) ==
+      true) {
+    // Make sure ENTROPY_SRC is enabled and then empty the observe FIFO to
+    // restart the entropy collection. Note that this is more efficient than
+    // restarting the entire block.
+    CHECK_DIF_OK(dif_entropy_src_set_enabled(&entropy_src, kDifToggleEnabled));
+    CHECK_STATUS_OK(entropy_src_testutils_drain_observe_fifo(&entropy_src));
 
     // Verify that the FIFO depth is non-zero via SW - indicating the reception
     // of data over the AST RNG interface.
@@ -340,12 +340,12 @@ void ast_enter_sleep_states_and_check_functionality(
     // Enable all the AON interrupts used in this test.
     rv_plic_testutils_irq_range_enable(
         &rv_plic, kTopEarlgreyPlicTargetIbex0,
-        kTopEarlgreyPlicIrqIdAdcCtrlAonMatchDone,
-        kTopEarlgreyPlicIrqIdAdcCtrlAonMatchDone);
+        kTopEarlgreyPlicIrqIdAdcCtrlMatchPending,
+        kTopEarlgreyPlicIrqIdAdcCtrlMatchPending);
     CHECK_DIF_OK(dif_pwrmgr_irq_set_enabled(&pwrmgr, 0, kDifToggleEnabled));
 
     // Setup low power.
-    rstmgr_testutils_pre_reset(&rstmgr);
+    CHECK_STATUS_OK(rstmgr_testutils_pre_reset(&rstmgr));
 
     if (!deepsleep) {
       // read fifo depth before enter sleep mode
@@ -356,8 +356,8 @@ void ast_enter_sleep_states_and_check_functionality(
     adc_setup(first_adc_setup);
 
     // set sleep mode
-    pwrmgr_testutils_enable_low_power(&pwrmgr, kDifPwrmgrWakeupRequestSourceTwo,
-                                      pwrmgr_config);
+    CHECK_STATUS_OK(pwrmgr_testutils_enable_low_power(
+        &pwrmgr, adc_ctrl_wakeup_sources, pwrmgr_config));
 
     // Enter low power mode.
     LOG_INFO("Issued WFI to enter sleep.");
@@ -369,19 +369,19 @@ void ast_enter_sleep_states_and_check_functionality(
 
     interrupt_serviced = false;
 
-  } else if (pwrmgr_testutils_is_wakeup_reason(
-                 &pwrmgr, kDifPwrmgrWakeupRequestSourceTwo)) {
+  } else if (UNWRAP(pwrmgr_testutils_is_wakeup_reason(
+                 &pwrmgr, adc_ctrl_wakeup_sources))) {
     if (deepsleep) {
-      if (read_fifo_depth(&entropy_src) != 0)
-        LOG_ERROR("read_fifo_depth after reset=%0d should be 0",
-                  read_fifo_depth(&entropy_src));
-
       first_adc_setup = false;
       // Configure ADC after deep sleep
       adc_setup(first_adc_setup);
     }
 
-    entropy_config(entropy_src_config);
+    // Make sure ENTROPY_SRC is enabled and then empty the observe FIFO to
+    // restart the entropy collection. Note that this is more efficient than
+    // restarting the entire block.
+    CHECK_DIF_OK(dif_entropy_src_set_enabled(&entropy_src, kDifToggleEnabled));
+    CHECK_STATUS_OK(entropy_src_testutils_drain_observe_fifo(&entropy_src));
 
     IBEX_SPIN_FOR(read_fifo_depth(&entropy_src) > 0, 1000);
   }
@@ -421,16 +421,33 @@ void ast_enter_sleep_states_and_check_functionality(
 /**
  *  set edn auto mode
  */
-void set_edn_auto_mode() {
+void set_edn_auto_mode(void) {
+  const dif_csrng_t csrng = {
+      .base_addr = mmio_region_from_addr(TOP_EARLGREY_CSRNG_BASE_ADDR)};
   const dif_edn_t edn0 = {
       .base_addr = mmio_region_from_addr(TOP_EARLGREY_EDN0_BASE_ADDR)};
   const dif_edn_t edn1 = {
       .base_addr = mmio_region_from_addr(TOP_EARLGREY_EDN1_BASE_ADDR)};
 
-  // entropy_testutils_stop_all();
-  CHECK_DIF_OK(dif_edn_stop(&edn0));
-  CHECK_DIF_OK(dif_edn_stop(&edn1));
+  // Disable the entropy complex
+  CHECK_STATUS_OK(entropy_testutils_stop_all());
 
+  // Configure ENTROPY_SRC in Firmware Override: Observe mode and enable it.
+  // In this mode, the entropy received from the RNG inside AST gets collected
+  // in the Observe FIFO AND continues to flow through the hardware pipeline to
+  // eventually reach the hardware interface.
+  const dif_entropy_src_fw_override_config_t fw_override_config = {
+      .entropy_insert_enable = false,
+      .buffer_threshold = kEntropyFifoBufferSize,
+  };
+  CHECK_DIF_OK(dif_entropy_src_fw_override_configure(
+      &entropy_src, fw_override_config, kDifToggleEnabled));
+  CHECK_STATUS_OK(entropy_testutils_entropy_src_init());
+
+  // Enable CSRNG
+  CHECK_DIF_OK(dif_csrng_configure(&csrng));
+
+  // Enable EDNs in auto request mode
   // Re-enable EDN0 in auto mode.
   const dif_edn_auto_params_t edn0_params = {
       // EDN0 provides lower-quality entropy.  Let one generate command return 8
@@ -500,45 +517,34 @@ void set_edn_auto_mode() {
       .reseed_interval = 4,  // Reseed after every 4 generates.
   };
   CHECK_DIF_OK(dif_edn_set_auto_mode(&edn1, edn1_params));
+
+  // The Observe FIFO has already been filled while producing the seeds for the
+  // EDNs. Empty the FIFO to restart the collection for the actual test.
+  CHECK_STATUS_OK(entropy_src_testutils_drain_observe_fifo(&entropy_src));
 }
 
-void ottf_external_isr(void) {
-  plic_isr_ctx_t plic_ctx = {.rv_plic = &plic,
+void ottf_external_isr(uint32_t *exc_info) {
+  plic_isr_ctx_t plic_ctx = {.rv_plic = &rv_plic,
                              .hart_id = kTopEarlgreyPlicTargetIbex0};
 
   adc_ctrl_isr_ctx_t adc_ctrl_ctx = {
       .adc_ctrl = &adc_ctrl,
-      .plic_adc_ctrl_start_irq_id = kTopEarlgreyPlicIrqIdAdcCtrlAonMatchDone,
+      .plic_adc_ctrl_start_irq_id = kTopEarlgreyPlicIrqIdAdcCtrlMatchPending,
       .expected_irq = 0,
       .is_only_irq = true};
 
   top_earlgrey_plic_peripheral_t peripheral;
   dif_adc_ctrl_irq_t adc_ctrl_irq;
-  isr_testutils_adc_ctrl_isr(plic_ctx, adc_ctrl_ctx, &peripheral,
+  isr_testutils_adc_ctrl_isr(plic_ctx, adc_ctrl_ctx, false, &peripheral,
                              &adc_ctrl_irq);
 
-  CHECK(peripheral == kTopEarlgreyPlicPeripheralAdcCtrlAon);
-  CHECK(adc_ctrl_irq == kDifAdcCtrlIrqMatchDone);
+  CHECK(peripheral == kTopEarlgreyPlicPeripheralAdcCtrl);
+  CHECK(adc_ctrl_irq == kDifAdcCtrlIrqMatchPending);
   interrupt_serviced = true;
 }
 
-bool test_main() {
-  uint32_t event_idx;
-  int idx = 1;
-  int read_fifo_depth_val;
-
-  bool deepsleep;
+bool test_main(void) {
   dif_pwrmgr_domain_config_t pwrmgr_config;
-
-  const dif_entropy_src_config_t entropy_src_config = {
-      .fips_enable = true,
-      // Route the entropy data received from RNG to the FIFO.
-      .route_to_firmware = true,
-      .single_bit_mode = kDifEntropySrcSingleBitModeDisabled,
-      .health_test_threshold_scope = false,
-      .health_test_window_size = 0x0200,
-      .alert_threshold = 2,
-  };
 
   init_units();
 
@@ -555,23 +561,20 @@ bool test_main() {
 
   LOG_INFO("1 test alert/rng after Deep sleep 1");
   pwrmgr_config = kDifPwrmgrDomainOptionUsbClockInActivePower;
-  ast_enter_sleep_states_and_check_functionality(
-      pwrmgr_config, entropy_src_config, kAlertVal7);
+  ast_enter_sleep_states_and_check_functionality(pwrmgr_config, kAlertVal7);
 
   LOG_INFO("2 test alert/rng after regular sleep (usb clk enabled)");
   LOG_INFO("force new adc conv set");
   pwrmgr_config = kDifPwrmgrDomainOptionUsbClockInActivePower |
                   kDifPwrmgrDomainOptionUsbClockInLowPower |
                   kDifPwrmgrDomainOptionMainPowerInLowPower;
-  ast_enter_sleep_states_and_check_functionality(
-      pwrmgr_config, entropy_src_config, kAlertVal8);
+  ast_enter_sleep_states_and_check_functionality(pwrmgr_config, kAlertVal8);
 
   LOG_INFO("3 test alert/rng after regular sleep (all clk disabled in lp)");
   LOG_INFO("force new adc conv set");
   pwrmgr_config = kDifPwrmgrDomainOptionMainPowerInLowPower |
                   kDifPwrmgrDomainOptionUsbClockInActivePower;
-  ast_enter_sleep_states_and_check_functionality(
-      pwrmgr_config, entropy_src_config, kAlertVal7);
+  ast_enter_sleep_states_and_check_functionality(pwrmgr_config, kAlertVal7);
 
   LOG_INFO("c code is finished");
 

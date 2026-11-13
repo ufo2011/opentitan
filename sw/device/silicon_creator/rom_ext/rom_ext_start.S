@@ -1,8 +1,11 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey_memory.h"
+#include "hw/top/top_memory.h"
+#include "sw/device/lib/base/hardened_asm.h"
+#include "sw/device/lib/coverage/api_asm.h"
+#include "hw/top/otp_ctrl_regs.h"
 
 /**
  * ROM_EXT Interrupt Vector
@@ -41,7 +44,7 @@
   .type _rom_ext_interrupt_vector, @function
 _rom_ext_interrupt_vector:
   // Entry 0: exception handler.
-  j rom_ext_exception_handler
+  j nvm_exception_handler
 
   // Entries 1-30: interrupt handlers.
   .rept 30
@@ -78,15 +81,32 @@ _rom_ext_interrupt_vector:
   .type _rom_ext_start_boot, @function
 _rom_ext_start_boot:
   /**
-   * Set up the global pointer `gp`.
-   *
    * Linker relaxations are disabled until the global pointer is setup below,
    * because otherwise some sequences may be turned into `gp`-relative
    * sequences, which is incorrect when `gp` is not initialized.
    */
   .option push
   .option norelax
+
+  /**
+   * Call the .rom_ext_immutable first if it's not called by ROM.
+   */
+  li   a0, (TOP_OTP_CTRL_CORE_BASE_ADDR + \
+            OTP_CTRL_SW_CFG_WINDOW_REG_OFFSET)
+  lw   t0, OTP_CTRL_PARAM_CREATOR_SW_CFG_IMMUTABLE_ROM_EXT_EN_OFFSET(a0)
+  li   t1, HARDENED_BOOL_TRUE
+  beq  t0, t1, .L_mutable_start_boot
+  call _rom_ext_immutable_start
+
+  /**
+   * Continue booting the mutable rom_ext.
+   */
+.L_mutable_start_boot:
+  /**
+   * Set up the global pointer `gp`.
+   */
   la gp, __global_pointer$
+
   .option pop
 
   /**
@@ -110,14 +130,12 @@ _rom_ext_start_boot:
    * Set up the stack pointer.
    *
    * In RISC-V, the stack grows downwards, so we load the address of the highest
-   * word in the stack into sp. We don't load in `_stack_end`, as that points
-   * beyond the end of RAM, and we always want it to be valid to dereference
-   * `sp`, and we need this to be 128-bit (16-byte) aligned to meet the psABI.
+   * word in the stack into sp.
    *
    * If an exception fires, the handler is conventionaly only allowed to clobber
    * memory at addresses below `sp`.
    */
-  la   sp, (_stack_end - 16)
+  la   sp, _stack_end
 
   /**
    * Setup C Runtime
@@ -171,6 +189,9 @@ _rom_ext_start_boot:
    */
   la   t0, (_rom_ext_interrupt_vector + 1)
   csrw mtvec, t0
+
+  COVERAGE_ASM_INIT()
+  COVERAGE_ASM_TRANSPORT_INIT()
 
   /**
    * Jump to C Code

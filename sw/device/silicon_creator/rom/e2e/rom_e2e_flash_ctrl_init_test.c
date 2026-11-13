@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,9 +10,9 @@
 #include "sw/device/silicon_creator/lib/drivers/otp.h"
 #include "sw/device/silicon_creator/lib/manifest_def.h"
 
-#include "flash_ctrl_regs.h"
+#include "hw/top/flash_ctrl_regs.h"
+#include "hw/top/otp_ctrl_regs.h"
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "otp_ctrl_regs.h"
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -50,18 +50,16 @@ typedef struct flash_cfg_reg {
 /**
  * Check that an info page is in the expected bank.
  */
-static void check_info_page_bank(flash_ctrl_info_page_t info_page,
+static void check_info_page_bank(const flash_ctrl_info_page_t *info_page,
                                  uint32_t expected_bank) {
-#define INFO_PAGE_BANK_CASE_(name_, value_, bank_, page_) \
-  case (name_):                                           \
-    CHECK(bank_ == expected_bank);                        \
-    break;
-
-  switch (info_page) {
-    FLASH_CTRL_INFO_PAGES_DEFINE(INFO_PAGE_BANK_CASE_)
-    default:
-      CHECK(false);
+#define INFO_PAGE_BANK_CASE_(name_, bank_, page_) \
+  if (&name_ == info_page) {                      \
+    CHECK(bank_ == expected_bank);                \
+    return;                                       \
   }
+
+  FLASH_CTRL_INFO_PAGES_DEFINE(INFO_PAGE_BANK_CASE_);
+  CHECK(false);
 
 #undef INFO_PAGE_BANK_CASE_
 }
@@ -69,18 +67,16 @@ static void check_info_page_bank(flash_ctrl_info_page_t info_page,
 /**
  * Check that an info page has the expected page number.
  */
-static void check_info_page_pagenum(flash_ctrl_info_page_t info_page,
+static void check_info_page_pagenum(const flash_ctrl_info_page_t *info_page,
                                     uint32_t expected_pagenum) {
-#define INFO_PAGE_PAGENUM_CASE_(name_, value_, bank_, page_) \
-  case (name_):                                              \
-    CHECK(page_ == expected_pagenum);                        \
-    break;
-
-  switch (info_page) {
-    FLASH_CTRL_INFO_PAGES_DEFINE(INFO_PAGE_PAGENUM_CASE_)
-    default:
-      CHECK(false);
+#define INFO_PAGE_PAGENUM_CASE_(name_, bank_, page_) \
+  if (&name_ == info_page) {                         \
+    CHECK(page_ == expected_pagenum);                \
+    return;                                          \
   }
+
+  FLASH_CTRL_INFO_PAGES_DEFINE(INFO_PAGE_PAGENUM_CASE_);
+  CHECK(false);
 
 #undef INFO_PAGE_PAGENUM_CASE_
 }
@@ -107,14 +103,14 @@ static void check_cfg_match(flash_cfg_reg_t actual, flash_cfg_reg_t expected) {
 /**
  * Check that default data partition configurations match OTP.
  *
- * The `CREATOR_SW_CFG_FLASH_DATA_DEFAULT_CFG` OTP value should match the
+ * The `CREATOR_SW_CFG_NVM_DATA_DEFAULT_CFG` OTP value should match the
  * default scrambling, ecc, and he settings for the data partitions as
  * described in the `DEFAULT_REGION` flash controller register.
  */
 static void default_cfg_test(void) {
   // Extract expected values from OTP.
   uint32_t otp_default_cfg_value =
-      otp_read32(OTP_CTRL_PARAM_CREATOR_SW_CFG_FLASH_DATA_DEFAULT_CFG_OFFSET);
+      otp_read32(OTP_CTRL_PARAM_CREATOR_SW_CFG_NVM_DATA_DEFAULT_CFG_OFFSET);
   flash_cfg_reg_t otp_default_cfg = {
       .reg_value = otp_default_cfg_value,
       .scrambling_en = FLASH_CTRL_OTP_FIELD_SCRAMBLING,
@@ -139,7 +135,7 @@ static void default_cfg_test(void) {
 /**
  * Check that boot partition info pages match OTP.
  *
- * The `CREATOR_SW_CFG_FLASH_INFO_BOOT_DATA_CFG` OTP value should match the
+ * The `CREATOR_SW_CFG_NVM_INFO_BOOT_DATA_CFG` OTP value should match the
  * scrambling, ecc, and he settings in info0 for the boot partitions
  * `kFlashCtrlInfoPageBootData0` (bank 1, page 0) and
  * `kFlashCtrlInfoPageBootData1` (bank 1, page 1).
@@ -152,14 +148,14 @@ static void boot_info_cfg_test(void) {
   // Expected values:
   // * kFlashCtrlInfoPageBootData0 -> bank 1, page 0
   // * kFlashCtrlInfoPageBootData1 -> bank 1, page 1
-  check_info_page_bank(kFlashCtrlInfoPageBootData0, 1);
-  check_info_page_pagenum(kFlashCtrlInfoPageBootData0, 0);
-  check_info_page_bank(kFlashCtrlInfoPageBootData1, 1);
-  check_info_page_pagenum(kFlashCtrlInfoPageBootData1, 1);
+  check_info_page_bank(&kFlashCtrlInfoPageBootData0, 1);
+  check_info_page_pagenum(&kFlashCtrlInfoPageBootData0, 0);
+  check_info_page_bank(&kFlashCtrlInfoPageBootData1, 1);
+  check_info_page_pagenum(&kFlashCtrlInfoPageBootData1, 1);
 
   // Extract expected values from OTP.
   uint32_t otp_boot_info_cfg_value =
-      otp_read32(OTP_CTRL_PARAM_CREATOR_SW_CFG_FLASH_INFO_BOOT_DATA_CFG_OFFSET);
+      otp_read32(OTP_CTRL_PARAM_CREATOR_SW_CFG_NVM_INFO_BOOT_DATA_CFG_OFFSET);
   flash_cfg_reg_t otp_boot_info_cfg = {
       .reg_value = otp_boot_info_cfg_value,
       .scrambling_en = FLASH_CTRL_OTP_FIELD_SCRAMBLING,

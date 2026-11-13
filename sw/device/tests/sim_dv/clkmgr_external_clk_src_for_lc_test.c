@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,9 @@
 
 OTTF_DEFINE_TEST_CONFIG();
 
+// Track the value of the external clock enable CSR written by software.
+static volatile const uint8_t kExternalClockEnable = 0x1;
+
 bool test_main(void) {
-  return execute_lc_ctrl_transition_test(/*use_ext_clk=*/true);
+  return execute_lc_ctrl_transition_test(/*use_ext_clk=*/kExternalClockEnable);
 }

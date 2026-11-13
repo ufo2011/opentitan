@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,9 +22,9 @@ class chip_sw_rom_e2e_jtag_debug_vseq extends chip_sw_base_vseq;
     super.body();
     cfg.sw_test_status_vif.can_pass_only_in_test = 0;
 
-    // The steps in this test closely follow the gdb steps, which is embedded directly into the
-    // `opentitan_gdb_fpga_cw310_test` target `rom_e2e_debug_test_otp__<lc_state>` in the bazel
-    // BUILD file located at sw/device/silicon_creator/rom/e2e/BUILD.
+    // The steps in this test closely follow the gdb steps, which are encoded
+    // in a host-side (Rust) test harness located at
+    // sw/host/tests/rom/e2e_openocd_debug_test/src/main.rs
 
     // Halt the CPU before the first instruction is executed. The chip just came out of POR - so
     // there is no need to issue an NDM reset again. Just wait for lc_ready signal and immediately
@@ -85,7 +85,7 @@ class chip_sw_rom_e2e_jtag_debug_vseq extends chip_sw_base_vseq;
     cfg.debugger.check_debug_cause(jtag_rv_debugger_pkg::RvDebugCauseTrigger);
 
     `uvm_info(`gfn, "Disable watchdog config", UVM_LOW)
-    cfg.debugger.mem_write(.addr(ral.aon_timer_aon.wdog_ctrl.get_address()),
+    cfg.debugger.mem_write(.addr(ral.aon_timer.wdog_ctrl.get_address()),
                            .value_q({0}),
                            .status(status));
     `DV_CHECK_EQ(status, 0)
@@ -126,7 +126,7 @@ class chip_sw_rom_e2e_jtag_debug_vseq extends chip_sw_base_vseq;
 
     `uvm_info(`gfn, "Execute code from GDB with `call` command", UVM_LOW)
     foreach (uart_msg_via_call[i]) begin
-      cfg.debugger.call(.symbol("uart_putchar"), .args({BUS_DW'(uart_msg_via_call[i])}));
+      cfg.debugger.call(.symbol("uart_write_imm"), .args({BUS_DW'(uart_msg_via_call[i]), 0}));
     end
 
     `uvm_info(`gfn, "Verify UART messages received over the TX port", UVM_LOW)
@@ -233,9 +233,9 @@ class chip_sw_rom_e2e_jtag_debug_vseq extends chip_sw_base_vseq;
 
     };
     addr_range_t sram_ret = '{
-        start_addr: top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_RET_AON_RAM_BASE_ADDR,
-        end_addr: top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_RET_AON_RAM_BASE_ADDR +
-                  top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_RET_AON_RAM_SIZE_BYTES - 1
+        start_addr: top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_RET_RAM_BASE_ADDR,
+        end_addr: top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_RET_RAM_BASE_ADDR +
+                  top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_RET_RAM_SIZE_BYTES - 1
 
     };
 

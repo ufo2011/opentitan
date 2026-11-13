@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include "sw/device/lib/dif/dif_test_base.h"
 
 extern "C" {
-#include "aes_regs.h"  // Generated.
+#include "hw/top/aes_regs.h"  // Generated.
 }  // extern "C"
 
 namespace dif_aes_test {
@@ -39,6 +39,7 @@ class AesTest : public testing::Test, public mock_mmio::MmioTest {
     }
   }
   void ExpectKey(const dif_aes_key_share_t &key, uint32_t key_size) {
+    EXPECT_READ32(AES_STATUS_REG_OFFSET, {{AES_STATUS_IDLE_BIT, true}});
     ExpectWriteMultreg(AES_KEY_SHARE0_0_REG_OFFSET, key.share0, key_size);
     ExpectWriteMultreg(AES_KEY_SHARE1_0_REG_OFFSET, key.share1, key_size);
   }
@@ -322,7 +323,8 @@ class AlertTest : public AesTestInitialized {};
 TEST_F(AlertTest, RecovCtrlUpdateErr) {
   EXPECT_WRITE32(AES_ALERT_TEST_REG_OFFSET,
                  {{AES_ALERT_TEST_RECOV_CTRL_UPDATE_ERR_BIT, true},
-                  {AES_ALERT_TEST_FATAL_FAULT_BIT, false}});
+                  {AES_ALERT_TEST_FATAL_FAULT_BIT, false},
+                  {AES_ALERT_TEST_REGWEN_BIT, true}});
 
   EXPECT_DIF_OK(dif_aes_alert_force(&aes_, kDifAesAlertRecovCtrlUpdateErr));
 }
@@ -330,7 +332,8 @@ TEST_F(AlertTest, RecovCtrlUpdateErr) {
 TEST_F(AlertTest, AlertFatalFault) {
   EXPECT_WRITE32(AES_ALERT_TEST_REG_OFFSET,
                  {{AES_ALERT_TEST_RECOV_CTRL_UPDATE_ERR_BIT, false},
-                  {AES_ALERT_TEST_FATAL_FAULT_BIT, true}});
+                  {AES_ALERT_TEST_FATAL_FAULT_BIT, true},
+                  {AES_ALERT_TEST_REGWEN_BIT, true}});
 
   EXPECT_DIF_OK(dif_aes_alert_force(&aes_, kDifAesAlertFatalFault));
 }
@@ -568,6 +571,7 @@ TEST_F(SideloadedKeyTest, start) {
                 .key_sideloaded = true});
 
   ExpectAuxConfig({});
+  EXPECT_READ32(AES_STATUS_REG_OFFSET, {{AES_STATUS_IDLE_BIT, true}});
   EXPECT_DIF_OK(dif_aes_start(&aes_, &transaction_, nullptr, nullptr));
 }
 // Mask reseeding.

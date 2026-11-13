@@ -1,13 +1,9 @@
----
-title: Building (and Testing) Software
-aliases:
-    - /doc/ug/getting_started_build_sw
----
+# Building (and Testing) Software
 
 _Before following this guide, make sure you have read the_:
-* main [Getting Started]({{< relref "getting_started" >}}) instructions,
-* install Verilator section of the [Verilator guide]({{< relref "setup_verilator.md" >}}), and
-* [OpenTitan Software]({{< relref "sw/" >}}) documentation.
+* main [Getting Started](README.md) instructions,
+* install Verilator section of the [Verilator guide](./setup_verilator.md), and
+* [OpenTitan Software](../../sw/README.md) documentation.
 
 All OpenTitan software is built with [Bazel](https://bazel.build/).
 Additionally, _most_ tests may be run with Bazel too.
@@ -23,9 +19,9 @@ This will take a while (an hour on a laptop is typical) if it's your first build
 Future builds will be much faster; go get a coffee and come back later.
 
 If the test worked, your OpenTitan setup is functional; you can build the software and run on-device tests using the Verilator simulation tool.
-See [Running Tests with Bazel]({{< relref "#running-tests with Bazel" >}}) for information on how to find and run other tests.
+See [Running Tests with Bazel](#running-tests with Bazel) for information on how to find and run other tests.
 
-If the test didn't work, read the full guide, especially the [Troubleshooting]({{< relref "#troubleshooting" >}}) section.
+If the test didn't work, read the full guide, especially the [Troubleshooting](#troubleshooting) section.
 
 ## Installing Bazel
 
@@ -56,8 +52,8 @@ curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor > bazel.gpg
 sudo mv bazel.gpg /etc/apt/trusted.gpg.d/
 echo "deb [arch=amd64] https://storage.googleapis.com/bazel-apt stable jdk1.8" |
 sudo tee /etc/apt/sources.list.d/bazel.list
-sudo apt update && sudo apt install bazel-5.1.1
-sudo ln -s /usr/bin/bazel-5.1.1 /usr/bin/bazel
+sudo apt update && sudo apt install bazel-6.2.1
+sudo ln -s /usr/bin/bazel-6.2.1 /usr/bin/bazel
 ```
 
 or by following [instructions for your system](https://bazel.build/install).
@@ -98,12 +94,12 @@ There are two categories of OpenTitan tests Bazel can build and run:
 On-host tests are compiled and run on the host machine, while on-device tests are compiled and run on (simulated/emulated) OpenTitan hardware.
 
 Examples of on-host tests are:
-* unit tests for device software, such as [DIF]({{< relref "/sw/device/lib/dif" >}}) and [ROM]({{< relref "/sw/device/silicon_creator/rom/docs/" >}}) unit tests.
+* unit tests for device software, such as [DIF](../../sw/device/lib/dif/README.md) and [ROM](../../sw/device/silicon_creator/rom/README.md) unit tests.
 * any test for host software, such as `opentitan{lib,tool}`.
 
 Examples of on-device tests are:
-* [chip-level tests]({{< relref "/sw/device/tests/index.md" >}}).
-* [ROM functional tests]({{< relref "/sw/device/silicon_creator/rom/docs/" >}})
+* [chip-level tests](../../sw/device/tests/README.md).
+* [ROM functional tests](../../sw/device/silicon_creator/rom/README.md)
 
 Test target names normally match file names (for instance, `//sw/device/tests:uart_smoketest` corresponds to `sw/device/test/uart_smoketest.c`).
 You can see all tests available under a given directory using `bazel query`, e.g.:
@@ -113,43 +109,45 @@ bazel query 'tests(//sw/device/tests/...)'
 ```
 ### Tags and wildcards
 
-TLDR: `bazelisk.sh test --test_tag_filters=-cw310,-verilator,-vivado,-jtag,-eternal,-broken --build_tag_filters=-vivado,-verilator //...`
+TLDR: `bazel test --test_tag_filters=-cw340,-verilator,-vivado,-jtag,-eternal,-broken --build_tag_filters=-vivado,-verilator //...`
 *Should* be able to run all the tests and build steps in OpenTitan that don't require optional setup steps, and
 
 You may find it useful to use wildcards to build/test all targets in the OpenTitan repository instead of individual targets.
 `//sw/...` is shorthand for all targets in `sw` that isn't tagged with manual.
-If a a target (a test or build artifact) relies on optional parts of the "Getting Started" guide they should be tagged so they can be filtered out and users can `bazelisk.sh test //...` once they filter out the appropriate tags.
+If a target (a test or build artifact) relies on optional parts of the "Getting Started" guide they should be tagged so they can be filtered out and users can `bazelisk.sh test //...` once they filter out the appropriate tags.
 We maintain or use the following tags to support this:
 * `broken` is used to tag tests that are committed but should not be expected by CI or others to pass.
-* `cw310`, `cw310_test_rom`, and `cw310_rom` are used to tag tests that depend on a correctly setup cw310 "Bergen Board" to emulate OpenTitan.
-  The `cw310` tag may be used in `--test_tag_filters` to enable concise filtering to select tests that run on this board and include or exclude them.
-  Loading the bitstream is the slowest part of the test, so these tags can group tests with common bitstreams to accelerate the tests tagged `cw310_test_rom`.
+* `cw340`, `cw340_test_rom`, and `cw340_rom_with_fake_keys` are used to tag tests that depend on a correctly setup cw340 "Luna Board" to emulate OpenTitan.
+  The `cw340` tag may be used in `--test_tag_filters` to enable concise filtering to select tests that run on this board and include or exclude them.
+  Historically these tests were grouped by execution environment, because this corresponded to a new "spliced" bitstream in the old FPGA testing flow.
+  Loading the bitstream is the slowest part of the test, but this should only need to be done once for the FPGA.
+  These tags are currently retained as a convenient mechanism for grouping tests, but are somewhat arbitrary.
 * `verilator` is used to tag tests that depend on a verilated model of OpenTitan that can take a significant time to build.
   Verilated tests can still be built with `--define DISABLE_VERILATOR_BUILD`, but they will skip the invocation of Verilator and cannot be run.
 * `vivado` is used to tag tests that critically depend on Vivado.
-* `jtag` is used to tag tests that rely on a USB JTAG adapter connected like we have in CI.
 * `manual` is a Bazel builtin that prevents targets from matching wildcards.
   Test suites are typically tagged manual so their contents match, but test suites don't get built or run unless they're intentionally invoked.
   Intermediate build artifacts may also be tagged with manual to prevent them from being unintentionally built if they cause other problems.
 * `skip_in_ci` is used to tag ROM end-to-end tests that we currently skip in CI.
   ROM end-to-end tests are typically written for five life cycle states: TEST\_UNLOCKED0, DEV, PROD, PROD\_END, and RMA.
-  This tag allows us to limit the tests run in CI to a single life cycle state, allowing CW310 tests to finish in a reasonable timeframe.
+  This tag allows us to limit the tests run in CI to a single life cycle state, allowing CW340 tests to finish in a reasonable timeframe.
   We run tests for the remaining lifecycle states outside the CI in a less frequent manner.
 
 `ci/scripts/check-bazel-tags.sh` performs some useful queries to ensure these tags are applied.
-These tags can then be used to filter tests using `--build_tests_only --test_tag_filters=-cw310,-verilator,-vivado`.
-These tags can also be used to filter builds using `--build_tag_filters=-cw310,-verilator,-vivado`.
+These tags can then be used to filter tests using `--build_tests_only --test_tag_filters=-cw340,-verilator,-vivado`.
+These tags can also be used to filter builds using `--build_tag_filters=-cw340,-verilator,-vivado`.
 
 `--build_tests_only` is important when matching wildcards if you aren't using
-`--build_tag_filters` to prevent `bazelisk.sh test //...` from building targets that are filtered out by `--test_tag_filters`.
+`--build_tag_filters` to prevent `bazel test //...` from building targets that are filtered out by `--test_tag_filters`.
 
-There is no way to filter out dependencies of a test\_suite such as `//sw/device/tests:uart_smoketest` (Which is a suite that's assembled by the `opentitan_functest` rule) from a build.
+There is no way to filter out dependencies of a test\_suite such as `//sw/device/tests:uart_smoketest` (Which is a suite that's assembled by the `opentitan_test` rule) from a build.
 
 ### Running on-device Tests
 
 On-device tests such as `//sw/device/tests:uart_smoketest` include multiple targets for different device simulation/emulation tools.
 Typically, you will only want to run one of these test targets at a time (for instance, only Verilator or only FPGA).
-Add `_sim_verilator` to the test name to run the test on Verilator only, and `_fpga_cw310_rom` or `_fpga_cw310_test_rom` to run the test on FPGA only.
+Add `_sim_verilator` to the test name to run the test on Verilator only, and `_fpga_cw340_rom_with_fake_keys` or `_fpga_cw340_test_rom` to run the test on FPGA only.
+Not all tests are available on all of these targets; in particular, tests do not always expose both `_fpga_cw340_rom_with_fake_keys` and `fpga_cw340_test_rom` options, so if one does not work then it's good to try the other.
 
 You can check which Verilator tests are available under a given directory using:
 ```console
@@ -158,14 +156,14 @@ bazel query 'attr(tags, verilator, tests(//sw/device/tests/...))'
 
 For FPGA tests, just change the tag:
 ```console
-bazel query 'attr(tags, cw310, tests(//sw/device/tests/...))'
+bazel query 'attr(tags, cw340, tests(//sw/device/tests/...))'
 ```
 
-For more information, please refer to the [Verilator]({{< relref "setup_verilator" >}}) and/or [FPGA]({{< relref "setup_fpga" >}}) setup instructions.
+For more information, please refer to the [Verilator](./setup_verilator.md) and/or [FPGA](./setup_fpga.md) setup instructions.
 
 ### Running on-host DIF Tests
 
-The Device Interface Function or [DIF]({{< relref "/sw/device/lib/dif" >}}) libraries contain unit tests that run on the host and are built and run with Bazel.
+The Device Interface Function or [DIF](../../sw/device/lib/dif/README.md) libraries contain unit tests that run on the host and are built and run with Bazel.
 As shown below, you may use Bazel to query which tests are available, build and run all tests, or build and run only one test.
 
 #### Querying which tests are available
@@ -186,7 +184,7 @@ bazel test //sw/device/lib/dif:uart_unittest
 
 ### Running on-host ROM Tests
 
-Similar to the DIF libraries, you can query, build, and run all the [ROM]({{< relref "/sw/device/silicon_creator/rom/docs/" >}}) unit tests (which also run on the host) with Bazel.
+Similar to the DIF libraries, you can query, build, and run all the [ROM](../../sw/device/silicon_creator/rom/README.md) unit tests (which also run on the host) with Bazel.
 
 #### Querying which (on-host) tests are available
 Note, the ROM has both on-host and on-device tests.
@@ -197,7 +195,7 @@ bazel query 'kind(cc_.*, tests(//sw/device/silicon_creator/lib/...))'
 
 #### Building and running **all** (on-host) tests
 ```console
-bazel test --test_tag_filters=-cw310,-dv,-verilator //sw/device/silicon_creator/lib/...
+bazel test --test_tag_filters=-cw340,-dv,-verilator //sw/device/silicon_creator/lib/...
 ```
 
 #### Building and running a **single** (on-host) test
@@ -210,7 +208,7 @@ bazel test //sw/device/silicon_creator/lib/drivers:uart_unittest
 
 ### Bazel-built Software Artifacts
 
-As described in the [OpenTitan Software]({{< relref "sw/" >}}) documentation, there are three categories of OpenTitan software, all of which are built with Bazel. These include:
+As described in the [OpenTitan Software](../../sw/README.md) documentation, there are three categories of OpenTitan software, all of which are built with Bazel. These include:
 1. _device_ software,
 1. _OTBN_ software,
 1. _host_ software,
@@ -223,7 +221,7 @@ Device software is built and run on OpenTitan hardware.
 There are three OpenTitan "devices" for simulating/emulating OpenTitan hardware:
 1. "sim\_dv": DV simulation (i.e., RTL simulation with commercial simulators),
 1. "sim\_verilator": Verilator simulation (i.e., RTL simulation with the open source Verilator simulator),
-1. "fpga\_cw310": FPGA.
+1. "fpga\_cw340": FPGA.
 
 Additionally, for each device, there are two types of software images that can be built, depending on the memory type the software is destined for, i.e.:
 1. ROM,
@@ -242,7 +240,7 @@ Specifically, building either an `opentitan_rom_binary` or `opentitan_flash_bina
 * `<target>_<device>.logs.txt`: a textual database of addresses where `LOG_*` macros are invoked (for DV backdoor logging interface).
 * `<target>_<device>.rodata.txt`: same as above, but contains the strings that are logged.
 * `<target>_<device>.*.vmem`: a Verilog memory file which can be read by `$readmemh()` in Verilog code.
-Note, `<device>` will be in {`sim_dv`, `sim_verilator`, `fpga_cw310`}.
+Note, `<device>` will be in {`sim_dv`, `sim_verilator`, `fpga_cw340`}.
 
 Additionally, if the `opentitan_flash_binary` is signed, then these files will also be under `bazel-out/`:
 * `<target>_<device>.<signing key name>.signed.bin`: the same `.bin` file above, but with a valid signature field in the manifest.
@@ -287,37 +285,38 @@ A disassembly of all executable sections is produced by the build system by defa
 It can be found by looking for files with the `.dis` extension next to the corresponding ELF file.
 
 ```console
-./bazelisk.sh build //sw/device/tests:uart_smoketest_prog_sim_verilator_dis
+bazel build //sw/device/tests:uart_smoketest_prog_sim_verilator_dis
 
-less "$(./bazelisk.sh outquery //sw/device/tests:uart_smoketest_prog_sim_verilator_dis)"
+less "$(bazel outquery //sw/device/tests:uart_smoketest_prog_sim_verilator_dis)"
 ```
 
 To get a different type of disassembly, e.g. one which includes data sections in addition to executable sections, objdump can be called manually.
 For example the following command shows how to disassemble all sections of the UART DIF smoke test interleaved with the actual source code:
 
 ```console
-./bazelisk.sh build --config=riscv32 //sw/device/tests:uart_smoketest_prog_sim_verilator.elf
+bazel build --config=riscv32 //sw/device/tests:uart_smoketest_prog_sim_verilator.elf
 
-riscv32-unknown-elf-objdump --disassemble-all --headers --line-numbers --source \
-  "$(./bazelisk.sh outquery --config=riscv32 //sw/device/tests:uart_smoketest_prog_sim_verilator.elf)"
+bazel run @lowrisc_rv32imcb_toolchain//:bin/riscv32-unknown-elf-objdump -- \
+  --disassemble-all --headers --line-numbers --source \
+  "$(bazel outquery --config=riscv32 //sw/device/tests:uart_smoketest_prog_sim_verilator.elf)"
 ```
 
-Refer to the output of `riscv32-unknown-elf-objdump --help` for a full list of options.
+Refer to the output of the command with `--help` for a full list of options.
 
-## Troubleshooting {#troubleshooting}
+## Troubleshooting
 
-### Check CI {#troubleshooting-check-ci}
+### Check CI
 
 First, [check the GitHub repository](https://github.com/lowRISC/opentitan/commits/master) to make sure the CI check is succeeding for the commit you cloned.
 If there's an issue with that commit (it would have a red "X" next to it), check out the most recent commit that passed CI (indicated by a green check mark).
 We try to always keep the main branch healthy, but the project is in active development and we're not immune to temporary breaks.
 
-### Debugging a failed verilator test {#troubleshooting-verilator-test-failure}
+### Debugging a failed verilator test
 
-If your `bazelisk.sh` build failed trying to run a test on Verilator, the first step is to see if you can build the chip simulation on its own:
+If your bazel build failed trying to run a test on Verilator, the first step is to see if you can build the chip simulation on its own:
 
 ```console
-./bazelisk.sh build //hw:verilator
+bazel build //hw:verilator
 ```
 This build can take a long time; it's creating a simulation for the entire OpenTitan SoC.
 Expect up to an hour for a successful build, depending on your machine.
@@ -328,7 +327,7 @@ If your system is close to that limit, you may want to exit web browsers or othe
 
 If the `//hw:verilator` build failed pretty much immediately, try running `util/check_tool_requirements.py` to make sure you meet the tool requirements.
 
-If the `//hw:verilator` build succeeeded, but running a particular test fails, try running a different test (you can find many options under `sw/device/tests/`).
+If the `//hw:verilator` build succeeded, but running a particular test fails, try running a different test (you can find many options under `sw/device/tests/`).
 If that works, then it may be a problem with the specific test you're running.
-See if you can build, but not run, the test with `./bazelisk.sh build` instead of `./bazelisk.sh test`.
+See if you can build, but not run, the test with `bazel build` instead of `bazel test`.
 If the test fails to build, that indicates some issue with the source code or possibly the RISC-V toolchain installation.

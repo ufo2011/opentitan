@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,8 +22,15 @@ static dif_pinmux_t pinmux;
 OTTF_DEFINE_TEST_CONFIG();
 
 status_t test_sw_strap_read(ujson_t *uj) {
+  const char bits[] = {'s', 'w', 'W', 'S'};
+  char pattern[4] = {0};
   uint32_t strap = pinmux_testutils_read_straps(&pinmux, &gpio);
-  return RESP_OK_STATUS(uj, strap);
+  for (size_t i = 0; i < 3; ++i) {
+    uint32_t v = (strap >> (2 * i)) & 3;
+    pattern[2 - i] = bits[v];
+  }
+  LOG_INFO("strap = %02x, pattern = %s", strap, pattern);
+  return RESP_OK_STATUS(uj, (int32_t)strap);
 }
 
 status_t command_processor(ujson_t *uj) {
@@ -44,9 +51,9 @@ status_t command_processor(ujson_t *uj) {
 
 bool test_main(void) {
   CHECK_DIF_OK(dif_pinmux_init(
-      mmio_region_from_addr(TOP_EARLGREY_PINMUX_AON_BASE_ADDR), &pinmux));
-  CHECK_DIF_OK(
-      dif_gpio_init(mmio_region_from_addr(TOP_EARLGREY_GPIO_BASE_ADDR), &gpio));
+      mmio_region_from_addr(TOP_EARLGREY_PINMUX_BASE_ADDR), &pinmux));
+  CHECK_DIF_OK(dif_gpio_init(
+      mmio_region_from_addr(TOP_EARLGREY_GPIO0_BASE_ADDR), &gpio));
 
   uint32_t strap = pinmux_testutils_read_straps(&pinmux, &gpio);
   LOG_INFO("Initial sw_strap=%d", strap);

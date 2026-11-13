@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@ class chip_scoreboard #(type RAL_T = chip_ral_pkg::chip_reg_block) extends cip_b
     .RAL_T(RAL_T),
     .COV_T(chip_env_cov)
   );
-  `uvm_component_utils(chip_scoreboard)
+  `uvm_component_param_utils(chip_scoreboard#(RAL_T))
 
   // local variables
 
@@ -67,6 +67,13 @@ class chip_scoreboard #(type RAL_T = chip_ral_pkg::chip_reg_block) extends cip_b
 
   virtual function void reset(string kind = "HARD");
     super.reset(kind);
+
+    // If there is a JTAG DTM register model (created by calling cfg.set_use_jtag_dmi) then reset
+    // its values to match the reset event.
+    if (cfg.m_jtag_dtm_ral != null) begin
+      cfg.m_jtag_dtm_ral.reset(kind);
+    end
+
     // reset local fifos queues and variables
   endfunction
 
@@ -75,7 +82,9 @@ class chip_scoreboard #(type RAL_T = chip_ral_pkg::chip_reg_block) extends cip_b
     // post test checks - ensure that all local fifos and queues are empty
   endfunction
 
-  virtual function bit predict_tl_err(tl_seq_item item, tl_channels_e channel, string ral_name);
+  virtual protected function bit predict_tl_err(tl_seq_item item,
+                                                tl_channels_e channel,
+                                                string ral_name);
     uvm_reg_addr_t addr = cfg.ral_models[ral_name].get_normalized_addr(item.a_addr);
     uvm_mem mem = cfg.ral_models[ral_name].default_map.get_mem_by_offset(addr);
 

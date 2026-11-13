@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -16,10 +16,7 @@ module pattgen_reg_top (
   input  pattgen_reg_pkg::pattgen_hw2reg_t hw2reg, // Read
 
   // Integrity check errors
-  output logic intg_err_o,
-
-  // Config
-  input devmode_i // If 1, explicit error return for unmapped register access
+  output logic intg_err_o
 );
 
   import pattgen_reg_pkg::* ;
@@ -119,7 +116,7 @@ module pattgen_reg_top (
   // cdc oversampling signals
 
   assign reg_rdata = reg_rdata_next ;
-  assign reg_error = (devmode_i & addrmiss) | wr_err | intg_err;
+  assign reg_error = addrmiss | wr_err | intg_err;
 
   // Define SW related signals
   // Format: <reg>_<field>_{wd|we|qs}
@@ -138,7 +135,9 @@ module pattgen_reg_top (
   logic intr_test_done_ch0_wd;
   logic intr_test_done_ch1_wd;
   logic alert_test_we;
-  logic alert_test_wd;
+  logic alert_test_fatal_fault_wd;
+  logic alert_test_regwen_qs;
+  logic alert_test_regwen_wd;
   logic ctrl_we;
   logic ctrl_enable_ch0_qs;
   logic ctrl_enable_ch0_wd;
@@ -148,6 +147,14 @@ module pattgen_reg_top (
   logic ctrl_polarity_ch0_wd;
   logic ctrl_polarity_ch1_qs;
   logic ctrl_polarity_ch1_wd;
+  logic ctrl_inactive_level_pcl_ch0_qs;
+  logic ctrl_inactive_level_pcl_ch0_wd;
+  logic ctrl_inactive_level_pda_ch0_qs;
+  logic ctrl_inactive_level_pda_ch0_wd;
+  logic ctrl_inactive_level_pcl_ch1_qs;
+  logic ctrl_inactive_level_pcl_ch1_wd;
+  logic ctrl_inactive_level_pda_ch1_qs;
+  logic ctrl_inactive_level_pda_ch1_wd;
   logic prediv_ch0_we;
   logic [31:0] prediv_ch0_qs;
   logic [31:0] prediv_ch0_wd;
@@ -182,10 +189,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_done_ch0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state_we),
@@ -208,10 +217,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_done_ch1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state_we),
@@ -236,10 +247,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_done_ch0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -262,10 +275,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_done_ch1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -324,14 +339,18 @@ module pattgen_reg_top (
 
   // R[alert_test]: V(True)
   logic alert_test_qe;
-  logic [0:0] alert_test_flds_we;
+  logic [1:0] alert_test_flds_we;
   assign alert_test_qe = &alert_test_flds_we;
+  // Create REGWEN-gated WE signal
+  logic alert_test_gated_we;
+  assign alert_test_gated_we = alert_test_we && alert_test_regwen_qs;
+  //   F[fatal_fault]: 0:0
   prim_subreg_ext #(
     .DW    (1)
-  ) u_alert_test (
+  ) u_alert_test_fatal_fault (
     .re     (1'b0),
-    .we     (alert_test_we),
-    .wd     (alert_test_wd),
+    .we     (alert_test_gated_we),
+    .wd     (alert_test_fatal_fault_wd),
     .d      ('0),
     .qre    (),
     .qe     (alert_test_flds_we[0]),
@@ -341,16 +360,46 @@ module pattgen_reg_top (
   );
   assign reg2hw.alert_test.qe = alert_test_qe;
 
+  //   F[regwen]: 31:31
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW0C),
+    .RESVAL  (1'h1),
+    .Mubi    (1'b0)
+  ) u_alert_test_regwen (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (alert_test_we),
+    .wd     (alert_test_regwen_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (alert_test_flds_we[1]),
+    .q      (),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (alert_test_regwen_qs)
+  );
+
 
   // R[ctrl]: V(False)
   //   F[enable_ch0]: 0:0
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ctrl_enable_ch0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (ctrl_we),
@@ -373,10 +422,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ctrl_enable_ch1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (ctrl_we),
@@ -399,10 +450,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ctrl_polarity_ch0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (ctrl_we),
@@ -425,10 +478,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ctrl_polarity_ch1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (ctrl_we),
@@ -447,15 +502,129 @@ module pattgen_reg_top (
     .qs     (ctrl_polarity_ch1_qs)
   );
 
+  //   F[inactive_level_pcl_ch0]: 4:4
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_ctrl_inactive_level_pcl_ch0 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (ctrl_we),
+    .wd     (ctrl_inactive_level_pcl_ch0_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.ctrl.inactive_level_pcl_ch0.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (ctrl_inactive_level_pcl_ch0_qs)
+  );
+
+  //   F[inactive_level_pda_ch0]: 5:5
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_ctrl_inactive_level_pda_ch0 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (ctrl_we),
+    .wd     (ctrl_inactive_level_pda_ch0_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.ctrl.inactive_level_pda_ch0.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (ctrl_inactive_level_pda_ch0_qs)
+  );
+
+  //   F[inactive_level_pcl_ch1]: 6:6
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_ctrl_inactive_level_pcl_ch1 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (ctrl_we),
+    .wd     (ctrl_inactive_level_pcl_ch1_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.ctrl.inactive_level_pcl_ch1.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (ctrl_inactive_level_pcl_ch1_qs)
+  );
+
+  //   F[inactive_level_pda_ch1]: 7:7
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_ctrl_inactive_level_pda_ch1 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (ctrl_we),
+    .wd     (ctrl_inactive_level_pda_ch1_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.ctrl.inactive_level_pda_ch1.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (ctrl_inactive_level_pda_ch1_qs)
+  );
+
 
   // R[prediv_ch0]: V(False)
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_prediv_ch0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (prediv_ch0_we),
@@ -479,10 +648,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_prediv_ch1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (prediv_ch1_we),
@@ -507,10 +678,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_data_ch0_0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (data_ch0_0_we),
@@ -535,10 +708,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_data_ch0_1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (data_ch0_1_we),
@@ -563,10 +738,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_data_ch1_0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (data_ch1_0_we),
@@ -591,10 +768,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_data_ch1_1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (data_ch1_1_we),
@@ -619,10 +798,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (6),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (6'h0)
+    .RESVAL  (6'h0),
+    .Mubi    (1'b0)
   ) u_size_len_ch0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (size_we),
@@ -645,10 +826,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_size_reps_ch0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (size_we),
@@ -671,10 +854,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (6),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (6'h0)
+    .RESVAL  (6'h0),
+    .Mubi    (1'b0)
   ) u_size_len_ch1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (size_we),
@@ -697,10 +882,12 @@ module pattgen_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_size_reps_ch1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (size_we),
@@ -723,7 +910,6 @@ module pattgen_reg_top (
 
   logic [11:0] addr_hit;
   always_comb begin
-    addr_hit = '0;
     addr_hit[ 0] = (reg_addr == PATTGEN_INTR_STATE_OFFSET);
     addr_hit[ 1] = (reg_addr == PATTGEN_INTR_ENABLE_OFFSET);
     addr_hit[ 2] = (reg_addr == PATTGEN_INTR_TEST_OFFSET);
@@ -775,7 +961,9 @@ module pattgen_reg_top (
   assign intr_test_done_ch1_wd = reg_wdata[1];
   assign alert_test_we = addr_hit[3] & reg_we & !reg_error;
 
-  assign alert_test_wd = reg_wdata[0];
+  assign alert_test_fatal_fault_wd = reg_wdata[0];
+
+  assign alert_test_regwen_wd = reg_wdata[31];
   assign ctrl_we = addr_hit[4] & reg_we & !reg_error;
 
   assign ctrl_enable_ch0_wd = reg_wdata[0];
@@ -785,6 +973,14 @@ module pattgen_reg_top (
   assign ctrl_polarity_ch0_wd = reg_wdata[2];
 
   assign ctrl_polarity_ch1_wd = reg_wdata[3];
+
+  assign ctrl_inactive_level_pcl_ch0_wd = reg_wdata[4];
+
+  assign ctrl_inactive_level_pda_ch0_wd = reg_wdata[5];
+
+  assign ctrl_inactive_level_pcl_ch1_wd = reg_wdata[6];
+
+  assign ctrl_inactive_level_pda_ch1_wd = reg_wdata[7];
   assign prediv_ch0_we = addr_hit[5] & reg_we & !reg_error;
 
   assign prediv_ch0_wd = reg_wdata[31:0];
@@ -815,7 +1011,6 @@ module pattgen_reg_top (
 
   // Assign write-enables to checker logic vector.
   always_comb begin
-    reg_we_check = '0;
     reg_we_check[0] = intr_state_we;
     reg_we_check[1] = intr_enable_we;
     reg_we_check[2] = intr_test_we;
@@ -851,6 +1046,7 @@ module pattgen_reg_top (
 
       addr_hit[3]: begin
         reg_rdata_next[0] = '0;
+        reg_rdata_next[31] = alert_test_regwen_qs;
       end
 
       addr_hit[4]: begin
@@ -858,6 +1054,10 @@ module pattgen_reg_top (
         reg_rdata_next[1] = ctrl_enable_ch1_qs;
         reg_rdata_next[2] = ctrl_polarity_ch0_qs;
         reg_rdata_next[3] = ctrl_polarity_ch1_qs;
+        reg_rdata_next[4] = ctrl_inactive_level_pcl_ch0_qs;
+        reg_rdata_next[5] = ctrl_inactive_level_pda_ch0_qs;
+        reg_rdata_next[6] = ctrl_inactive_level_pcl_ch1_qs;
+        reg_rdata_next[7] = ctrl_inactive_level_pda_ch1_qs;
       end
 
       addr_hit[5]: begin

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,14 +9,11 @@ package chip_common_pkg;
 
   // Chip composition (number of hardware resources).
   parameter dv_utils_pkg::uint NUM_GPIOS = 32;
+  parameter dv_utils_pkg::uint NUM_GPIO_INSTS = 2;
   parameter dv_utils_pkg::uint NUM_UARTS = 4;
   parameter dv_utils_pkg::uint NUM_SPI_HOSTS = 2;
+  parameter dv_utils_pkg::uint NUM_SPI_HOST_CSBS = 3;
   parameter dv_utils_pkg::uint NUM_I2CS = 3;
-  parameter dv_utils_pkg::uint NUM_PWM_CHANNELS = pwm_reg_pkg::NOutputs;
-  parameter dv_utils_pkg::uint NUM_PATTGEN_CH = pattgen_agent_pkg::NUM_PATTGEN_CHANNELS;
-
-  // Buffer is half of SPI_DEVICE Dual Port SRAM
-  parameter dv_utils_pkg::uint SPI_FRAME_BYTE_SIZE = spi_device_reg_pkg::SPI_DEVICE_BUFFER_SIZE/2;
 
   // SW constants - use unmapped address space with at least 32 bytes.
   parameter bit [top_pkg::TL_AW-1:0] SW_DV_START_ADDR = tl_main_pkg::ADDR_SPACE_RV_CORE_IBEX__CFG +
@@ -27,10 +24,13 @@ package chip_common_pkg;
 
   parameter uint ROM_CONSOLE_UART = 0;
 
+  // ROM banner values.
+  parameter string ROM_BANNER   = "OpenTitan:4001-0010-01";
+
   // ROM Boot Fault Values, matches definitions in `rules/const.bzl`.
-  parameter string ROM_BFV_BAD_IDENTIFIER     = "0142500d";
-  parameter string ROM_BFV_BAD_ENCODED_MSG    = "01535603";
-  parameter string ROM_BFV_INSTRUCTION_ACCESS = "01495202";
+  parameter string ROM_BFV_BAD_IDENTIFIER       = "0142500d";
+  parameter string ROM_BFV_BAD_ECDSA_SIGNATURE  = "07535603";
+  parameter string ROM_BFV_INSTRUCTION_ACCESS   = "01495202";
 
   // ROM Lifecycle Values, matches definitions in `rules/const.bzl`.
   parameter string ROM_LCV_TEST_UNLOCKED0 = "02108421";
@@ -85,6 +85,7 @@ package chip_common_pkg;
     LcCtrlSignalKeyMgrEn,
     LcCtrlSignalEscEn,
     LcCtrlSignalCheckBypEn,
+    LcCtrlSignalRmaState,
     LcCtrlSignalNumTotal
   } lc_ctrl_signal_e;
 
@@ -108,12 +109,12 @@ package chip_common_pkg;
     top_earlgrey_pkg::DioPadSpiDevD1,   /* DioSpiDeviceSd1 */
     top_earlgrey_pkg::DioPadSpiDevD2,   /* DioSpiDeviceSd2 */
     top_earlgrey_pkg::DioPadSpiDevD3,   /* DioSpiDeviceSd3 */
-    top_earlgrey_pkg::DioPadIor8,       /* DioSysrstCtrlAonEcRstL */
-    top_earlgrey_pkg::DioPadIor9,       /* DioSysrstCtrlAonFlashWpL */
+    top_earlgrey_pkg::DioPadIor8,       /* DioSysrstCtrlEcRstL */
+    top_earlgrey_pkg::DioPadIor9,       /* DioSysrstCtrlFlashWpL */
     top_earlgrey_pkg::DioPadSpiDevClk,  /* DioSpiDeviceSck */
     top_earlgrey_pkg::DioPadSpiDevCsL,  /* DioSpiDeviceCsb */
     top_earlgrey_pkg::DioPadSpiHostClk, /* DioSpiHost0Sck */
-    top_earlgrey_pkg::DioPadSpiHostCsL  /* DioSpiHost0Csb */
+    top_earlgrey_pkg::DioPadSpiHostCsL  /* DioSpiHost0Csb0 */
   };
 
   typedef struct packed {

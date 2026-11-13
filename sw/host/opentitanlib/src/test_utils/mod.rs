@@ -1,20 +1,37 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod bitbanging;
 pub mod bootstrap;
+pub mod crashdump;
 pub mod e2e_command;
 pub mod epmp;
+// The "english breakfast" variant of the chip doesn't have the same
+// set of CSRs as the "earlgrey" chip.
+#[cfg(not(feature = "english_breakfast"))]
+pub mod extclk;
+pub mod fpga_backdoor;
 pub mod gpio;
+pub mod gpio_monitor;
+pub mod i2c_target;
 pub mod init;
+pub mod lc;
+pub mod lc_transition;
 pub mod load_bitstream;
+pub mod load_sram_program;
+pub mod mem;
+pub mod object;
+pub mod otp_ctrl;
 // The "english breakfast" variant of the chip doesn't have the same
 // set of IO and pinmux constants as the "earlgrey" chip.
 #[cfg(not(feature = "english_breakfast"))]
 pub mod pinmux_config;
-
+pub mod poll;
 pub mod rpc;
+pub mod spi_passthru;
 pub mod status;
+pub mod test_status;
 
 /// The `execute_test` macro should be used in end-to-end tests to
 /// invoke each test from the `main` function.
@@ -37,9 +54,9 @@ pub mod status;
 #[macro_export]
 macro_rules! execute_test {
     ($test:path, $($args:tt)*) => {
-        println!("Starting test {}...", stringify!($test));
+        println!("{}:Starting test {}...", line!(), stringify!($test));
         let result = $test($($args)*);
-        println!("Finished test {}: {:?}", stringify!($test), result);
+        println!("{}:Finished test {}: {:?}", line!(), stringify!($test), result);
         let _ = result?;
     };
 }

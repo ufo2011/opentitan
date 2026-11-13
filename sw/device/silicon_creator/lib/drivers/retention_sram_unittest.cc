@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,14 +9,14 @@
 #include "sw/device/lib/base/mock_abs_mmio.h"
 #include "sw/device/silicon_creator/testing/rom_test.h"
 
+#include "hw/top/sram_ctrl_regs.h"  // Generated.
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "sram_ctrl_regs.h"  // Generated.
 
 namespace retention_sram_unittest {
 namespace {
 class RetentionSramTest : public rom_test::RomTest {
  protected:
-  uint32_t base_ = TOP_EARLGREY_SRAM_CTRL_RET_AON_REGS_BASE_ADDR;
+  uint32_t base_ = TOP_EARLGREY_SRAM_CTRL_RET_REGS_BASE_ADDR;
   rom_test::MockAbsMmio mmio_;
 };
 

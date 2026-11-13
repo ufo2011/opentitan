@@ -4,9 +4,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-from distutils.version import StrictVersion
 import logging as log
 import os
+from packaging.version import Version
 import re
 import shlex
 import subprocess
@@ -15,14 +15,21 @@ import sys
 # Display INFO log messages and up.
 log.basicConfig(level=log.INFO, format="%(levelname)s: %(message)s")
 
+try:
+    import importlib
+except ModuleNotFoundError:
+    log.error("importlib cannot be found. "
+              "This likely means that you're using a very old version of Python. "
+              "Please update Python to the version defined in tool_requirements.py and retry.")
+    sys.exit(1)
+
 
 def get_tool_requirements_path():
-    '''Return the path to tool_requirements.py, at the top of the repo'''
-    # top_src_dir is the top of the repository
-    top_src_dir = os.path.normpath(os.path.join(os.path.dirname(__file__),
-                                                '..'))
+    '''Return the path to tool_requirements.py, in the same dir as this file'''
+    # tool_src_dir is the directory containing this file
+    tool_src_dir = os.path.normpath(os.path.join(os.path.dirname(__file__)))
 
-    return os.path.join(top_src_dir, 'tool_requirements.py')
+    return os.path.join(tool_src_dir, 'tool_requirements.py')
 
 
 class ReqErr(Exception):
@@ -156,7 +163,7 @@ class ToolReq:
                     'Failed to convert requirement to semantic version: {}'
                     .format(err))
         try:
-            min_sv = StrictVersion(min_semver)
+            min_sv = Version(min_semver)
         except ValueError as err:
             return (False,
                     'Bad semver inferred from required version ({}): {}'
@@ -174,7 +181,7 @@ class ToolReq:
                     'Failed to convert installed to semantic version: {}'
                     .format(err))
         try:
-            actual_sv = StrictVersion(actual_semver)
+            actual_sv = Version(actual_semver)
         except ValueError as err:
             return (False,
                     'Bad semver inferred from installed version ({}): {}'
@@ -199,7 +206,6 @@ class VerilatorToolReq(ToolReq):
             # relies on perl magic to parse command line arguments.
             version_str = subprocess.run('verilator --version', shell=True,
                                          check=True, stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT,
                                          universal_newlines=True)
         except subprocess.CalledProcessError as err:
             raise RuntimeError('Unable to call Verilator to check version: {}'
@@ -213,7 +219,7 @@ class VeribleToolReq(ToolReq):
 
     def to_semver(self, version, from_req):
         # Drop the hash suffix and convert into version string that
-        # is compatible with StrictVersion in check_version below.
+        # is compatible with Version in check_version below.
         # Example: v0.0-808-g1e17daa -> 0.0.808
         m = re.fullmatch(r'v([0-9]+)\.([0-9]+)-([0-9]+)-g[0-9a-f]+$', version)
         if m is None:
@@ -221,6 +227,22 @@ class VeribleToolReq(ToolReq):
                              .format(version))
 
         return '.'.join(m.group(1, 2, 3))
+
+
+class VivadoToolReq(ToolReq):
+    tool_cmd = ['vivado', '-version']
+    version_regex = re.compile(r'Vivado v(.*)\s')
+
+    def to_semver(self, version, from_req):
+        # Regular Vivado releases just have a major and minor version.
+        # Therefore, the patch number is optional
+        m = re.fullmatch(r'([0-9]+)\.([0-9]+)(?:\.([0-9]+))?', version)
+        if m is None:
+            raise ValueError("{} has invalid version string format."
+                             .format(version))
+
+        # If there is no patch level, we set it to 0.
+        return '.'.join((m.group(1), m.group(2), m.group(3) or '0'))
 
 
 class VcsToolReq(ToolReq):
@@ -238,7 +260,7 @@ class VcsToolReq(ToolReq):
         # already. A version always has the "2020.03" (year and month) part,
         # and may also have an -SP<n> and/or -<patch> suffix.
         #
-        # Since StrictVersion expects a 3 digit versioning scheme, we multiply
+        # Since Version expects a 3 digit versioning scheme, we multiply
         # any SP number by 100, which should work as long as the patch version
         # isn't greater than 99.
         #
@@ -260,12 +282,35 @@ class VcsToolReq(ToolReq):
         return '{}.{}{}'.format(major, minor, comb)
 
 
-class PyModuleToolReq(ToolReq):
-    '''A tool in a Python module (its version can be found by running pip)'''
-    version_regex = re.compile(r'Version: (.*)')
+class NinjaToolReq(ToolReq):
+    tool_cmd = ['ninja', '--version']
 
-    def _get_tool_cmd(self):
-        return ['pip3', 'show', self.tool]
+    def to_semver(self, version, from_req):
+        # There exist different version string variants that we need to be
+        # able to parse. Some only contain the semantic version, e.g. "1.10.0",
+        # while others contain an additional suffix, e.g.
+        # "1.10.0.git.kitware.jobserver-1". To allow this trailing suffix,
+        # NinjaToolReq uses re.match instead of re.fullmatch.
+        m = re.match(r'([0-9]+)\.([0-9]+)\.([0-9]+)', version)
+        if m is None:
+            raise ValueError("{} has invalid version string format."
+                             .format(version))
+
+        return '.'.join(m.group(1, 2, 3))
+
+
+class EdalizeToolReq(ToolReq):
+    '''A specialised version extractor for Edalize'''
+
+    # The upstream versions of edalize and fusesoc don't use the standard
+    # versioning mechanism that can be discovered through importlib.metadata.
+    # Instead of using that, try to import the package. Note that an error will
+    # be propagated to top-level, which is what we want.
+    def get_version(self):
+        try:
+            return importlib.import_module(self.tool + '.version').version
+        except ModuleNotFoundError:
+            raise RuntimeError(f'Unable to import {self.tool} to check version')
 
 
 def dict_to_tool_req(path, tool, raw):
@@ -305,10 +350,12 @@ def dict_to_tool_req(path, tool, raw):
                      .format(where, ', '.join(raw.keys())))
 
     classes = {
-        'edalize': PyModuleToolReq,
+        'edalize': EdalizeToolReq,
         'vcs': VcsToolReq,
         'verible': VeribleToolReq,
-        'verilator': VerilatorToolReq
+        'verilator': VerilatorToolReq,
+        'vivado': VivadoToolReq,
+        'ninja': NinjaToolReq
     }
     cls = classes.get(tool, ToolReq)
 

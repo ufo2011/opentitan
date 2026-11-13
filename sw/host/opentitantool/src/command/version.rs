@@ -1,42 +1,44 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use regex::Regex;
-use serde_annotate::Annotate;
+use clap::Args;
 use std::any::Any;
-use std::collections::BTreeMap;
-use structopt::StructOpt;
 
-use opentitanlib::app::command::CommandDispatch;
 use opentitanlib::app::TransportWrapper;
+use opentitanlib::app::command::CommandDispatch;
 
-/// At compile time, the contents of `bazel-out/volatile-status.txt` is included, as if it was a
-/// string literal in this file.  Bazel will not recompile this rust_binary solely because
-/// `volatile-status.txt` has been updated, but any time this rust_binary is recompiled, it will
-/// include the newest version of `volatile-status.txt`.
-///
-/// At runtime, this string is parsed into key/value pairs, which are returned.  (It would have
-/// been desirable to perform the parsing at compile time as well.)
-pub fn get_volatile_status() -> BTreeMap<&'static str, &'static str> {
-    let volatile_status = include_str!("../../../../../bazel-out/volatile-status.txt");
-    let re = Regex::new(r"([A-Z_]+) ([^\n]+)\n").unwrap();
-    let mut properties: BTreeMap<&'static str, &'static str> = BTreeMap::new();
-    for cap in re.captures_iter(volatile_status) {
-        properties.insert(cap.get(1).unwrap().as_str(), cap.get(2).unwrap().as_str());
-    }
-    properties
-}
-
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub struct Version {}
+
 #[derive(Debug, serde::Serialize)]
 pub struct VersionResponse {
-    version: String,
-    revision: String,
-    clean: bool,
-    timestamp: i64,
+    pub version: Option<String>,
+    pub revision: Option<String>,
+    pub clean: Option<bool>,
+}
+
+fn parse_variable(content: &str) -> Option<String> {
+    // If stamping is disabled, the variable substition in stamp-env.txt
+    // will not happen and the content of the environment variable will be
+    // `{NAME_OF_VARIABLE}`. If we detect that this is the case, we return
+    // None, otherwise we return the content.
+    if content.starts_with('{') {
+        None
+    } else {
+        Some(content.to_string())
+    }
+}
+
+impl Default for VersionResponse {
+    fn default() -> Self {
+        VersionResponse {
+            version: parse_variable(std::env!("BUILD_GIT_VERSION")),
+            revision: parse_variable(std::env!("BUILD_SCM_REVISION")),
+            clean: parse_variable(std::env!("BUILD_SCM_STATUS")).map(|x| x == "clean"),
+        }
+    }
 }
 
 impl CommandDispatch for Version {
@@ -44,13 +46,7 @@ impl CommandDispatch for Version {
         &self,
         _context: &dyn Any,
         _transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
-        let properties = get_volatile_status();
-        Ok(Some(Box::new(VersionResponse {
-            version: properties.get("BUILD_GIT_VERSION").unwrap().to_string(),
-            revision: properties.get("BUILD_SCM_REVISION").unwrap().to_string(),
-            clean: *properties.get("BUILD_SCM_STATUS").unwrap() == "clean",
-            timestamp: properties.get("BUILD_TIMESTAMP").unwrap().parse::<i64>()?,
-        })))
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
+        Ok(Some(Box::<VersionResponse>::default()))
     }
 }

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -12,14 +12,6 @@
                 "{proj_root}/hw/rdc/tools/dvsim/common_rdc_cfg.hjson"]
 
   tool: meridianrdc
-
-  // Overrides
-  overrides: [
-    {
-      name: design_level
-      value: "top"
-    }
-  ]
 
   // Timing constraints for this module
   sdc_file: "{proj_root}/hw/top_earlgrey/syn/chip_earlgrey_asic.sdc"

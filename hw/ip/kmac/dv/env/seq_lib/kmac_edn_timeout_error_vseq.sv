@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,25 +18,26 @@ class kmac_edn_timeout_error_vseq extends kmac_app_vseq;
   }
 
   constraint kmac_err_type_c {
-    kmac_err_type dist {kmac_pkg::ErrWaitTimerExpired :/ 4, kmac_pkg::ErrNone :/ 1};
+    kmac_err_type dist {kmac_pkg::ErrWaitTimerExpired :/ 9, kmac_pkg::ErrNone :/ 1};
     kmac_err_type == kmac_pkg::ErrWaitTimerExpired -> entropy_fast_process == 0;
   }
 
   function void pre_randomize();
+    super.pre_randomize();
     this.disable_err_c.constraint_mode(0);
     this.en_app_c.constraint_mode(0);
   endfunction
 
   virtual task pre_start();
+    `DV_CHECK_FATAL(cfg.enable_full_kmac, "This sequence requires EnFullKmac == 1")
     super.pre_start();
     if (cfg.enable_masking) disable_asserts();
     cfg.en_scb = 0;
     check_keymgr_rsp_nonblocking();
+    kmac_err_type.rand_mode(0);
   endtask
 
   virtual function void disable_asserts();
-    $assertoff(0,
-      "tb.dut.gen_entropy.u_prim_sync_reqack_data.u_prim_sync_reqack.SyncReqAckAckNeedsReq");
     $assertoff(0, "tb.edn_if[0].ReqHighUntilAck_A");
     $assertoff(0, "tb.edn_if[0].AckAssertedOnlyWhenReqAsserted_A");
   endfunction
@@ -44,7 +45,7 @@ class kmac_edn_timeout_error_vseq extends kmac_app_vseq;
   virtual task post_start();
     super.post_start();
 
-    // TODO: enable scb and run normal sequence, then add this sequence to stress_all sequence.
+    // ICEBOX: enable scb and run normal sequence, then add this sequence to stress_all sequence.
     // cfg.en_scb = 1;
   endtask
 
@@ -64,11 +65,11 @@ class kmac_edn_timeout_error_vseq extends kmac_app_vseq;
   virtual task check_keymgr_rsp_nonblocking();
     fork begin
       while (cfg.en_scb == 0 && entropy_fetched == 0) begin
-        wait (cfg.m_kmac_app_agent_cfg[AppKeymgr].vif.kmac_data_rsp.done == 1);
+        wait (cfg.m_kmac_app_agent_cfg[AppKeymgr].vif.mon_cb.rsp_valid);
         if (cfg.enable_masking && entropy_mode == EntropyModeEdn) begin
-          `DV_CHECK_EQ(cfg.m_kmac_app_agent_cfg[AppKeymgr].vif.kmac_data_rsp.error, 1)
+          `DV_CHECK_EQ(cfg.m_kmac_app_agent_cfg[AppKeymgr].vif.mon_cb.rsp_error, 1)
         end
-        wait (cfg.m_kmac_app_agent_cfg[AppKeymgr].vif.kmac_data_rsp.done == 0);
+        wait (!cfg.m_kmac_app_agent_cfg[AppKeymgr].vif.mon_cb.rsp_valid);
       end
     end join_none
   endtask

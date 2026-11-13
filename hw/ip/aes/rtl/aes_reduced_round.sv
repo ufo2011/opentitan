@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,8 +40,8 @@ module aes_reduced_round import aes_pkg::*;
     .clk_i     ( clk_i             ),
     .rst_ni    ( rst_ni            ),
     .en_i      ( en_i              ),
-    .out_req_o ( out_req_o ),
-    .out_ack_i ( out_ack_i ),
+    .out_req_o ( out_req_o         ),
+    .out_ack_i ( out_ack_i         ),
     .op_i      ( op_i              ),
     .data_i    ( data_i            ),
     .mask_i    ( mask_i            ),

@@ -1,8 +1,9 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_hmac.h"
@@ -32,10 +33,10 @@ void boot_measurements_test(void) {
   const manifest_t *manifest = manifest_def_get();
   CHECK(manifest->usage_constraints.selector_bits == 0);
   const char *signed_region_start =
-      (const char *)manifest + sizeof(sigverify_rsa_buffer_t);
+      (const char *)manifest + offsetof(manifest_t, usage_constraints);
   const char *manifest_end = (const char *)manifest + sizeof(manifest_t);
   const char *image_end = (const char *)manifest + manifest->length;
-  size_t signed_region_size = image_end - signed_region_start;
+  ptrdiff_t signed_region_size = image_end - signed_region_start;
 
   CHECK_WORD_ALIGNED(manifest);
   CHECK_WORD_ALIGNED(signed_region_start);
@@ -51,19 +52,24 @@ void boot_measurements_test(void) {
                  .digest_endianness = kDifHmacEndiannessLittle,
                  .message_endianness = kDifHmacEndiannessLittle,
              }));
-  hmac_testutils_push_message(&hmac, signed_region_start, signed_region_size);
+  CHECK(signed_region_size >= 0 && signed_region_size <= SIZE_MAX,
+        "signed_region_size must fit in a size_t");
+  CHECK_STATUS_OK(hmac_testutils_push_message(&hmac, signed_region_start,
+                                              (size_t)signed_region_size));
   CHECK_DIF_OK(dif_hmac_process(&hmac));
   dif_hmac_digest_t act_digest;
-  hmac_testutils_finish_polled(&hmac, &act_digest);
+  CHECK_STATUS_OK(hmac_testutils_finish_polled(&hmac, &act_digest));
 
   CHECK_ARRAYS_EQ(boot_measurements.rom_ext.data, act_digest.digest,
                   ARRAYSIZE(act_digest.digest));
 }
 
 void sec_mmio_pos_test(void) {
+  // Sum of all expected `sec_mmio_check_values()` and
+  // `sec_mmio_check_counters()` in rom.c.
   enum {
     kRndOffset = 13,
-    kRomCheckValue = 6,
+    kRomCheckValue = 9,
   };
 
   sec_mmio_check_values(kRndOffset);
@@ -77,7 +83,7 @@ static volatile bool exception_observed = false;
 // in `ottf_exception_handler()`.
 extern const char kSecMmioNegTestReturn[];
 
-void ottf_exception_handler(void) {
+void ottf_exception_handler(uint32_t *exc_info) {
   CHECK(exception_expected == true);
   CHECK(exception_observed == false);
   exception_expected = false;

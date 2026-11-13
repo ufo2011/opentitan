@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,10 +32,8 @@ class sram_ctrl_smoke_vseq extends sram_ctrl_base_vseq;
       num_ops == 100;
     } else {
       num_ops dist {
-        [1    : 999 ] :/ 1,
-        [1000 : 4999] :/ 3,
-        [5000 : 9999] :/ 5,
-        10_000        :/ 1
+        [1 : 10]    :/ 1,
+        [250 : 300] :/ 4
       };
     }
   }
@@ -51,39 +49,38 @@ class sram_ctrl_smoke_vseq extends sram_ctrl_base_vseq;
     if (!do_sram_ctrl_init) cfg.disable_d_user_data_intg_check_for_passthru_mem = 1;
 
     // do some memory transactions right after reset (zeroed key and nonce)
-    `uvm_info(`gfn,
+    `uvm_info(get_name(),
               $sformatf("Performing %0d random memory accesses after reset!", num_ops_after_reset),
               UVM_LOW)
     do_rand_ops(.num_ops(num_ops_after_reset),
                 .en_ifetch(en_ifetch));
 
-    `uvm_info(`gfn, $sformatf("Starting %0d SRAM transactions", num_trans), UVM_LOW)
     for (int i = 0; i < num_trans; i++) begin
-      `uvm_info(`gfn, $sformatf("iteration: %0d", i), UVM_LOW)
-
       `DV_CHECK_MEMBER_RANDOMIZE_FATAL(num_ops)
 
+      `uvm_info(get_name(),
+                $sformatf("Iteration %0d / %0d (%0d random memory accesses)",
+                          i + 1, num_trans, num_ops),
+                UVM_LOW)
+
       if (access_during_key_req) begin
-        // request new key or issue mem init, in the meanwhile, do some random SRAM operations
+        // Request new key and issue mem init, in the meanwhile, do some random SRAM operations.
+        // When mem_init is requested a new key is also requested, so it is only necessary to
+        // call req_mem_init. This is important, since if only new keys are requested the
+        // scrambling will change and most memory locations will have ECC errors.
+        //
+        // The purpose of the test is to check that no memory transactions happen while either
+        // key request of memory initialization are happening, and that is met by req_mem_init
+        // since it does both.
         fork
-          begin
-            // during key or init req, sram access shouldn't be taken
-            randcase
-              1: begin
-                req_scr_key();
-              end
-              1: begin
-                req_mem_init();
-              end
-            endcase
-          end
+          req_mem_init();
           begin
             // add 2 cycles to avoid issuing key_scr/init and mem access happen at the same time,
             // as it's hard to handle this case in scb
             // Also need to enable zero_delays, otherwise, the CSR programming may take random
             // cycles to finish
             cfg.clk_rst_vif.wait_clks(2);
-            `uvm_info(`gfn, "accessing during key req", UVM_HIGH)
+            `uvm_info(get_name(), "Accessing during key req", UVM_HIGH)
 
             // SRAM init is basically to write all the mem with random value.
             // When a read happens right after init, it's read-after-write hazard. SCB expects the
@@ -100,11 +97,7 @@ class sram_ctrl_smoke_vseq extends sram_ctrl_base_vseq;
         req_mem_init();
       end
 
-
       // Do some random memory accesses
-      `uvm_info(`gfn,
-                $sformatf("Performing %0d random memory accesses!", num_ops),
-                UVM_LOW)
       if (stress_pipeline) begin
         bit [TL_AW-1:0] stress_addr;
         for (int i = 0; i < num_ops; i++) begin

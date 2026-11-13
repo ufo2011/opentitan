@@ -1,12 +1,12 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 #ifndef OPENTITAN_SW_DEVICE_LIB_CRYPTO_DRIVERS_AES_H_
 #define OPENTITAN_SW_DEVICE_LIB_CRYPTO_DRIVERS_AES_H_
 
 #include "sw/device/lib/base/hardened.h"
-#include "sw/device/lib/base/hardened_status.h"
 #include "sw/device/lib/base/macros.h"
+#include "sw/device/lib/base/status.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,27 +29,18 @@ typedef struct aes_block {
 } aes_block_t;
 
 /**
- * A cipher mode supported natively by the AES hardware.
+ * A cipher mode supported by the AES hardware.
+ *
+ * Values of this enum must match the block cipher mode enum from the top-level
+ * API.
  */
 typedef enum aes_cipher_mode {
-  kAesCipherModeEcb = 1,
-  kAesCipherModeCbc = 2,
-  kAesCipherModeCfb = 4,
-  kAesCipherModeOfb = 8,
-  kAesCipherModeCtr = 16,
+  kAesCipherModeEcb = 0x533,
+  kAesCipherModeCbc = 0x45d,
+  kAesCipherModeCfb = 0xcd2,
+  kAesCipherModeOfb = 0x39a,
+  kAesCipherModeCtr = 0xd2c,
 } aes_cipher_mode_t;
-
-/**
- * A key length supported by the AES hardware.
- *
- * The encoded values are used as identifiers to configure the hardware and
- * don't represent the key length in any specific format.
- */
-typedef enum aes_key_len {
-  kAesKeyLen128 = 1,
-  kAesKeyLen192 = 2,
-  kAesKeyLen256 = 4,
-} aes_key_len_t;
 
 /**
  * Represents an AES key.
@@ -69,9 +60,16 @@ typedef struct aes_key {
   hardened_bool_t sideload;
 
   /**
-   * The length of the key.
+   * Determines which keymgr DPE slot (see `slot_src_sel` in
+   * `keymgr_dpe_diversification_t`) is used as the parent for key generation.
+   * Only applicable if `sideload` is `kHardenedBoolTrue`.
    */
-  aes_key_len_t key_len;
+  uint32_t keymgr_dpe_slot_idx;
+
+  /**
+   * The length of the key (in 32-bit words).
+   */
+  size_t key_len;
 
   /**
    * The key, split into two shares. The actual key will be formed by
@@ -82,7 +80,28 @@ typedef struct aes_key {
    * of sufficient length.
    */
   const uint32_t *key_shares[2];
+
+  /**
+   * The checksum of the key structure.
+   */
+  uint32_t checksum;
 } aes_key_t;
+
+/**
+ * Verify the ctrl register value for the given parameters.
+ *
+ * @param key AES key.
+ * @param encrypt True for encryption, false for decryption.
+ * @return result, OK or error.
+ */
+status_t aes_verify_ctrl_reg(aes_key_t key, hardened_bool_t encrypt);
+
+/**
+ * Verify the ctrl aux register value whether it is at the reset state.
+ *
+ * @return result, OK or error.
+ */
+status_t aes_verify_ctrl_aux_reg(void);
 
 /**
  * Prepares the AES hardware to perform an encryption operation.
@@ -129,7 +148,7 @@ status_t aes_decrypt_begin(const aes_key_t key, const aes_block_t *iv);
  * 1. The contents of `src` are fed into the hardware (unless it is null, in
  *    which case this step is skipped).
  * 2. The contents of `dest` are filled with the hardware's output (again,
- *    unless it is null). `dest` may overlap with `src`.
+ *    unless it is null).
  *
  * Operation of the driver will look something like this:
  * ```
@@ -139,7 +158,7 @@ status_t aes_decrypt_begin(const aes_key_t key, const aes_block_t *iv);
  * // ...
  * aes_update(output(N-1), inputN);
  * aes_update(outputN, NULL);
- * aes_end();
+ * aes_end(...);
  * ```
  *
  * @param dest The output block.
@@ -152,10 +171,44 @@ status_t aes_update(aes_block_t *dest, const aes_block_t *src);
 /**
  * Completes an AES session by clearing control settings and key material.
  *
+ * If `iv` is non-null, reads back the final IV block and returns it to the
+ * caller.
+ *
+ * @param[out] iv Buffer for the final IV (may be null).
  * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
-status_t aes_end(void);
+status_t aes_end(aes_block_t *iv);
+
+/**
+ * Clears the AES hardware data registers and triggers.
+ *
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+status_t aes_clear(void);
+
+/**
+ * Compute the checksum of an AES key.
+ *
+ * Call this routine after creating or modifying the aes key structure.
+ *
+ * @param key AES key.
+ * @returns Checksum value.
+ */
+uint32_t aes_key_integrity_checksum(const aes_key_t *key);
+
+/**
+ * Perform an integrity check on the AES key.
+ *
+ * Returns `kHardenedBoolTrue` if the check passed and `kHardenedBoolFalse`
+ * otherwise.
+ *
+ * @param key AES key.
+ * @returns Whether the integrity check passed.
+ */
+OT_WARN_UNUSED_RESULT
+hardened_bool_t aes_key_integrity_checksum_check(const aes_key_t *key);
 
 #ifdef __cplusplus
 }

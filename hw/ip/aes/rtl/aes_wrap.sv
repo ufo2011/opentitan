@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -32,14 +32,13 @@ module aes_wrap
   localparam logic SIDELOAD = 1'b1;
   localparam aes_mode_e AES_MODE = AES_ECB;
 
-  import aes_pkg::*;
   import aes_reg_pkg::*;
   import tlul_pkg::*;
 
   logic unused_idle;
   logic [31:0] unused_wdata;
   logic edn_req;
-  keymgr_pkg::hw_key_req_t keymgr_key;
+  keymgr_dpe_pkg::hw_key_req_t keymgr_key;
   tl_h2d_t h2d, h2d_intg; // req
   tl_d2h_t d2h; // rsp
   prim_alert_pkg::alert_rx_t [NumAlerts-1:0] alert_rx;

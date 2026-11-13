@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -71,6 +71,15 @@
 //  ASSERT_FINAL: Assertion in final block. Can be used for things like queues being empty at end of
 //                sim, all credits returned at end of sim, state machines in idle at end of sim.
 //
+//  ASSERT_AT_RESET: Assertion just before reset. Can be used to check sum-like properties that get
+//                   cleared at reset.
+//                   Note that unless your simulation ends with a reset, the property does not get
+//                   checked at end of simulation; use ASSERT_AT_RESET_AND_FINAL if the property
+//                   should also get checked at end of simulation.
+//
+//  ASSERT_AT_RESET_AND_FINAL: Assertion just before reset and in final block. Can be used to check
+//                             sum-like properties before every reset and at the end of simulation.
+//
 //  ASSERT:       Assert a concurrent property directly. It can be called as a module (or
 //                interface) body item.
 //
@@ -118,8 +127,10 @@
 // Assert that signal has a known value (each bit is either '0' or '1') after reset if enable is
 // set.  It can be called as a module (or interface) body item.
 `define ASSERT_KNOWN_IF(__name, __sig, __enable, __clk = `ASSERT_DEFAULT_CLK, __rst = `ASSERT_DEFAULT_RST) \
+`ifndef FPV_ON                                                                                             \
   `ASSERT_KNOWN(__name``KnownEnable, __enable, __clk, __rst)                                               \
-  `ASSERT_IF(__name, !$isunknown(__sig), __enable, __clk, __rst)
+  `ASSERT_IF(__name, !$isunknown(__sig), __enable, __clk, __rst)                                           \
+`endif
 
 //////////////////////////////////
 // For formal verification only //
@@ -168,9 +179,9 @@
      property __name``_p;                                                                                        \
        __type initial_state;                                                                                     \
        (!$stable(__state) & __name``_cond, initial_state = $past(__state)) |->                                   \
-           (__state != initial_state) until (__rst == 1'b1);                                                     \
+           (__state != initial_state) until !(__name``_cond);                                                    \
      endproperty                                                                                                 \
-   `ASSERT(__name, __name``_p, __clk, __rst)                                                                     \
+   `ASSERT(__name, __name``_p, __clk, 0)                                                                         \
   `endif
 
 `include "prim_assert_sec_cm.svh"

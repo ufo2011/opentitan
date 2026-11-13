@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@ class adc_ctrl_stress_all_vseq extends adc_ctrl_base_vseq;
     // Disable read of intr_state at the end of the sequence
     do_clear_all_interrupts = 0;
     super.pre_start();
+    cfg.fast_mode = 1;
   endtask
 
   task body();
@@ -56,7 +57,9 @@ class adc_ctrl_stress_all_vseq extends adc_ctrl_base_vseq;
       `uvm_info(`gfn, $sformatf("body: executing sequence %s", adc_ctrl_vseq.get_type_name()),
                 UVM_LOW)
       adc_ctrl_vseq.start(p_sequencer);
-
+      `uvm_info(`gfn, $sformatf("body: end sequence %s", adc_ctrl_vseq.get_type_name()),
+                UVM_LOW)
     end
   endtask : body
+
 endclass

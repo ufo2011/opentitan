@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -10,8 +10,9 @@
 
 module aes_cipher_control import aes_pkg::*;
 #(
-  parameter bit         SecMasking  = 0,
-  parameter sbox_impl_e SecSBoxImpl = SBoxImplDom
+  parameter bit         CiphOpFwdOnly = 0,
+  parameter bit         SecMasking    = 0,
+  parameter sbox_impl_e SecSBoxImpl   = SBoxImplDom
 ) (
   input  logic                    clk_i,
   input  logic                    rst_ni,
@@ -369,11 +370,11 @@ module aes_cipher_control import aes_pkg::*;
   end
 
   // Use separate signal for key expand operation, forward round.
-  assign key_expand_op_o    = (dec_key_gen_d == SP2V_HIGH ||
-                               dec_key_gen_q == SP2V_HIGH) ? CIPH_FWD : op_i;
+  assign key_expand_op_o    = (dec_key_gen_d == SP2V_HIGH  ||
+                               dec_key_gen_q == SP2V_HIGH) || CiphOpFwdOnly ? CIPH_FWD : op_i;
   assign key_expand_round_o = rnd_ctr;
 
-  // Let the main controller know whate we are doing.
+  // Let the main controller know what we are doing.
   assign crypt_o          = crypt_q;
   assign dec_key_gen_o    = dec_key_gen_q;
   assign prng_reseed_o    = prng_reseed_q;

@@ -1,9 +1,9 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 // basic error_intr test vseq
-// - start sending transaction and concurrently check the occurance of error irqs
+// - start sending transaction and concurrently check the occurrence of error irqs
 //   such as sda_interference, scl_interference, sda_unstable irqs
 // - do on-the-fly reset dut and dv if error irqs are asserted
 // - continue sending transactions and verify dut works as normal
@@ -28,13 +28,12 @@ class i2c_host_error_intr_vseq extends i2c_rx_tx_vseq;
 
   virtual task body();
     `uvm_info(`gfn, "\n--> start of i2c_host_error_intr_vseq", UVM_DEBUG)
-    $assertoff(0, "tb.dut.i2c_core.u_i2c_fsm.SclInputGlitch_A");
-    initialization(.mode(Host));
+    initialization();
     for (int i = 1; i <= num_runs; i++) begin
       `uvm_info(`gfn, $sformatf("\n  run simulation %0d/%0d", i, num_runs), UVM_DEBUG)
       fork
         begin
-          // issue trans. and check the occourances of error irqs
+          // issue trans. and check the occurrences of error irqs
           fork
             begin
               process_error_interrupts();
@@ -56,7 +55,7 @@ class i2c_host_error_intr_vseq extends i2c_rx_tx_vseq;
           #1ps;
           if (do_reset) begin
             // re-initialize dut after on-the-fly reset
-            initialization(.mode(Host));
+            initialization();
             do_reset = 1'b0;
           end
         end

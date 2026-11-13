@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,6 +28,10 @@ impl TpmStatus {
 
     pub fn raw_value(&self) -> u32 {
         self.0
+    }
+
+    pub fn is_ready(&self) -> bool {
+        (self.0 >> 6) & 1 == 1
     }
 
     pub fn from_bytes(val: [u8; 4]) -> Self {

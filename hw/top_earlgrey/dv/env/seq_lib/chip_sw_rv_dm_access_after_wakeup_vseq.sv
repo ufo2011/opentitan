@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,8 @@ class chip_sw_rv_dm_access_after_wakeup_vseq extends chip_sw_base_vseq;
     // Set up JTAG RV_DM TAP.
     cfg.chip_vif.tap_straps_if.drive(JtagTapRvDm);
     cfg.m_jtag_riscv_agent_cfg.is_rv_dm = 1;
+    // Wait a few clocks for the strap change to take effect before driving the JTAG interface
+    cfg.clk_rst_vif.wait_clks(5);
 
     // Attempt to activate RV_DM via JTAG.
     csr_wr(.ptr(cfg.jtag_dmi_ral.dmcontrol.dmactive), .value(1), .blocking(1), .predict(1));
@@ -48,7 +50,7 @@ class chip_sw_rv_dm_access_after_wakeup_vseq extends chip_sw_base_vseq;
     // Allow the software to continue execution.
     software_barrier[0] = 1;
     `uvm_info(`gfn, "SoftwareBarrier = 1", UVM_LOW)
-    sw_symbol_backdoor_overwrite("kSoftwareBarrier", software_barrier);
+    sw_symbol_backdoor_overwrite("kSoftwareBarrierDv", software_barrier);
 
     // Wait for the software to fall asleep.
     `DV_SPINWAIT(wait(cfg.sw_logger_vif.printed_log == "Entering normal sleep.");,
@@ -76,7 +78,7 @@ class chip_sw_rv_dm_access_after_wakeup_vseq extends chip_sw_base_vseq;
     // Allow the software to continue execution.
     software_barrier[0] = 2;
     `uvm_info(`gfn, "SoftwareBarrier = 2", UVM_LOW)
-    sw_symbol_backdoor_overwrite("kSoftwareBarrier", software_barrier);
+    sw_symbol_backdoor_overwrite("kSoftwareBarrierDv", software_barrier);
 
 
     // Wait for the software to fall asleep.
@@ -96,6 +98,9 @@ class chip_sw_rv_dm_access_after_wakeup_vseq extends chip_sw_base_vseq;
 
     // We must reset the agent side also to stay synchronized with the design
     cfg.m_jtag_riscv_agent_cfg.m_jtag_agent_cfg.vif.do_trst_n(2);
+    // Wait for JTAG agent to come out of reset
+    cfg.clk_rst_vif.wait_clks(5);
+    // Reactivate DMI
     activate_jtag_dmi();
     exp_data = $urandom();
     csr_wr(
@@ -111,7 +116,7 @@ class chip_sw_rv_dm_access_after_wakeup_vseq extends chip_sw_base_vseq;
     // Allow the software to continue execution.
     software_barrier[0] = 3;
     `uvm_info(`gfn, "SoftwareBarrier = 3", UVM_LOW)
-    sw_symbol_backdoor_overwrite("kSoftwareBarrier", software_barrier);
+    sw_symbol_backdoor_overwrite("kSoftwareBarrierDv", software_barrier);
 
   endtask : body
 

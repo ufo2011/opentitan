@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -24,7 +24,6 @@
   ral_spec: "{proj_root}/hw/ip/sysrst_ctrl/data/sysrst_ctrl.hjson"
 
   // Import additional common sim cfg files.
-  // TODO: remove imported cfgs that do not apply.
   import_cfgs: [// Project wide common sim cfg file
                 "{proj_root}/hw/dv/tools/dvsim/common_sim_cfg.hjson",
                 // Common CIP test lists
@@ -39,7 +38,10 @@
   sim_tops: ["sysrst_ctrl_bind", "sysrst_ctrl_cov_bind", "sec_cm_prim_onehot_check_bind"]
 
   // Default iterations for all tests - each test entry can override this.
-  reseed: 50
+  reseed: 10
+
+  // Enable cdc instrumentation.
+  run_opts: ["+cdc_instrumentation_enabled=1"]
 
   // Add exclusion files.
   vcs_cov_excl_files: ["{proj_root}/hw/ip/sysrst_ctrl/dv/cov/sysrst_ctrl_cov_unr_excl.el"]
@@ -90,21 +92,36 @@
     {
       name: sysrst_ctrl_auto_blk_key_output
       uvm_test_seq: sysrst_ctrl_auto_blk_key_output_vseq
+      reseed: 25
     }
     {
       name: sysrst_ctrl_ultra_low_pwr
       uvm_test_seq: sysrst_ctrl_ultra_low_pwr_vseq
       run_opts: ["+test_timeout_ns=10_000_000_000"]
+      reseed: 25
     }
     {
       name: sysrst_ctrl_combo_detect
       uvm_test_seq: sysrst_ctrl_combo_detect_vseq
       run_opts: ["+test_timeout_ns=10_000_000_000"]
+      reseed: 25
     }
     {
       name: sysrst_ctrl_edge_detect
       uvm_test_seq: sysrst_ctrl_edge_detect_vseq
       run_opts: ["+test_timeout_ns=10_000_000_000"]
+      reseed: 50
+    }
+    {
+      name: sysrst_ctrl_combo_detect_with_pre_cond
+      uvm_test_seq: sysrst_ctrl_combo_detect_with_pre_cond_vseq
+      reseed: 100
+    }
+    {
+      name: sysrst_ctrl_feature_disable
+      uvm_test_seq: sysrst_ctrl_feature_disable_vseq
+      // This is a directed test with few random values
+      reseed: 2
     }
   ]
 

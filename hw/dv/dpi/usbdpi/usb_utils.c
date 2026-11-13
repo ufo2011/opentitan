@@ -1,10 +1,11 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "usb_utils.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 static const char *pid_names[] = {
     "Rsvd",     //         0000b
@@ -64,7 +65,7 @@ void dump_bytes(FILE *out, const char *prefix, const uint8_t *data, size_t n,
     // Printable ASCII characters
     for (unsigned idx = 0u; idx < chunk; idx++) {
       char ch = row[idx];
-      *dp++ = (ch < ' ' || ch >= 0x80u) ? '.' : ch;
+      *dp++ = (ch < ' ' || ch >= 0x7f) ? '.' : ch;
     }
     *dp = '\0';
     fprintf(out, "%s%s\n", prefix, buf);

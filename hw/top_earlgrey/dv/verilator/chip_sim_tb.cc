@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,34 +18,33 @@ int main(int argc, char **argv) {
   simctrl.SetTop(&top, &top.clk_i, &top.rst_ni,
                  VerilatorSimCtrlFlags::ResetPolarityNegative);
 
-  std::string top_scope("TOP.chip_sim_tb.u_dut.top_earlgrey");
-  std::string ram1p_adv_scope(
-      "u_prim_ram_1p_adv.u_mem."
-      "gen_generic.u_impl_generic");
+  // Suffix this (_pd_main) once paths to IPs in the Aon power domain are needed
+  std::string top_scope("TOP.chip_sim_tb.u_dut.top_earlgrey.earlgrey_pd_main");
+  std::string ram1p_adv_scope("u_prim_ram_1p_adv.gen_ram_inst[0].u_mem");
 
-  MemArea rom(top_scope + (".u_rom_ctrl.gen_rom_scramble_enabled.u_rom.u_rom."
-                           "u_prim_rom.gen_generic.u_impl_generic"),
-              0x4000 / 4, 4);
+  MemArea rom0(top_scope + (".u_rom_ctrl.gen_rom_scramble_enabled.u_rom.u_rom."
+                            "u_prim_rom"),
+               0x30000 / 4, 4);
   MemArea ram(top_scope + ".u_ram1p_ram_main." + ram1p_adv_scope, 0x20000 / 4,
               4);
-  // Only handle the lower bank of flash for now.
-  MemArea flash(top_scope +
-                    ".u_flash_ctrl.u_eflash.u_flash.gen_generic.u_impl_generic."
-                    "gen_prim_flash_banks[0].u_prim_flash_bank.u_mem."
-                    "gen_generic.u_impl_generic",
-                0x80000 / 8, 8);
-  // Start with the flash region erased. Future loads can overwrite.
-  std::vector<uint8_t> all_ones(flash.GetSizeBytes());
-  std::fill(all_ones.begin(), all_ones.end(), 0xffu);
-  flash.Write(/*word_offset=*/0, all_ones);
+  // u_rram_macro.u_data_array is the open-source rram_macro's own hierarchy.
+  // Verilator builds never use a vendor rram_macro, so unlike
+  // RRAM_DATA_MEM_PATH/RRAM_INFO_MEM_PATH in chip_hier_macros.svh, this path
+  // doesn't need to resolve for one too.
+  MemArea rram(top_scope + ".u_rram_macro.u_data_array", 0x200000 / 16, 16);
 
-  MemArea otp(top_scope + ".u_otp_ctrl.u_otp.gen_generic.u_impl_generic." +
-                  ram1p_adv_scope,
-              0x4000 / 4, 4);
+  std::vector<uint8_t> all_zeros(rram.GetSizeBytes());
+  std::fill(all_zeros.begin(), all_zeros.end(), 0x00u);
+  rram.Write(/*word_offset=*/0, all_zeros);
 
-  memutil.RegisterMemoryArea("rom", 0x8000, &rom);
+  // OTP occupies the last pages of the RRAM data array.
+  // The OTP vmem file's own @addr fields are already absolute RRAM word
+  // addresses (see gen-rram-img.py --out-otp-vmem).
+  MemArea otp(top_scope + ".u_rram_macro.u_data_array", 0x200000 / 16, 16);
+
+  memutil.RegisterMemoryArea("rom0", 0x40000, &rom0);
   memutil.RegisterMemoryArea("ram", 0x10000000u, &ram);
-  memutil.RegisterMemoryArea("flash", 0x20000000u, &flash);
+  memutil.RegisterMemoryArea("rram", 0x30000000u, &rram);
   memutil.RegisterMemoryArea("otp", 0x40000000u /* (bogus LMA) */, &otp);
   simctrl.RegisterExtension(&memutil);
 

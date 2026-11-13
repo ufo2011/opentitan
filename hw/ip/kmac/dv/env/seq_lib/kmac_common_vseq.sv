@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,11 +17,9 @@ class kmac_common_vseq extends kmac_base_vseq;
 
     if (common_seq_type inside {"shadow_reg_errors", "shadow_reg_errors_with_csr_rw"}) begin
       csr_excl_item csr_excl = ral.get_excl_item();
-      // Shadow storage fatal error might cause req to drop without ack.
-      $assertoff(0,
-      "tb.dut.gen_entropy.u_prim_sync_reqack_data.u_prim_sync_reqack.SyncReqAckHoldReq");
-      $assertoff(0,
-      "tb.dut.gen_entropy.u_prim_sync_reqack_data.u_prim_sync_reqack.SyncReqAckAckNeedsReq");
+
+      // When masking is enabled, shadow storage fatal error might cause req to drop without ack.
+      if (cfg.disable_reqack_assertions_vif != null) cfg.disable_reqack_assertions_vif.drive(1);
       $assertoff(0, "tb.edn_if[0].ReqHighUntilAck_A");
       $assertoff(0, "tb.edn_if[0].AckAssertedOnlyWhenReqAsserted_A");
     end
@@ -29,6 +27,10 @@ class kmac_common_vseq extends kmac_base_vseq;
 
   virtual task body();
     run_common_vseq_wrapper(num_trans);
+
+    // If masking is enabled, re-enable any assertions that disable_reqack_assertions_vif is
+    // disabling. This will have no effect if they were not disabled.
+    if (cfg.disable_reqack_assertions_vif != null) cfg.disable_reqack_assertions_vif.drive(0);
   endtask : body
 
   virtual function void predict_shadow_reg_status(bit predict_update_err  = 0,
@@ -43,23 +45,6 @@ class kmac_common_vseq extends kmac_base_vseq;
       ral.cfg_regwen.en.set_lockable_flds_access(.lock(1));
     end
   endfunction
-
-  // cfg_shadowed register field err_process will clear shadow reg update error.
-  virtual task shadow_reg_wr(dv_base_reg    csr,
-                             uvm_reg_data_t wdata,
-                             bit            en_shadow_wr = 1,
-                             bit            predict = 1);
-    super.shadow_reg_wr(csr, wdata, en_shadow_wr, predict);
-    if (csr.get_name() == "cfg_shadowed") begin
-      // If `cfg_shadowed` register is written successfully, then check if update error status
-      // will be cleared by `KmacErrProcessed` field.
-      if (csr.is_staged() == 0 &&
-          csr.get_shadow_update_err() == 0 &&
-          csr.get_shadow_storage_err() == 0) begin
-        if (wdata[KmacErrProcessed]) clear_update_err_status();
-      end
-    end
-  endtask
 
   virtual task check_tl_intg_error_response();
     // For tl integrity fatal error, the kmac `cfg_regwen` register will be set to 0 internally to
@@ -91,4 +76,45 @@ class kmac_common_vseq extends kmac_base_vseq;
     end
   endfunction: sec_cm_fi_ctrl_svas
 
+  virtual function void set_kmac_csr_assert_en(bit enable);
+    if (!enable) begin
+      $assertoff(0, "tb.dut.kmac_csr_assert.intr_enable_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.entropy_period_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.prefix_0_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.prefix_1_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.prefix_2_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.prefix_3_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.prefix_4_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.prefix_5_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.prefix_6_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.prefix_7_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.prefix_8_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.prefix_9_rd_A");
+      $assertoff(0, "tb.dut.kmac_csr_assert.prefix_10_rd_A");
+    end else begin
+      $asserton(0, "tb.dut.kmac_csr_assert.intr_enable_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.entropy_period_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.prefix_0_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.prefix_1_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.prefix_2_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.prefix_3_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.prefix_4_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.prefix_5_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.prefix_6_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.prefix_7_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.prefix_8_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.prefix_9_rd_A");
+      $asserton(0, "tb.dut.kmac_csr_assert.prefix_10_rd_A");
+    end
+  endfunction : set_kmac_csr_assert_en
+
+  virtual function void shadow_reg_err_ctrl_svas(bit enable, string path = "*");
+    set_kmac_csr_assert_en(enable);
+    super.shadow_reg_err_ctrl_svas(enable, path);
+  endfunction
+
+  virtual protected function void set_tl_assert_en(bit enable, string path = "*");
+    set_kmac_csr_assert_en(enable);
+    super.set_tl_assert_en(enable, path);
+  endfunction
 endclass

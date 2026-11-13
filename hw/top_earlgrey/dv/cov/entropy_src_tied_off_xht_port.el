@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //==================================================
@@ -9,7 +9,7 @@
 // ExclMode: default
 //==================================================
 CHECKSUM: "1444016650 3016063865"
-INSTANCE: tb.dut.top_earlgrey.u_entropy_src
+INSTANCE: tb.dut.top_earlgrey.earlgrey_pd_main.u_entropy_src
 ANNOTATION: "[UNR] Tied off / unconnected port."
 Toggle entropy_src_xht_i.test_cnt_hi "logic entropy_src_xht_i.test_cnt_hi[15:0]"
 ANNOTATION: "[UNR] Tied off / unconnected port."

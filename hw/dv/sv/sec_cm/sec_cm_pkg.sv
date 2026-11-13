@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,14 +11,12 @@ package sec_cm_pkg;
   `include "uvm_macros.svh"
   `include "dv_macros.svh"
 
-  // package variables
-  string msg_id = "sec_cm_pkg";
-
   typedef enum int {
     SecCmPrimCount,
     SecCmPrimSparseFsmFlop,
     SecCmPrimDoubleLfsr,
-    SecCmPrimOnehot
+    SecCmPrimOnehot,
+    SecCmSingletonFifo
   } sec_cm_type_e;
 
   `include "sec_cm_base_if_proxy.sv"
@@ -42,22 +40,21 @@ package sec_cm_pkg;
       proxies = sec_cm_pkg::sec_cm_if_proxy_q.find_first() with (item.path == path);
     end
     if (proxies.size()) begin
-      `uvm_info(msg_id, $sformatf(
-                "find_sec_cm_if_proxy: found proxy for path %s: type = %0d, full path = %0s",
-                path,
-                proxies[0].sec_cm_type,
-                proxies[0].path
-                ), UVM_MEDIUM)
+      `uvm_info($sformatf("%m"),
+                $sformatf("found proxy for path %s: type = %0d, full path = %0s",
+                          path, proxies[0].sec_cm_type, proxies[0].path),
+                UVM_MEDIUM)
       return proxies[0];
-    end else `uvm_fatal(msg_id, $sformatf("find_sec_cm_if_proxy: no proxy with path %s", path))
+    end else `uvm_fatal($sformatf("%m"), $sformatf("no proxy with path %s", path))
     return null;
   endfunction
 
   function automatic void list_if_proxies(uvm_verbosity verbosity = UVM_MEDIUM);
-    `uvm_info(msg_id, "The sec_cm proxies:", verbosity)
+    `uvm_info($sformatf("%m"), "The sec_cm proxies:", verbosity)
     foreach (sec_cm_if_proxy_q[i]) begin
-      `uvm_info(msg_id, $sformatf(
-                "Path %0s, type %d", sec_cm_if_proxy_q[i].path, sec_cm_if_proxy_q[i].sec_cm_type),
+      `uvm_info($sformatf("%m"),
+                $sformatf("Path %0s, type %d",
+                          sec_cm_if_proxy_q[i].path, sec_cm_if_proxy_q[i].sec_cm_type),
                 verbosity)
     end
   endfunction

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,15 +10,14 @@ class entropy_src_xht_device_driver extends dv_base_driver #(
   `uvm_component_utils(entropy_src_xht_device_driver)
   `uvm_component_new
 
-  virtual task reset_signals();
-    forever begin
-      @(negedge cfg.vif.rst_n);
-      `uvm_info(`gfn, "Driver is under reset", UVM_DEBUG)
-      cfg.vif.xht_cb.rsp <= ENTROPY_SRC_XHT_RSP_DEFAULT;
-      @(posedge cfg.vif.rst_n);
-      `uvm_info(`gfn, "Driver is out of reset", UVM_DEBUG)
-    end
+  task on_enter_reset();
+    `uvm_info(`gfn, "Driver is under reset", UVM_DEBUG)
+    cfg.vif.xht_cb.rsp <= ENTROPY_SRC_XHT_META_RSP_DEFAULT;
   endtask
+
+  function void on_leave_reset();
+    `uvm_info(`gfn, "Driver is out of reset", UVM_DEBUG)
+  endfunction
 
   virtual task get_and_drive();
     forever begin

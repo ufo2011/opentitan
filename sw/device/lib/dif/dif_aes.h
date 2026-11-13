@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ extern "C" {
 /**
  *
  * @file
- * @brief <a href="/hw/ip/aes/doc/">AES</a> Device Interface Functions
+ * @brief <a href="/book/hw/ip/aes/">AES</a> Device Interface Functions
  *
  * This API assumes transactional nature of work, where the peripheral is
  * configured once per message (data consisting of 1..N 128-bit blocks), and
@@ -43,7 +43,7 @@ extern "C" {
  * AES registers must be securely cleared, by calling `dif_aes_end`.
  *
  * Please see the following documentation for further information:
- * https://docs.opentitan.org/hw/ip/aes/doc/
+ * https://opentitan.org/book/hw/ip/aes/
  * https://csrc.nist.gov/csrc/media/publications/fips/197/final/documents/fips-197.pdf
  * https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-38a.pdf
  */
@@ -168,6 +168,11 @@ typedef enum dif_aes_mode {
    * written with any data (preferably random).
    */
   kDifAesModeCtr = (1 << 4),
+
+  /**
+   * The Galois/Counter Mode.
+   */
+  kDifAesModeGcm = (1 << 5),
 } dif_aes_mode_t;
 
 /**
@@ -253,7 +258,7 @@ typedef struct dif_aes_transaction {
   dif_aes_key_provider_t key_provider;
   dif_aes_mask_reseeding_t mask_reseeding;
   /**
-   * If true the internal pseudo-random number generators used for clearing and
+   * If true, the internal pseudo-random number generators used for clearing and
    * masking will be reseeded every time the key changes.
    */
   bool reseed_on_key_change;
@@ -266,8 +271,15 @@ typedef struct dif_aes_transaction {
    */
   bool force_masks;
   /**
-   * If true `reseed_on_key_change` and `force_masks` will be locked until the
-   * device is reset.
+   * If true, the module will continuously run encryption/decryption when
+   * configured in manual mode.
+   *
+   * NOTE: This should only be used for power virus testing.
+   */
+  bool keep_start_trigger_high;
+  /**
+   * If true, `reseed_on_key_change`, `force_masks` and
+   * `keep_start_trigger_high` will be locked until the device is reset.
    */
   bool ctrl_aux_lock;
 } dif_aes_transaction_t;
@@ -351,7 +363,30 @@ OT_WARN_UNUSED_RESULT
 dif_result_t dif_aes_read_output(const dif_aes_t *aes, dif_aes_data_t *data);
 
 /**
- * Process a stream of data containing the plain text and outbut a stream of
+ * Puts the AES GCM into the provided phase.
+ *
+ * @param aes AES state data.
+ * @param phase The AES GCM phase we want to enter.
+ * @param num_valid_bytes The number of valid bytes for the AES block.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_aes_set_gcm_phase(const dif_aes_t *aes, uint32_t phase,
+                                   size_t num_valid_bytes);
+
+/**
+ * Loads len(aad) || len(ptx) into the AES-GCM.
+ *
+ * @param aes AES state data.
+ * @param len_ptx Number of plaintext bits.
+ * @param len_aad Number of AAD bits.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_aes_load_gcm_tag_len(const dif_aes_t *aes, uint64_t len_ptx,
+                                      uint64_t len_aad);
+
+/**
+ * Process a stream of data containing the plain text and output a stream of
  * data with the cipher text.
  *
  * This function should be used when performance is desired. It requires the
@@ -362,7 +397,7 @@ dif_result_t dif_aes_read_output(const dif_aes_t *aes, dif_aes_data_t *data);
  *
  * @param aes AES handle.
  * @param plain_text AES Input Data.
- * @param cipher_text AES Input Data.
+ * @param cipher_text AES Output Data.
  * @param block_amount The amount of blocks to be encrypted.
  * @return The result of the operation.
  */
@@ -469,6 +504,21 @@ dif_result_t dif_aes_get_status(const dif_aes_t *aes, dif_aes_status_t flag,
  */
 OT_WARN_UNUSED_RESULT
 dif_result_t dif_aes_read_iv(const dif_aes_t *aes, dif_aes_iv_t *iv);
+
+/**
+ * Loads AES IV.
+ *
+ * This function will load the provided IV into the AES.
+ *
+ * The peripheral must be idle and will return `kDifUnavailable` if this
+ * condition is not met.
+ *
+ * @param aes AES state data.
+ * @param data AES Input Data.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_aes_load_iv(const dif_aes_t *aes, const dif_aes_iv_t iv);
 
 #ifdef __cplusplus
 }  // extern "C"

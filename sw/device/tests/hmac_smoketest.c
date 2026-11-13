@@ -1,7 +1,8 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "hw/top/dt/hmac.h"
 #include "sw/device/lib/arch/device.h"
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_hmac.h"
@@ -10,7 +11,10 @@
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
+static_assert(kDtHmacCount >= 1,
+              "This test requires at least one HMAC instance");
+
+static dt_hmac_t kTestHmac = (dt_hmac_t)0;
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -19,7 +23,7 @@ static const dif_hmac_transaction_t kHmacTransactionConfig = {
     .message_endianness = kDifHmacEndiannessLittle,
 };
 
-static const char kData[142] =
+OT_NONSTRING static const char kData[142] =
     "Every one suspects himself of at least one of "
     "the cardinal virtues, and this is mine: I am "
     "one of the few honest people that I have ever "
@@ -59,13 +63,6 @@ static const dif_hmac_digest_t kExpectedHmacDigest = {
 };
 
 /**
- * Initialize the HMAC engine. Return `true` if the configuration is valid.
- */
-static void test_setup(mmio_region_t base_addr, dif_hmac_t *hmac) {
-  CHECK_DIF_OK(dif_hmac_init(base_addr, hmac));
-}
-
-/**
  * Start HMAC in the correct mode. If `key` == NULL use SHA256 mode, otherwise
  * use the provided key in HMAC mode.
  */
@@ -89,18 +86,19 @@ static void run_test(const dif_hmac_t *hmac, const char *data, size_t len,
                      const uint8_t *key,
                      const dif_hmac_digest_t *expected_digest) {
   test_start(hmac, key);
-  hmac_testutils_push_message(hmac, data, len);
-  hmac_testutils_fifo_empty_polled(hmac);
-  hmac_testutils_check_message_length(hmac, len * 8);
+  CHECK_STATUS_OK(hmac_testutils_push_message(hmac, data, len));
+  CHECK_STATUS_OK(hmac_testutils_fifo_empty_polled(hmac));
+  CHECK_STATUS_OK(hmac_testutils_check_message_length(hmac, len * 8));
   run_hmac(hmac);
-  hmac_testutils_finish_and_check_polled(hmac, expected_digest);
+  CHECK_STATUS_OK(
+      hmac_testutils_finish_and_check_polled(hmac, expected_digest));
 }
 
 bool test_main(void) {
   LOG_INFO("Running HMAC DIF test...");
 
   dif_hmac_t hmac;
-  test_setup(mmio_region_from_addr(TOP_EARLGREY_HMAC_BASE_ADDR), &hmac);
+  CHECK_DIF_OK(dif_hmac_init_from_dt(kTestHmac, &hmac));
 
   LOG_INFO("Running test SHA256 pass 1...");
   run_test(&hmac, kData, sizeof(kData), NULL, &kExpectedShaDigest);

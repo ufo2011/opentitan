@@ -1,20 +1,19 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use serde_annotate::Annotate;
+use clap::{Args, Subcommand};
 use std::any::Any;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use structopt::StructOpt;
 
-use opentitanlib::app::command::CommandDispatch;
 use opentitanlib::app::TransportWrapper;
+use opentitanlib::app::command::CommandDispatch;
 use opentitanlib::io::emu::{EmuState, EmuValue};
 use opentitanlib::transport::Capability;
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 /// Get State of Emulator instance
 pub struct EmuGetState {}
 
@@ -28,7 +27,7 @@ impl CommandDispatch for EmuGetState {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport
             .capabilities()?
             .request(Capability::EMULATOR)
@@ -39,38 +38,26 @@ impl CommandDispatch for EmuGetState {
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 /// Start Emulator instance
 pub struct EmuStart {
-    #[structopt(
-        long,
-        help = "Reset all presistent storage (For example: flash, otp, eeprom) to factory state"
-    )]
+    /// Reset all presistent storage (For example: flash, otp, eeprom) to factory state.
+    #[arg(long)]
     pub factory_reset: bool,
-    #[structopt(long, help = "Emulator executable file name")]
+    /// Emulator executable file name.
+    #[arg(long)]
     pub emulator_exec: Option<String>,
-    #[structopt(
-        long,
-        help = "List of application names that will be provided in flash images"
-    )]
+    /// List of application names that will be provided in flash images.
+    #[arg(long)]
     pub apps_list: Option<Vec<String>>,
-    #[structopt(
-        long,
-        parse(from_os_str),
-        help = "List of file paths representing Flash images"
-    )]
+    /// List of file paths representing Flash images.
+    #[arg(long)]
     pub flash_list: Option<Vec<PathBuf>>,
-    #[structopt(
-        long,
-        parse(from_os_str),
-        help = "Path to file representing Emulator version state"
-    )]
+    /// Path to file representing Emulator version state.
+    #[arg(long)]
     pub version_init_state: Option<PathBuf>,
-    #[structopt(
-        long,
-        parse(from_os_str),
-        help = "Path to file representing PMU initial state"
-    )]
+    /// Path to file representing PMU initial state.
+    #[arg(long)]
     pub pmu_init_state: Option<PathBuf>,
 }
 
@@ -89,7 +76,7 @@ impl CommandDispatch for EmuStart {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport
             .capabilities()?
             .request(Capability::EMULATOR)
@@ -106,7 +93,7 @@ impl CommandDispatch for EmuStart {
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 /// Stop Emulator instance
 pub struct EmuStop {}
 
@@ -115,7 +102,7 @@ impl CommandDispatch for EmuStop {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         transport
             .capabilities()?
             .request(Capability::EMULATOR)
@@ -126,7 +113,7 @@ impl CommandDispatch for EmuStop {
     }
 }
 
-#[derive(Debug, StructOpt, CommandDispatch)]
+#[derive(Debug, Subcommand, CommandDispatch)]
 /// Commands for interacting with Emulator instance
 pub enum EmuCommand {
     State(EmuGetState),

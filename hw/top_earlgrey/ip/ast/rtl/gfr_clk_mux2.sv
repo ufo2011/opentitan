@@ -1,10 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
 //############################################################################
 // *Name: gfr_clk_mux2
-// *Module Description: Glitch Free Asyncronus 2-Clocks Multiplexer
+// *Module Description: Glitch Free Asynchronous 2-Clocks Multiplexer
 //############################################################################
 
 module gfr_clk_mux2 (

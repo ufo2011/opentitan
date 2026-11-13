@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -37,7 +37,7 @@
 // can indicate error by any illegal value of dev_select_i. 4'b1111 is
 // recommended for visibility
 //
-// The maximum value of N is 15
+// The maximum value of N is 63
 
 `include "prim_assert.sv"
 
@@ -67,7 +67,7 @@ module tlul_socket_1n #(
   input  [NWD-1:0]          dev_select_i
 );
 
-  `ASSERT_INIT(maxN, N < 32)
+  `ASSERT_INIT(maxN, N < 64)
 
   // Since our steering is done after potential FIFOing, we need to
   // shove our device select bits into spare bits of reqfifo
@@ -102,7 +102,7 @@ module tlul_socket_1n #(
   // We need to keep track of how many requests are outstanding,
   // and to which device. New requests are compared to this and
   // stall until that number is zero.
-  localparam int MaxOutstanding = 2**top_pkg::TL_AIW; // Up to 256 ounstanding
+  localparam int MaxOutstanding = 2**top_pkg::TL_AIW; // Up to 256 outstanding
   localparam int OutstandingW = $clog2(MaxOutstanding+1);
   logic [OutstandingW-1:0] num_req_outstanding;
   logic [NWD-1:0]          dev_select_outstanding;
@@ -118,7 +118,6 @@ module tlul_socket_1n #(
       dev_select_outstanding <= '0;
     end else if (accept_t_req) begin
       if (!accept_t_rsp) begin
-        `ASSERT_I(NotOverflowed_A, num_req_outstanding <= MaxOutstanding)
         num_req_outstanding <= num_req_outstanding + 1'b1;
       end
       dev_select_outstanding <= dev_select_t;
@@ -126,6 +125,9 @@ module tlul_socket_1n #(
       num_req_outstanding <= num_req_outstanding - 1'b1;
     end
   end
+
+  `ASSERT(NotOverflowed_A,
+          accept_t_req && !accept_t_rsp -> num_req_outstanding <= MaxOutstanding)
 
   assign hold_all_requests =
       (num_req_outstanding != '0) &

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,7 +34,7 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
 
   rand device_mode_e device_mode;
 
-  // overide this to enable other modes
+  // override this to enable other modes
   constraint device_mode_c {
     device_mode == PassthroughMode;
   }
@@ -319,18 +319,13 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
     if (`gmv(ral.tpm_cfg.en)) begin
       sck_polarity_phase = 0;
     end else begin
-      // flash mode only supports these 2 values.
-      `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(sck_polarity_phase,
-          // TODO (#16339), add back 'b11 once this issue is fixed
-          sck_polarity_phase inside {0};)
+      // flash mode only supports mode 0
+      sck_polarity_phase = 0;
     end
     cfg.spi_host_agent_cfg.sck_polarity[0] = sck_polarity_phase[0];
     cfg.spi_host_agent_cfg.sck_phase[0] = sck_polarity_phase[1];
     cfg.spi_device_agent_cfg.sck_polarity[0] = sck_polarity_phase[0];
     cfg.spi_device_agent_cfg.sck_phase[0] = sck_polarity_phase[1];
-
-    ral.cfg.cpol.set(sck_polarity_phase[0]);
-    ral.cfg.cpha.set(sck_polarity_phase[1]);
 
     // bit dir is only supported in fw mode. Need to be 0 for other modes
     cfg.spi_host_agent_cfg.host_bit_dir = 0;
@@ -342,9 +337,10 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
     ral.cfg.rx_order.set(cfg.spi_host_agent_cfg.device_bit_dir);
 
     if (cfg.do_addr_4b_cfg) begin
-      `DV_CHECK_RANDOMIZE_FATAL(ral.cfg.addr_4b_en)
-      cfg.spi_host_agent_cfg.flash_addr_4b_en = ral.cfg.addr_4b_en.get();
-      cfg.spi_device_agent_cfg.flash_addr_4b_en = ral.cfg.addr_4b_en.get();
+      `DV_CHECK_RANDOMIZE_FATAL(ral.addr_mode.addr_4b_en)
+      cfg.spi_host_agent_cfg.flash_addr_4b_en = ral.addr_mode.addr_4b_en.get();
+      cfg.spi_device_agent_cfg.flash_addr_4b_en = ral.addr_mode.addr_4b_en.get();
+      csr_update(.csr(ral.addr_mode));
       cfg.do_addr_4b_cfg = 0;
     end
 
@@ -413,7 +409,8 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
 
     config_all_cmd_infos();
 
-    random_write_spi_mem(.start_addr(0), .end_addr(SRAM_SIZE - 1));
+    // TODO: Randomize the ingress buffer too.
+    random_write_spi_mem(.start_addr(0), .end_addr(SRAM_FLASH_EGRESS_SIZE - 1));
     randomize_all_cmd_filters();
   endtask : spi_device_flash_pass_init
 
@@ -445,12 +442,18 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
     if (allow_invalid) valid = $urandom_range(0, 1);
     else valid = 1;
 
+    // Behaviour is unknown if the read pipeline is enabled for non-read commands
+    // Hence we disable the pipeline to avoid modelling 'unknown' behaviour
+    if (!(idx>=5 && idx<=10))
+      info.read_pipeline_mode = 0;
+
     if (valid) begin
       cfg.spi_host_agent_cfg.add_cmd_info(info);
       cfg.spi_device_agent_cfg.add_cmd_info(info);
     end
 
-    `uvm_info(`gfn, $sformatf("Add this cmd_info \n%s", info.sprint()), UVM_MEDIUM)
+    `uvm_info(`gfn, $sformatf("Adding to cmd_info slot (%0d) this cmd_info \n%s", idx,
+                              info.sprint()), UVM_MEDIUM)
     case (info.num_lanes)
       0: lanes_en = 0;
       1: lanes_en = info.write_command ? 4'h1 : 4'h2;
@@ -464,6 +467,7 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
     ral.cmd_info[idx].opcode.set(info.opcode);
     ral.cmd_info[idx].payload_en.set(lanes_en);
     ral.cmd_info[idx].payload_dir.set(!info.write_command);
+    ral.cmd_info[idx].read_pipeline_mode.set(info.read_pipeline_mode);
 
     // set dummy cycles
     if (info.dummy_cycles > 0) begin
@@ -505,7 +509,7 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
       end
     end
 
-    // set busy enabled, when this flas is set and cmd is updated with payload
+    // set busy enabled, when this flash is set and cmd is updated with payload
     if (always_set_busy_when_upload_contain_payload && ral.cmd_info[idx].upload.get()
        && (ral.cmd_info[idx].payload_en.get() == 0 ||
            ral.cmd_info[idx].payload_dir.get() == PayloadIn)) begin
@@ -515,6 +519,16 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
     end
     csr_update(.csr(ral.cmd_info[idx]));
   endtask : add_cmd_info
+
+  // Task to update mirrored value of addr_4b_en after end of SPI transaction
+  virtual task schedule_en_4b_predict(bit value);
+    fork begin
+      @(posedge cfg.spi_host_agent_cfg.vif.csb[FW_FLASH_CSB_ID]);
+      `uvm_info(`gfn, $sformatf("set addr_4b_en = %0b", value), UVM_MEDIUM)
+      cfg.clk_rst_vif.wait_clks(3);
+      void'(ral.addr_mode.addr_4b_en.predict(.value(value)));
+    end join_none
+  endtask
 
   // transfer in command including opcode, address and payload
   // if byte_addr_q is empty, the host_seq will use a random addr
@@ -542,14 +556,6 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
                                    payload_q.size() == payload_size;
                                    read_size == payload_size;)
     `uvm_send(m_spi_host_seq)
-
-    if (op == `gmv(ral.cmd_info_en4b.opcode) && `gmv(ral.cmd_info_en4b.valid)) begin
-      cfg.spi_device_agent_cfg.flash_addr_4b_en = 1;
-      cfg.spi_host_agent_cfg.flash_addr_4b_en   = 1;
-    end else if (op == `gmv(ral.cmd_info_ex4b.opcode) && `gmv(ral.cmd_info_ex4b.valid)) begin
-      cfg.spi_device_agent_cfg.flash_addr_4b_en = 0;
-      cfg.spi_host_agent_cfg.flash_addr_4b_en   = 0;
-    end
 
     if (cfg.is_read_buffer_cmd(m_spi_host_seq.rsp)) begin
       cfg.next_read_buffer_addr = convert_addr_from_byte_queue(m_spi_host_seq.rsp.address_q) +
@@ -595,10 +601,110 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
     end
   endtask
 
+  virtual task get_flash_status_busy(output bit busy);
+    uvm_reg_data_t rdata;
+    csr_rd(ral.flash_status, rdata);
+    busy = get_field_val(ral.flash_status.busy, rdata);
+    `uvm_info(`gfn, $sformatf("read complete, flash_status: %x", rdata), UVM_HIGH)
+  endtask
+
   virtual task clear_flash_busy_bit();
+    bit busy;
+    bit busy_unset_early;
+    uint num_sck_pulses = 5;
+    uint wait_sck_count = num_sck_pulses;
+    flash_status_t old_flash_status, new_flash_status;
+    uvm_hdl_data_t rtl_sck_committed_status;
     `uvm_info(`gfn, "Clearing flash busy bit", UVM_MEDIUM)
-    csr_wr(ral.flash_status.busy, 0);
-    csr_spinwait(ral.flash_status.busy, 0);
+    // clear busy bit
+    ral.flash_status.busy.set(0);
+    csr_rd(.ptr(ral.flash_status), .value(old_flash_status), .backdoor(1));
+
+    csr_update(ral.flash_status);
+    `uvm_info(`gfn, $sformatf("%m - After updating flash_status - 0x%0x",`gmv(ral.flash_status)),
+              UVM_DEBUG)
+
+    // The intent here is to check the flash_status after csr_wr and then read the register
+    // after end of SPI transaction (since flash_status gets update after CSB is deasserted)
+    // First, ensure enough SPI clock cycles occur to make the transition into
+    // the SPI domain.
+
+    if(cfg.vseq_txn_finished) begin
+      // For flash_status.busy bit to be propagated towards the TL-UL side there must be a
+      // flash_command. If there aren't more txns we just exit to avoid blocking
+      `uvm_info(`gfn, {$sformatf("%m - exiting since this test won't generate more flash_txns"),
+                       "- hence busy bit won't drop"}, UVM_DEBUG)
+      return;
+    end
+
+    while (wait_sck_count > 0) begin
+      `uvm_info(`gfn, $sformatf("Waiting 'wait_sck_count=%0d' SCK ticks",wait_sck_count), UVM_DEBUG)
+
+      @(posedge cfg.spi_host_agent_cfg.vif.sck);
+      `uvm_info(`gfn, "%m - WAITING FOR BUSY BIT TO CLEAR", UVM_DEBUG)
+
+      if (cfg.spi_host_agent_cfg.vif.csb[FW_FLASH_CSB_ID] == 0) begin
+        if (wait_sck_count == num_sck_pulses) begin
+          // On the first SCK clock, we check if the value has already made it
+          csr_rd(.ptr(ral.flash_status), .value(new_flash_status), .backdoor(1));
+          // Note: it can happen the written flash_status is already synced with both SCK and SYS
+          // domains. This could happen in cases where the written_value in the A-channel occurs
+          // before CSB is active, but the D-channel response being back-pressured until the next
+          //  inactive CSB
+
+          if (new_flash_status != old_flash_status)
+            busy_unset_early = 1;
+
+        end // if (wait_sck_count == num_sck_pulses)
+        if (cfg.spi_host_agent_cfg.ongoing_flash_cmd != null) begin
+          if (new_flash_status[0] == 1 && // Busy is set
+              cfg.spi_host_agent_cfg.ongoing_flash_cmd.past_dummies && //CMD is past dummy cycles
+              !cfg.spi_host_agent_cfg.ongoing_flash_cmd.spi_beat_signalled()) begin
+            // We're past the dummies stage - point in which this flash_command (READ) won't cause
+            // the RTL to continue updating flash_status on a byte-basis. This flash_status SW write
+            // will only make it through in the following command, so wait for next negedge on CSB
+            @(negedge cfg.spi_host_agent_cfg.vif.csb[FW_FLASH_CSB_ID]);
+          end
+        end // if (cfg.spi_host_agent_cfg.ongoing_flash_cmd != null)
+
+        wait_sck_count--;
+        if (wait_sck_count == 0 && busy_unset_early == 0) begin
+          `DV_CHECK(uvm_hdl_read(sck_committed_status_path, rtl_sck_committed_status))
+
+          // The busy clear hasn't made it towards the SCK committed value yet - so there's a chance
+          // if we're towards the end of a flash_cmd the flash_status write wasn't taken for that
+          // command and hence the busy bit won't be unset until the next command, since the write
+          // hasn't made it to the committed value yet.
+          if (rtl_sck_committed_status[0] == 1) begin
+            // We wait until the bit is dropped on the committed value, just so after CSB goes high
+            // SW can read the bit is unset
+            wait_sck_count = num_sck_pulses;
+          end
+        end
+      end else begin // if (cfg.spi_host_agent_cfg.vif.csb[FW_FLASH_CSB_ID] == 0)
+        wait_sck_count = num_sck_pulses;
+      end
+    end
+
+
+    // Wait for the SPI transaction to end.
+    @(posedge cfg.spi_host_agent_cfg.vif.csb[FW_FLASH_CSB_ID]);
+    `uvm_info(`gfn, "Detected end of SPI transaction", UVM_HIGH)
+    // Wait for 5 cycles after deassertion of CSB to allow for flash_status to
+    // get updated in the core clock domain.
+    cfg.clk_rst_vif.wait_clks(5);
+    get_flash_status_busy(busy);
+    // If busy bit is not cleared, check once more else raise an error
+    if (busy) begin
+      get_flash_status_busy(busy);
+      // busy_unset_early will be set if there's back-pressure for the D-channel: The RTL takes the
+      // written_value on A-channel handshake, and if the back-pressure lasts for 1+ flash_commands
+      // csr_update will block until D-channel handshake completes.
+      // So, up to here when we wait for CSB becoming inactive, the busy bit may have been set again
+      if (!busy_unset_early && !cfg.last_flash_cmd_set_busy)
+        `DV_CHECK_EQ(busy, 0, "flash_status.busy == 1 expected to be 0")
+    end
+    `uvm_info(`gfn, "Cleared flash busy bit", UVM_MEDIUM)
   endtask
 
   // check if 3 upload fifo (cmd, addr, payload) are empty. If so, read all of them
@@ -630,6 +736,10 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
     if (intr_cmdfifo) intr_state_val[CmdFifoNotEmpty] = 1;
     if (intr_payload) intr_state_val[PayloadNotEmpty] = 1;
     if (intr_overflow) intr_state_val[PayloadOverflow] = 1;
+    // Wait for register access to complete
+    while(ral.intr_state.is_busy()) begin
+      cfg.clk_rst_vif.wait_clks(1);
+    end
     csr_wr(ral.intr_state, intr_state_val);
 
     if (intr_cmdfifo) `DV_CHECK_GT(cmdfifo_depth_val, 0)
@@ -649,12 +759,12 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
     if (payload_depth_val > PAYLOAD_FIFO_SIZE) payload_depth_val = PAYLOAD_FIFO_SIZE;
 
     // need to shift by 2 for the offset used at mem_rd
-    payload_base_offset = (READ_BUFFER_SIZE + MAILBOX_BUFFER_SIZE + SFDP_SIZE) / 4;
+    payload_base_offset = 0;
     payload_depth_val = payload_depth_val / 4;
     for (int i = 0; i < payload_depth_val; i++) begin
       bit [TL_DW-1:0] val;
       int offset = i + payload_base_offset;
-      mem_rd(.ptr(ral.buffer), .offset(offset), .data(val));
+      mem_rd(.ptr(ral.ingress_buffer), .offset(offset), .data(val));
       `uvm_info(`gfn, $sformatf("read upload_payloadfifo: idx: %0d, data: 0x%0x", i, val),
                 UVM_MEDIUM)
     end
@@ -689,12 +799,24 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
   endtask
 
   virtual task read_and_check_4b_en();
-    cfg.clk_rst_vif.wait_clks(10);
-    // avoid accessing this CSR at the same time as tpm_init
-    cfg.spi_cfg_sema.get();
-    csr_rd_check(.ptr(ral.cfg.addr_4b_en),
-                 .compare_value(cfg.spi_device_agent_cfg.flash_addr_4b_en));
-    cfg.spi_cfg_sema.put();
+      uvm_reg_data_t rdata;
+      // Wait for 10 cycles to allow the reg value to update
+      cfg.clk_rst_vif.wait_clks(10);
+      // avoid accessing this CSR at the same time as tpm_init
+      cfg.spi_cfg_sema.get();
+      // Wait for register to be free
+      `DV_SPINWAIT(
+        while(1) begin
+          if (ral.addr_mode.is_busy()) begin
+            cfg.clk_rst_vif.wait_clks(1);
+          end else begin
+            break;
+          end
+        end)
+      // Check the contents of addr4b_en
+      csr_rd_check(.ptr(ral.addr_mode.addr_4b_en),
+             .compare_value(cfg.spi_device_agent_cfg.flash_addr_4b_en));
+      cfg.spi_cfg_sema.put();
   endtask
 
   virtual task random_write_spi_mem(int start_addr, int end_addr, string msg_region = "mem",
@@ -705,7 +827,7 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
     end
     for (int i = start_addr / 4; i <= end_addr / 4; i++) begin
       bit [TL_DW-1:0] data = $urandom();
-      mem_wr(.ptr(ral.buffer), .offset(i), .data(data), .blocking(!zero_delay_write));
+      mem_wr(.ptr(ral.egress_buffer), .offset(i), .data(data), .blocking(!zero_delay_write));
       `uvm_info(`gfn, $sformatf("write %s offset 0x%0x: 0x%0x", msg_region, i << 2, data),
                 UVM_MEDIUM)
     end
@@ -733,12 +855,22 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
           bit is_watermark;
           // use zero_delay write, otherwise, spi may read faster than SW write
           bit zero_delay_write = 1;
+          int unsigned delay = $urandom_range(10, 200);
 
-          cfg.clk_rst_vif.wait_clks($urandom_range(10, 200));
+          // We read 'intr_state' through the backdoor every cycle to see if a flip/watermark
+          // event occurs. Just because otherwise, if we apply a "random delay" it's possible the
+          // new value will be written at a time the RTL has already "latched" the older value and
+          // there will be a mem comparison mismatch
+          // Once we read a readbufflip/watermark interrupt via backdoor, then do a front-door read
+          //  to keep the predictions intact
+          cfg.clk_rst_vif.wait_clks(1);
+          csr_rd(.ptr(ral.intr_state), .value(intr_state_val), .backdoor(1));
 
-          csr_rd(ral.intr_state, intr_state_val);
           is_flip = get_field_val(ral.intr_state.readbuf_flip, intr_state_val);
           is_watermark = get_field_val(ral.intr_state.readbuf_watermark, intr_state_val);
+          if (is_flip || is_watermark) // Front-door read to keep the SCB predictions intact
+            csr_rd(ral.intr_state, intr_state_val);
+
 
           // clear flip and watermark event before updating mem
           // if clear too late, scb is hard to handle as the interrupt may happen again
@@ -747,6 +879,8 @@ class spi_device_pass_base_vseq extends spi_device_base_vseq;
           if (is_watermark) intr_state_val[ReadbufWatermark] = 1;
 
           if (!is_flip && !is_watermark) continue;
+
+          cfg.clk_rst_vif.wait_clks(1);
           csr_wr(ral.intr_state, intr_state_val);
 
           if (is_flip) begin

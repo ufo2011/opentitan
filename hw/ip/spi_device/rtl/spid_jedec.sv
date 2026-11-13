@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -13,8 +13,9 @@ module spid_jedec
   input rst_ni,
 
   input clk_out_i, // Output clock (inverted SCK)
+  input rst_out_ni, // Reset safely timed for output clock
 
-  input inclk_csb_asserted_pulse_i,
+  input cmd_sync_pulse_i,
 
   input jedec_cfg_t sys_jedec_i, // from CSR
 
@@ -70,7 +71,7 @@ module spid_jedec
   // Jedec latch
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni)                         jedec <= '{default: '0};
-    else if (inclk_csb_asserted_pulse_i) jedec <= sys_jedec_i;
+    else if (cmd_sync_pulse_i) jedec <= sys_jedec_i;
   end
 
   // If num_cc is non-zero, the logic shall return CC first
@@ -86,8 +87,8 @@ module spid_jedec
   end
 
   // Output to Parallel-to-Serial
-  always_ff @(posedge clk_out_i or negedge rst_ni) begin
-    if (!rst_ni) begin
+  always_ff @(posedge clk_out_i or negedge rst_out_ni) begin
+    if (!rst_out_ni) begin
       outclk_p2s_valid_o <= 1'b 0;
       outclk_p2s_byte_o  <= 8'h 0;
     end else begin
@@ -117,7 +118,7 @@ module spid_jedec
 
   // Byte selection
   always_ff @(posedge clk_i or negedge rst_ni) begin : byte_sel_latch
-    if (!rst_ni)        byte_sel_q <= 8'h 0; // select manufacturer id
+    if (!rst_ni)        byte_sel_q <= 2'h 0; // select manufacturer id
     else if (next_byte) byte_sel_q <= byte_sel_d;
   end : byte_sel_latch
 

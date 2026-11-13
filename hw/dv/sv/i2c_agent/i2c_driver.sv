@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,43 +15,42 @@ class i2c_driver extends dv_base_driver #(i2c_item, i2c_agent_cfg);
   // get an array with unique read data
   constraint rd_data_c { unique { rd_data }; }
 
-  virtual task reset_signals();
-    forever begin
-      @(negedge cfg.vif.rst_ni);
-      `uvm_info(`gfn, "\ndriver in reset progress", UVM_DEBUG)
-      release_bus();
-      @(posedge cfg.vif.rst_ni);
-      `uvm_info(`gfn, "\ndriver out of reset", UVM_DEBUG)
-    end
-  endtask : reset_signals
+  task on_enter_reset();
+    `uvm_info(`gfn, "\ndriver in reset progress", UVM_DEBUG)
+    release_bus();
+  endtask
+
+  function void on_leave_reset();
+    `uvm_info(`gfn, "\ndriver out of reset", UVM_DEBUG)
+  endfunction
 
   virtual task run_phase(uvm_phase phase);
     fork
-      reset_signals();
-      get_and_drive();
-      begin
-        if (cfg.if_mode == Host) drive_scl();
-      end
-      begin
-        if (cfg.if_mode == Host) host_scl_pause_ctrl();
-      end
-      proc_hot_glitch();
-    join_none
+      super.run_phase(phase);
+      if (cfg.if_mode == Host) drive_scl();
+      if (cfg.if_mode == Host) host_scl_pause_ctrl();
+    join
   endtask
 
   virtual task get_and_drive();
     i2c_item req;
+    bit      sent_item;
     @(posedge cfg.vif.rst_ni);
     forever begin
       if (cfg.if_mode == Device) release_bus();
       // driver drives bus per mode
       seq_item_port.get_next_item(req);
+      sent_item = 1'b0;
       fork
         begin: iso_fork
           fork
             begin
-              if (cfg.if_mode == Device) drive_device_item(req);
-              else drive_host_item(req);
+              case (cfg.if_mode)
+                Host: drive_host_item(req);
+                Device: drive_device_item(req);
+                default: `uvm_fatal(`gfn, "Shouldn't reach this state!")
+              endcase
+              sent_item = 1'b1;
             end
             // handle on-the-fly reset
             begin
@@ -60,10 +59,10 @@ class i2c_driver extends dv_base_driver #(i2c_item, i2c_agent_cfg);
             end
             begin
               // Agent hot reset. It only resets I2C agent.
-              // The DUT funtions normally without reset.
+              // The DUT functions normally without reset.
               // This event only happens in directed test case so cannot set the timeout.
               // It will be killed by disable fork when 'drive_*_item' is finished.
-              wait(cfg.agent_rst);
+              wait(cfg.driver_rst);
               `uvm_info(`gfn, "drvdbg agent reset", UVM_MEDIUM)
               req.clear_all();
             end
@@ -71,33 +70,49 @@ class i2c_driver extends dv_base_driver #(i2c_item, i2c_agent_cfg);
           disable fork;
         end: iso_fork
       join
-      seq_item_port.item_done();
-
+      if (sent_item) seq_item_port.item_done();
       // When agent reset happens, flush all sequence items from sequencer request queue,
       // before it starts a new sequence.
-      if (cfg.agent_rst) begin
+      if (cfg.driver_rst) begin
         i2c_item dummy;
         do begin
           seq_item_port.try_next_item(dummy);
           if (dummy != null) seq_item_port.item_done();
         end while (dummy != null);
-
-        repeat(2) @(cfg.vif.cb);
-        cfg.agent_rst = 0;
       end
     end
   endtask : get_and_drive
 
+  // Task to drive bits on SDA from TB to DUT while DUT is operating in Target mode
+  virtual task drive_host_data_bits(ref i2c_item req);
+    int num_bits = $bits(req.wdata);
+    `uvm_info(`gfn, $sformatf("Driving host item 8'h%2x", req.wdata), UVM_FULL)
+    `uvm_info(`gfn, $sformatf("wait_cycles = %0d", req.wait_cycles), UVM_DEBUG)
+    for (int i = num_bits - 1; i >= (num_bits - req.wait_cycles); i--) begin
+      cfg.vif.host_data(cfg.timing_cfg, req.wdata[i]);
+    end
+  endtask
+
   virtual task drive_host_item(i2c_item req);
     // During pause period, let drive_scl control scl
     `DV_WAIT(scl_pause == 1'b0,, scl_spinwait_timeout_ns, "drive_host_item")
-    `uvm_info(`gfn, $sformatf("drv: %s", req.drv_type.name), UVM_MEDIUM)
-    if (cfg.allow_bad_addr & !cfg.valid_addr) begin
-      if (req.drv_type inside {HostAck, HostNAck} & cfg.is_read) return;
+
+    // Print out what we are about to drive...
+    begin
+      string str = $sformatf("drive_host_item() :: drv_type=%s", req.drv_type.name());
+      case (req.drv_type)
+        HostData: str = {str, $sformatf(" ( byte=8'h%2x )", req.wdata)};
+        HostDataNoWaitForACK: begin
+          str = {str, $sformatf(" ( byte=8'h%2x, wait_cycles=%0d )", req.wdata, req.wait_cycles)};
+        end
+        default:; // Fall-through
+      endcase
+      `uvm_info(`gfn, str, UVM_HIGH)
     end
+
+    // Now drive the item.
     case (req.drv_type)
       HostStart: begin
-        cfg.vif.drv_phase = DrvAddr;
         cfg.vif.host_start(cfg.timing_cfg);
         cfg.host_scl_start = 1;
       end
@@ -105,31 +120,36 @@ class i2c_driver extends dv_base_driver #(i2c_item, i2c_agent_cfg);
         cfg.vif.host_rstart(cfg.timing_cfg);
       end
       HostData: begin
-        `uvm_info(`gfn, $sformatf("Driving host item 0x%x", req.wdata), UVM_MEDIUM)
-        for (int i = $bits(req.wdata) -1; i >= 0; i--) begin
-          cfg.vif.host_data(cfg.timing_cfg, req.wdata[i]);
-        end
-        // Wait one more cycle for ack
+        drive_host_data_bits(req);
         cfg.vif.wait_scl(.iter(1), .tc(cfg.timing_cfg));
       end
-      HostAck: begin
-        // Wait for read data and send ack
+      HostDataNoWaitForACK: begin
+        drive_host_data_bits(req);
+      end
+      HostAck: begin // Wait for 8-bits of data, then drive an ACK
         cfg.vif.wait_scl(.iter(8), .tc(cfg.timing_cfg));
         cfg.vif.host_data(cfg.timing_cfg, 0);
       end
-      HostNAck: begin
-        // Wait for read data and send nack
+      HostNAck: begin // Wait for 8-bits of data, then drive a NACK
         cfg.vif.wait_scl(.iter(8), .tc(cfg.timing_cfg));
         cfg.vif.host_data(cfg.timing_cfg, 1);
       end
+      HostWait: begin
+        // Wait for wait_cycles number of SCL cycles
+        `uvm_info(`gfn, $sformatf("wait_cycles = %0d", req.wait_cycles), UVM_DEBUG)
+        for (int i = 0; i < req.wait_cycles; i++) begin
+          cfg.vif.wait_scl(.iter(1), .tc(cfg.timing_cfg));
+        end
+      end
       HostStop: begin
-        cfg.vif.drv_phase = DrvStop;
+        // If SCL is paused high, wait for it to fall.
+        `DV_WAIT(cfg.vif.scl_i === 1'b0,, scl_spinwait_timeout_ns, "drive_host_item HostStop")
+        // Now disable the SCL drive thread.
         cfg.host_scl_stop = 1;
         cfg.vif.host_stop(cfg.timing_cfg);
-        if (cfg.allow_bad_addr & !cfg.valid_addr)cfg.got_stop = 1;
       end
       default: begin
-        `uvm_fatal(`gfn, $sformatf("\n  host_driver, received invalid request"))
+        `uvm_fatal(`gfn, {"drive_host_item() received invalid drv_type : ", req.drv_type.name()})
       end
     endcase
   endtask : drive_host_item
@@ -138,10 +158,16 @@ class i2c_driver extends dv_base_driver #(i2c_item, i2c_agent_cfg);
     bit [7:0] rd_data_cnt = 8'd0;
     bit [7:0] rdata;
 
+    `uvm_info(`gfn, $sformatf("drive_device_item() :: drv_type=%s", req.drv_type.name), UVM_HIGH)
+
+    // Choose a randomized stretching delay for this item.
+    // - If cfg.host_stretch_test_mode == 1, this delay is not randomized.
+    cfg.timing_cfg.tStretchHostClock = gen_num_stretch_host_clks(cfg.timing_cfg);
+
     case (req.drv_type)
       DevAck: begin
-        cfg.timing_cfg.tStretchHostClock = gen_num_stretch_host_clks(cfg.timing_cfg);
-         `uvm_info(`gfn, $sformatf("sending an ack"), UVM_MEDIUM)
+        `uvm_info(`gfn, $sformatf("DevAck : sending an ACK (after stretching for %0d cycles)",
+                                  cfg.timing_cfg.tStretchHostClock), UVM_FULL)
         fork
           // host clock stretching allows a high-speed host to communicate
           // with a low-speed device by setting TIMEOUT_CTRL.EN bit
@@ -150,24 +176,22 @@ class i2c_driver extends dv_base_driver #(i2c_item, i2c_agent_cfg);
           // once scl_o is pulled down longer than TIMEOUT_CTRL.VAL field,
           // intr_stretch_timeout_o is asserted (ref. https://www.i2c-bus.org/clock-stretching)
           cfg.vif.device_stretch_host_clk(cfg.timing_cfg);
-          cfg.vif.device_send_ack(cfg.timing_cfg);
+          cfg.vif.device_send_ack(cfg.timing_cfg, .can_stretch(1'b1));
         join
       end
+      DevNack: begin
+        cfg.vif.device_send_nack(cfg.timing_cfg);
+      end
       RdData: begin
-        `uvm_info(`gfn, $sformatf("Send readback data %0x", req.rdata), UVM_MEDIUM)
+        `uvm_info(`gfn, $sformatf("RdData : Driving read data 8'h%2x", req.rdata), UVM_FULL)
         for (int i = 7; i >= 0; i--) begin
-          cfg.vif.device_send_bit(cfg.timing_cfg, req.rdata[i]);
+          cfg.vif.device_send_bit(cfg.timing_cfg, req.rdata[i], .can_stretch(1'b0));
         end
-        `uvm_info(`gfn, $sformatf("\n  device_driver, trans %0d, byte %0d  %0x",
-            req.tran_id, req.num_data+1, rd_data[rd_data_cnt]), UVM_DEBUG)
         // rd_data_cnt is rollled back (no overflow) after reading 256 bytes
         rd_data_cnt++;
       end
-      WrData: begin
-        // nothing to do
-      end
       default: begin
-        `uvm_fatal(`gfn, $sformatf("\n  device_driver, received invalid request"))
+        `uvm_fatal(`gfn, {"drive_device_item() received invalid drv_type : ", req.drv_type.name()})
       end
     endcase
   endtask : drive_device_item
@@ -179,26 +203,29 @@ class i2c_driver extends dv_base_driver #(i2c_item, i2c_agent_cfg);
     // in which TIMEOUT_CTRL.EN is always set.
 
     // If Stretch value is greater than 2*tTimeOut, it will create 2 interrupt events.
-    // Which can cause faluse error in 'host_stretch_testmode'.
+    // Which can cause false error in 'host_stretch_testmode'.
     // So, this value should be associated with tTimeout in host stretch testmode
-    if (cfg.host_stretch_test_mode) return (tc.tTimeOut + 1);
-    else return $urandom_range(tc.tClockPulse, tc.tClockPulse + 2*tc.tTimeOut);
+    int random_stretch = $urandom_range(tc.tClockPulse,
+                                        tc.tClockPulse + 2*tc.tTimeOut);
+
+    return (cfg.host_stretch_test_mode) ? (tc.tTimeOut + 1) :
+                                          random_stretch;
   endfunction : gen_num_stretch_host_clks
 
   virtual task process_reset();
     @(negedge cfg.vif.rst_ni);
-    release_bus();
+    on_enter_reset();
     `uvm_info(`gfn, "\n  driver is reset", UVM_DEBUG)
   endtask : process_reset
 
-  virtual task release_bus();
-    `uvm_info(`gfn, "Driver released the bus", UVM_HIGH)
+  function void release_bus();
+    `uvm_info(`gfn, "Driver released the bus", UVM_DEBUG)
     cfg.vif.scl_o = 1'b1;
     cfg.vif.sda_o = 1'b1;
-  endtask : release_bus
+  endfunction : release_bus
 
   task drive_scl();
-    // This timeout is extremely long since read trasnactions will stretch
+    // This timeout is extremely long since read transactions will stretch
     // whenever there are unhanded write commands or format bytes.
     int scl_spinwait_timeout_ns = 100_000_000; // 100ms
     forever begin
@@ -211,6 +238,7 @@ class i2c_driver extends dv_base_driver #(i2c_item, i2c_agent_cfg);
             cfg.vif.scl_o <= 1'b0;
             cfg.vif.wait_for_dly(cfg.timing_cfg.tClockLow);
             cfg.vif.wait_for_dly(cfg.timing_cfg.tSetupBit);
+            if (cfg.host_scl_stop) break;
             cfg.vif.scl_o <= 1'b1;
             `DV_WAIT(cfg.vif.scl_i === 1'b1,, scl_spinwait_timeout_ns, "i2c_drv_scl")
             cfg.vif.wait_for_dly(cfg.timing_cfg.tClockPulse);
@@ -260,49 +288,4 @@ class i2c_driver extends dv_base_driver #(i2c_item, i2c_agent_cfg);
      end
   endtask
 
-  // When 'cfg.hot_glitch' is triggered, it wait for data read state
-  // then add 'start' or 'stop' during data read state.
-  // Agent reset (without dut reset) is asserted after this event to
-  // clear driver and monitor state.
-  task proc_hot_glitch();
-    forever begin
-      @(cfg.vif.cb);
-      if (cfg.hot_glitch) begin
-        wait_for_read_data_state();
-        randcase
-          1: add_start();
-          1: add_stop();
-        endcase
-        cfg.agent_rst = 1;
-        cfg.hot_glitch = 0;
-        cfg.host_scl_force_high = 0;
-        cfg.host_scl_force_low = 0;
-        wait(!cfg.agent_rst);
-      end
-    end
-  endtask
-
-  // Task looking for data read state.
-  task wait_for_read_data_state();
-    int wait_timeout_ns = 500_000_000; // 500 ms
-    `DV_WAIT(cfg.vif.drv_phase == DrvRd,, wait_timeout_ns, "wait_for_read_data_state");
-    repeat(2) @(posedge cfg.vif.scl_i);
-  endtask
-
-  // Force quit scl stuck at high.
-  // 'start' will be added by the next sequence.
-  task add_start();
-    `uvm_info(`gfn, "proc_hot_glitch: add start", UVM_MEDIUM)
-    cfg.host_scl_force_high = 1;
-    cfg.vif.wait_for_dly(cfg.timing_cfg.tSetupStart);
-  endtask // add_start
-
-  // Force quit scl stuck at low.
-  // 'stop' is manually added here.
-  task add_stop();
-    `uvm_info(`gfn, "proc_hot_glitch: add stop", UVM_MEDIUM)
-    cfg.host_scl_force_low = 1;
-    cfg.host_scl_stop = 1;
-    cfg.vif.host_stop(cfg.timing_cfg);
-  endtask
 endclass : i2c_driver

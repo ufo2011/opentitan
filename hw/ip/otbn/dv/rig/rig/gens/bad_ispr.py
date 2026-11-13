@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@ import random
 from typing import Optional, Tuple
 
 from shared.insn_yaml import InsnsFile
-from shared.operand import ImmOperandType
+from shared.operand import ImmOperandType, IsrOperandType
 
 from ..config import Config
 from ..program import ProgInsn, Program
@@ -30,7 +30,7 @@ class BadIspr(SnippetGen):
 
         for insn in insns_file.insns:
             # Pick only the instructions pertaining to CSR and WSR.
-            if insn.mnemonic not in ['csrrw', 'csrrs', 'wsrs', 'wsrw']:
+            if insn.mnemonic not in ['csrrw', 'csrrs', 'bn.wsrr', 'bn.wsrw']:
                 continue
 
             assert not (insn.python_pseudo_op or insn.literal_pseudo_op)
@@ -90,23 +90,34 @@ class BadIspr(SnippetGen):
                 continue
 
             assert prog_insn.lsu_info is not None
-            mem_type, tgt_addr = prog_insn.lsu_info
-            # Replace good CSR / WSR address with bad address.
-            bad_addr = model.pick_bad_addr(mem_type)
-            assert bad_addr is not None
-            prog_insn.lsu_info = mem_type, bad_addr
+            mem_type, _tgt_addr = prog_insn.lsu_info
             imm_idx = None
             for i, each in enumerate(prog_insn.insn.operands):
                 if isinstance(each.op_type, ImmOperandType):
                     assert imm_idx is None
                     imm_idx = i
             assert imm_idx is not None
+
+            # The instructions we're interested in (csrrw, csrrs, bn.wsrr and
+            # bn.wsrw) all take a CSR / WSR index as their immediate operand,
+            # and that operand has a fixed width.
+            isr_type = prog_insn.insn.operands[imm_idx].op_type
+            assert isinstance(isr_type, IsrOperandType)
+            assert isr_type.width is not None
+
+            # Replace good CSR / WSR address with bad address: one that
+            # doesn't name any CSR / WSR.
+            invalid_isr_indices = [addr for addr in range(1 << isr_type.width)
+                                   if addr not in isr_type.isrs.addr_to_isr]
+            assert invalid_isr_indices, 'There is no unused ISR index'
+            bad_addr = random.choice(invalid_isr_indices)
+            prog_insn.lsu_info = mem_type, bad_addr
             prog_insn.operands[imm_idx] = bad_addr
 
             # In the case of a randomly generated CSRRW, it is better to have
             # UNIMP instead of a write to a random address since it is actually
             # an instruction alias.
-            if  self.insns[idx].mnemonic == "csrrw" and random.random() < 0.8:
+            if self.insns[idx].mnemonic == "csrrw" and random.random() < 0.8:
                 # UNIMP instruction is equivalent to CSRRW x0, 0xC00, x0
                 prog_insn.operands = [0, 0xC00, 0]
 

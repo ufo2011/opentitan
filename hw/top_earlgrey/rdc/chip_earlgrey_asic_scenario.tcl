@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -40,7 +40,6 @@ set_reset_scenario { \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_powerup    { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_powerup      { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_usb_powerup     { constraint { @t0 0 } } } \
-  { top_earlgrey.clkmgr_aon_clocks.clk_io_div2_powerup { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_aes        { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_hmac       { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_kmac       { constraint { @t0 0 } } } \
@@ -49,14 +48,13 @@ set_reset_scenario { \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_infra      { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_usb_infra       { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_infra        { constraint { @t0 0 } } } \
-  { top_earlgrey.clkmgr_aon_clocks.clk_io_div2_infra   { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_div4_secure  { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_secure     { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_div4_timers  { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_div4_peri    { constraint { @t0 0 } } } \
-  { top_earlgrey.clkmgr_aon_clocks.clk_io_div2_peri    { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_peri         { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_usb_peri        { constraint { @t0 0 } } } \
+  { top_earlgrey.clkmgr_aon_clocks.clk_io_spi_host1    { constraint { @t0 0 } } } \
   { top_earlgrey.pwrmgr_aon_low_power                  { constraint { @t0 1 } } } \
   { top_earlgrey.spi_device_passthrough_req.passthrough_en { constraint { @t0 0 } } } \
   { top_earlgrey.u_spi_host0.reg2hw.control.output_en.q    { constraint { @t0 0 } } } \
@@ -74,7 +72,6 @@ set_reset_scenario { \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_powerup    { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_powerup      { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_usb_powerup     { constraint { @t0 0 } } } \
-  { top_earlgrey.clkmgr_aon_clocks.clk_io_div2_powerup { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_aes        { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_hmac       { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_kmac       { constraint { @t0 0 } } } \
@@ -83,14 +80,13 @@ set_reset_scenario { \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_infra      { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_usb_infra       { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_infra        { constraint { @t0 0 } } } \
-  { top_earlgrey.clkmgr_aon_clocks.clk_io_div2_infra   { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_div4_secure  { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_main_secure     { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_div4_timers  { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_div4_peri    { constraint { @t0 0 } } } \
-  { top_earlgrey.clkmgr_aon_clocks.clk_io_div2_peri    { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_io_peri         { constraint { @t0 0 } } } \
   { top_earlgrey.clkmgr_aon_clocks.clk_usb_peri        { constraint { @t0 0 } } } \
+  { top_earlgrey.clkmgr_aon_clocks.clk_io_spi_host1    { constraint { @t0 0 } } } \
   { top_earlgrey.pwrmgr_aon_low_power                  { constraint { @t0 1 } } } \
   { top_earlgrey.spi_device_passthrough_req.passthrough_en { constraint { @t0 0 } } } \
   { top_earlgrey.u_spi_host0.reg2hw.control.output_en.q    { constraint { @t0 0 } } } \
@@ -111,7 +107,7 @@ set_reset_scenario { \
 # PWRMGR Reset Cause
 
 # RSTMGR SW Resets
-#set_reset_scenario { {{top_earlgrey.u_rstmgr_aon.u_ndm_sync.u_sync_2.gen_generic.u_impl_generic.q_o[0]} {reset  { @t0 1 } { #10 0}} }} -name Scenario8 -comment "functional reset"
+#set_reset_scenario { {{top_earlgrey.u_rstmgr_aon.u_ndm_sync.u_sync_2.q_o[0]} {reset  { @t0 1 } { #10 0}} }} -name Scenario8 -comment "functional reset"
 set_reset_scenario { \
   {{top_earlgrey.u_rstmgr_aon.u_reg.u_sw_rst_ctrl_n_0.q[0]} {reset  { @t0 1 } { #2 0 } { #10 1}} } \
   {{top_earlgrey.u_rstmgr_aon.u_reg.u_sw_rst_ctrl_n_1.q[0]} {reset  { @t0 1 } { #2 0 } { #10 1}} } \

@@ -3,9 +3,9 @@
 Verification Stages
 ===================
 
-Ibex is being verified as part of the `OpenTitan <https://www.opentitan.org>`_ project and follows the `verification stages used in OpenTitan <https://docs.opentitan.org/doc/project/development_stages/#hardware-verification-stages-v>`_.
+Ibex is being verified as part of the `OpenTitan <https://www.opentitan.org>`_ project and follows the `verification stages used in OpenTitan <https://opentitan.org/book/doc/project_governance/development_stages.html#hardware-verification-stages-v>`_.
 The current verification stage of the 'opentitan' configuration of Ibex is **V2S**.
-The full definition of V2S can be found at the `OpenTitan V2 <https://docs.opentitan.org/doc/project/checklist/#v2>`_ and `OpenTitan V2S <https://docs.opentitan.org/doc/project/checklist/#v2s>`_ checklists.
+The full definition of V2S can be found at the `OpenTitan V2 <https://opentitan.org/book/doc/project_governance/checklist/index.html#v2>`_ and `OpenTitan V2S <https://opentitan.org/book/doc/project_governance/checklist/index.html#v2s>`_ checklists.
 Other Ibex configurations do not have a formal verification stage at present.
 
 V1 Checklist
@@ -84,7 +84,7 @@ V2 Checklist
 +---------------+-------------------------------------+------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | Tests         | SIM_FW_SIMULATED                    | N/A        | No ROM or firmware present.                                                                                                                                          |
 +---------------+-------------------------------------+------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| Regression    | SIM_NIGHTLY_REGRESSION_V2           | Complete   | Regression run in Azure pipeline only accessible to OpenTitan members.                                                                                               |
+| Regression    | SIM_NIGHTLY_REGRESSION_V2           | Complete   | Regression run in GitHub Actions only accessible to OpenTitan members.                                                                                               |
 |               |                                     |            | Publicly viewable reports on the `OpenTitan regression dashboard <https://reports.opentitan.org/hw/top_earlgrey/dv/summary/latest/report.html>`_ are planned for V3. |
 +---------------+-------------------------------------+------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | Coverage      | SIM_CODE_COVERAGE_V2                | Complete   | Coverage results available in nightly regression run.                                                                                                                |
@@ -97,7 +97,7 @@ V2 Checklist
 +---------------+-------------------------------------+------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | Coverage      | FPV_COI_COVERAGE_V2                 | N/A        | No formal applied for non-security features in Ibex.                                                                                                                 |
 +---------------+-------------------------------------+------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| Integration   | PRE_VERIFIED_SUB_MODULES_V2         | Complete   | ICache is verified in a seperate testbench.                                                                                                                          |
+| Integration   | PRE_VERIFIED_SUB_MODULES_V2         | Complete   | ICache is verified in a separate testbench.                                                                                                                          |
 +---------------+-------------------------------------+------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | Issues        | NO_HIGH_PRIORITY_ISSUES_PENDING     | Complete   |                                                                                                                                                                      |
 +---------------+-------------------------------------+------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -136,7 +136,7 @@ V2S Checklist
 Ibex SEC_CM Test Mapping
 ------------------------
 
-The :ref:`security features Ibex implements <security>` are given specific security countermeasure names in OpenTitan (see 'Security Countermeasures' in the `Hardware Interfaces <https://docs.opentitan.org/hw/ip/rv_core_ibex/doc/#hardware-interfaces>`_ documentation section).
+The :ref:`security features Ibex implements <security>` are given specific security countermeasure names in OpenTitan (see 'Security Countermeasures' in the `Comportability Definition and Specification <https://opentitan.org/book/doc/contributing/hw/comportability/index.html#security-countermeasures>`_ documentation section).
 Each countermeasure has a test that exercises it.
 The mapping between countermeasures and tests is given below
 
@@ -178,7 +178,7 @@ The mapping between countermeasures and tests is given below
 |                                | This test produces double faults, which are checked by an assertion.                                                                                                                                                                                                                                       |
 |                                | ``chip_sw_rv_core_ibex_double_fault`` top-level test in OpenTitan demonstrates escalation on a double fault                                                                                                                                                                                                |
 +--------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-| ICACHE.MEM.SCRAMBLE            | No explicit testing, the scrambling memory primitive is seperately verified within OpenTitan.                                                                                                                                                                                                              |
+| ICACHE.MEM.SCRAMBLE            | No explicit testing, the scrambling memory primitive is separately verified within OpenTitan.                                                                                                                                                                                                              |
 |                                | Assertions in the OpenTitan specific ``rv_core_ibex`` wrapper ensure a newly requested scramble key is correctly applied to the scrambling memories.                                                                                                                                                       |
 |                                | The ``rv_core_ibex_icache_invalidate_test`` OpenTitan top-level test covers assertions within the OpenTitan specific ``rv_core_ibex`` wrapper that check that a ``FENCE.I`` results in an icache scramble key request and that the returned key is correctly supplied to the scrambling memory primitives. |
 +--------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+

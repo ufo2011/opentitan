@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 r"""Parses lint report and dump filtered messages in hjson format.
@@ -62,11 +62,12 @@ def main():
 
     # Patterns for ascentlint.log
     parser_args.update({
-        args.repdir.joinpath('lint-ascentlint/ascentlint.log'): [
+        args.repdir.joinpath('fusesoc-work/ascentlint.log'): [
             ("flow_error", r"^FlexNet Licensing error.*"),
             ("flow_error", r"^Error: .*"),
             ("flow_error", r"^ERROR.*"),
             ("flow_error", r"^  ERR .*"),
+            ("flow_info", r"^Warning: License will expire.*"),
             ("flow_warning", r"^Warning: .*"),
             # TODO: struct assignment labels within concatenation
             # not supported. check with newer ascentlint version.
@@ -76,7 +77,7 @@ def main():
 
     # Patterns for ascentlint.rpt
     parser_args.update({
-        args.repdir.joinpath('lint-ascentlint/ascentlint.rpt'): [
+        args.repdir.joinpath('fusesoc-work/ascentlint.rpt'): [
             ("lint_error", r"^E  .*"),
             ("lint_warning", r"^W  .*"),
             ("lint_info", r"^I  .*")

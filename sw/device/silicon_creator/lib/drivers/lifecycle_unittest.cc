@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,12 +7,14 @@
 #include <array>
 
 #include "gtest/gtest.h"
+#include "hw/top/dt/api.h"
+#include "hw/top/dt/lc_ctrl.h"
+#include "sw/device/lib/base/hardened.h"
 #include "sw/device/silicon_creator/lib/base/mock_sec_mmio.h"
 #include "sw/device/silicon_creator/lib/error.h"
 #include "sw/device/silicon_creator/testing/rom_test.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "lc_ctrl_regs.h"
+#include "hw/top/lc_ctrl_regs.h"
 
 namespace lifecycle_unittest {
 namespace {
@@ -20,7 +22,7 @@ using ::testing::ElementsAreArray;
 
 class LifecycleTest : public rom_test::RomTest {
  protected:
-  uint32_t base_ = TOP_EARLGREY_LC_CTRL_BASE_ADDR;
+  uint32_t base_ = dt_lc_ctrl_primary_reg_block(kDtLcCtrl);
   rom_test::MockSecMmio mmio_;
 };
 
@@ -47,19 +49,41 @@ TEST_F(LifecycleTest, DeviceId) {
 }
 
 TEST_F(LifecycleTest, HwRev) {
-  uint16_t exp_chip_gen = 0xa5;
-  uint16_t exp_chip_rev = 0xc3;
+  uint16_t exp_silicon_creator_id = 0xa5;
+  uint16_t exp_product_id = 0xc3;
+  uint8_t exp_revision_id = 0x96;
 
-  EXPECT_SEC_READ32(base_ + LC_CTRL_HW_REV_REG_OFFSET,
-                    {
-                        {LC_CTRL_HW_REV_CHIP_GEN_OFFSET, exp_chip_gen},
-                        {LC_CTRL_HW_REV_CHIP_REV_OFFSET, exp_chip_rev},
-                    });
+  EXPECT_SEC_READ32(
+      base_ + LC_CTRL_HW_REVISION0_REG_OFFSET,
+      {
+          {LC_CTRL_HW_REVISION0_SILICON_CREATOR_ID_OFFSET,
+           exp_silicon_creator_id},
+          {LC_CTRL_HW_REVISION0_PRODUCT_ID_OFFSET, exp_product_id},
+      });
+  EXPECT_SEC_READ32(
+      base_ + LC_CTRL_HW_REVISION1_REG_OFFSET,
+      {
+          {LC_CTRL_HW_REVISION1_REVISION_ID_OFFSET, exp_revision_id},
+      });
 
   lifecycle_hw_rev_t hw_rev;
   lifecycle_hw_rev_get(&hw_rev);
-  EXPECT_EQ(hw_rev.chip_gen, exp_chip_gen);
-  EXPECT_EQ(hw_rev.chip_rev, exp_chip_rev);
+  EXPECT_EQ(hw_rev.silicon_creator_id, exp_silicon_creator_id);
+  EXPECT_EQ(hw_rev.product_id, exp_product_id);
+  EXPECT_EQ(hw_rev.revision_id, exp_revision_id);
+}
+
+TEST_F(LifecycleTest, DinEq) {
+  lifecycle_device_id_t device_id = {
+      .device_id = {0, 0x12345678, 0x9abcdef0, 0, 0, 0, 0, 0},
+  };
+  uint32_t matching_din[2] = {0x12345678, 0x9abcdef0};
+  uint32_t mismatch_din[2] = {0x12345678, 0x00000000};
+  uint32_t mismatch_din2[2] = {0x00000000, 0x9abcdef0};
+
+  EXPECT_EQ(lifecycle_din_eq(&device_id, matching_din), kHardenedBoolTrue);
+  EXPECT_EQ(lifecycle_din_eq(&device_id, mismatch_din), kHardenedBoolFalse);
+  EXPECT_EQ(lifecycle_din_eq(&device_id, mismatch_din2), kHardenedBoolFalse);
 }
 
 struct ValidStateTestCase {
@@ -71,6 +95,10 @@ struct ValidStateTestCase {
    * Value returned by software.
    */
   lifecycle_state_t sw_state;
+  /**
+   * Whether the state is prod / prod_end.
+   */
+  hardened_bool_t is_prod;
 };
 
 class LifecycleValidStates
@@ -82,54 +110,71 @@ TEST_P(LifecycleValidStates, ValidState) {
   EXPECT_EQ(lifecycle_state_get(), GetParam().sw_state);
 }
 
+TEST_P(LifecycleValidStates, LifecycleIsProd) {
+  EXPECT_SEC_READ32(base_ + LC_CTRL_LC_STATE_REG_OFFSET, GetParam().hw_state);
+  EXPECT_EQ(lifecycle_is_prod(), GetParam().is_prod);
+}
+
 constexpr std::array<ValidStateTestCase, 12> kValidStateTestCases{{
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_TEST_UNLOCKED0,
         .sw_state = kLcStateTest,
+        .is_prod = kHardenedBoolFalse,
     },
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_TEST_UNLOCKED1,
         .sw_state = kLcStateTest,
+        .is_prod = kHardenedBoolFalse,
     },
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_TEST_UNLOCKED2,
         .sw_state = kLcStateTest,
+        .is_prod = kHardenedBoolFalse,
     },
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_TEST_UNLOCKED3,
         .sw_state = kLcStateTest,
+        .is_prod = kHardenedBoolFalse,
     },
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_TEST_UNLOCKED4,
         .sw_state = kLcStateTest,
+        .is_prod = kHardenedBoolFalse,
     },
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_TEST_UNLOCKED5,
         .sw_state = kLcStateTest,
+        .is_prod = kHardenedBoolFalse,
     },
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_TEST_UNLOCKED6,
         .sw_state = kLcStateTest,
+        .is_prod = kHardenedBoolFalse,
     },
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_TEST_UNLOCKED7,
         .sw_state = kLcStateTest,
+        .is_prod = kHardenedBoolFalse,
     },
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_DEV,
         .sw_state = kLcStateDev,
+        .is_prod = kHardenedBoolFalse,
     },
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_PROD,
         .sw_state = kLcStateProd,
+        .is_prod = kHardenedBoolTrue,
     },
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_PROD_END,
         .sw_state = kLcStateProdEnd,
+        .is_prod = kHardenedBoolTrue,
     },
     {
         .hw_state = LC_CTRL_LC_STATE_STATE_VALUE_RMA,
         .sw_state = kLcStateRma,
+        .is_prod = kHardenedBoolFalse,
     },
 }};
 
@@ -143,7 +188,7 @@ TEST_P(LifecycleDeathTest, InvalidState) {
   EXPECT_DEATH(
       {
         EXPECT_SEC_READ32(base_ + LC_CTRL_LC_STATE_REG_OFFSET, GetParam());
-        lifecycle_state_get();
+        OT_DISCARD(lifecycle_state_get());
       },
       "");
 }

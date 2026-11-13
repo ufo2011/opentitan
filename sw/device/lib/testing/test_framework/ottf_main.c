@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,24 +10,31 @@
 #include "external/freertos/include/FreeRTOS.h"
 #include "external/freertos/include/queue.h"
 #include "external/freertos/include/task.h"
+#include "hw/top/dt/rstmgr.h"
+#include "hw/top/dt/rv_core_ibex.h"
 #include "sw/device/lib/arch/device.h"
 #include "sw/device/lib/base/macros.h"
+#include "sw/device/lib/base/mmio.h"
+#include "sw/device/lib/coverage/api.h"
 #include "sw/device/lib/dif/dif_base.h"
+#include "sw/device/lib/dif/dif_rstmgr.h"
 #include "sw/device/lib/dif/dif_rv_core_ibex.h"
-#include "sw/device/lib/dif/dif_uart.h"
 #include "sw/device/lib/runtime/hart.h"
 #include "sw/device/lib/runtime/log.h"
-#include "sw/device/lib/runtime/print.h"
 #include "sw/device/lib/testing/rand_testutils.h"
 #include "sw/device/lib/testing/test_framework/FreeRTOSConfig.h"
 #include "sw/device/lib/testing/test_framework/check.h"
-#include "sw/device/lib/testing/test_framework/coverage.h"
-#include "sw/device/lib/testing/test_framework/ottf_flow_control.h"
+#include "sw/device/lib/testing/test_framework/ottf_console.h"
+#include "sw/device/lib/testing/test_framework/ottf_isrs.h"
+#include "sw/device/lib/testing/test_framework/ottf_test_config.h"
 #include "sw/device/lib/testing/test_framework/status.h"
 #include "sw/device/silicon_creator/lib/manifest_def.h"
 
-// TODO: make this toplevel agnostic.
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
+#define MODULE_ID MAKE_MODULE_ID('o', 't', 'm')
+
+#if OPENTITAN_HAS_ALERT_HANDLER
+#include "sw/device/lib/testing/test_framework/ottf_alerts.h"
+#endif  // OPENTITAN_HAS_ALERT_HANDLER
 
 // Check layout of test configuration struct since OTTF ISR asm code requires a
 // specific layout.
@@ -39,15 +46,12 @@ OT_ASSERT_MEMBER_SIZE(ottf_test_config_t, enable_concurrency, 1);
 // tasks.
 extern void *pxCurrentTCB;
 
-// UART for communication with host.
-static dif_uart_t uart0;
-
 // A global random number generator testutil handle.
 rand_testutils_rng_t rand_testutils_rng_ctx;
 
 // The OTTF overrides the default machine ecall exception handler to implement
 // FreeRTOS context switching, required for supporting cooperative scheduling.
-void ottf_machine_ecall_handler(void) {
+void ottf_machine_ecall_handler(uint32_t *exc_info) {
   if (pxCurrentTCB != NULL) {
     // If the pointer to the current TCB is not NULL, we are operating in
     // concurrency mode. In this case, our default behavior is to assume a
@@ -79,31 +83,63 @@ char *ottf_task_get_self_name(void) {
   return pcTaskGetName(/*xTaskToQuery=*/NULL);
 }
 
-static void init_uart(void) {
-  CHECK_DIF_OK(dif_uart_init(
-      mmio_region_from_addr(TOP_EARLGREY_UART0_BASE_ADDR), &uart0));
-  CHECK_DIF_OK(
-      dif_uart_configure(&uart0, (dif_uart_config_t){
-                                     .baudrate = kUartBaudrate,
-                                     .clk_freq_hz = kClockFreqPeripheralHz,
-                                     .parity_enable = kDifToggleDisabled,
-                                     .parity = kDifUartParityEven,
-                                     .tx_enable = kDifToggleEnabled,
-                                     .rx_enable = kDifToggleEnabled,
-                                 }));
-  base_uart_stdout(&uart0);
+/* Array holding the report statuses.
+ *
+ * This is a weak symbol which means that the test can override it to change its
+ * size. For this reason, it is important to NOT use its size anywhere. To avoid
+ * any errors, we define it at the bottom of the file so the rest the code uses
+ * this declaration that has no size.
+ */
+extern const size_t kStatusReportListSize;
+extern status_t status_report_list[];
+// This is the count for the number of statuses that have been reported so far.
+// Warning: this may be greater than kStatusReportListSize! When that happens,
+// we simply overwrite previous values (modulo kStatusReportListSize).
+static size_t status_report_list_cnt = 0;
+
+// Override the status report function to store it in the array above.
+void status_report(status_t status) {
+  // In case of overflow, we overwrite previous values.
+  status_report_list[status_report_list_cnt % kStatusReportListSize] = status;
+  status_report_list_cnt++;
 }
 
 static void report_test_status(bool result) {
   // Reinitialize UART before print any debug output if the test clobbered it.
   if (kDeviceType != kDeviceSimDV) {
-    if (kOttfTestConfig.can_clobber_uart) {
-      init_uart();
+    if (kOttfTestConfig.console.test_may_clobber) {
+      ottf_console_init();
     }
-    LOG_INFO("Finished %s", kOttfTestConfig.file);
+    if (!kOttfTestConfig.silence_console_prints) {
+      LOG_INFO("Finished %s", kOttfTestConfig.file);
+    }
+  }
+  // Print the reported status in case of error. Beware that
+  // status_report_list_cnt might be greater than kStatusReportListSize which
+  // means we had to overwrite values.
+  if (!kOttfTestConfig.silence_console_prints) {
+    if (!result) {
+      LOG_INFO("Status reported by the test:");
+      // Handle overflow.
+      size_t print_cnt = status_report_list_cnt;
+      if (status_report_list_cnt > kStatusReportListSize) {
+        print_cnt = kStatusReportListSize;
+      }
+      // We print the list backwards like a stack (last report event first).
+      for (size_t i = 1; i <= print_cnt; i++) {
+        size_t idx = (status_report_list_cnt - i) % kStatusReportListSize;
+        LOG_INFO("- %r", status_report_list[idx]);
+      }
+      // Warn about overflow.
+      if (status_report_list_cnt > kStatusReportListSize) {
+        LOG_INFO(
+            "Some statuses have been lost due to the limited size of the "
+            "list.");
+      }
+    }
   }
 
-  coverage_send_buffer();
+  coverage_report();
   test_status_set(result ? kTestStatusPassed : kTestStatusFailed);
 }
 
@@ -118,26 +154,41 @@ static void test_wrapper(void *task_parameters) {
   report_test_status(result);
 }
 
-dif_uart_t *ottf_console(void) { return &uart0; }
-
 void _ottf_main(void) {
   test_status_set(kTestStatusInTest);
 
-  // Initialize the UART to enable logging for non-DV simulation platforms.
-  if (kDeviceType != kDeviceSimDV) {
-    init_uart();
-    if (kOttfTestConfig.enable_uart_flow_control) {
-      ottf_flow_control_enable();
-    }
-    LOG_INFO("Running %s", kOttfTestConfig.file);
+  // Clear reset reason register.
+  dif_rstmgr_t rstmgr;
+  CHECK_DIF_OK(dif_rstmgr_init_from_dt(kDtRstmgr, &rstmgr));
+  if (kOttfTestConfig.clear_reset_reason) {
+    CHECK_DIF_OK(dif_rstmgr_reset_info_clear(&rstmgr));
   }
+
+  // Initialize the global rv_plic DIF context for interrupts.
+  // This needs to happen before ottf_console_init.
+  CHECK_DIF_OK(dif_rv_plic_init_from_dt(kDtRvPlic, &ottf_plic));
+
+  // Initialize the console to enable logging for non-DV simulation platforms.
+  if (kDeviceType != kDeviceSimDV) {
+    ottf_console_init();
+    if (!kOttfTestConfig.silence_console_prints) {
+      LOG_INFO("Running %s", kOttfTestConfig.file);
+    }
+  }
+
+#if OPENTITAN_HAS_ALERT_HANDLER
+  if (!kOttfTestConfig.ignore_alerts) {
+    if (!kOttfTestConfig.silence_console_prints) {
+      LOG_INFO("Enabling OTTF alert catcher");
+    }
+    CHECK_STATUS_OK(ottf_alerts_enable_all());
+  }
+#endif  // OPENTITAN_HAS_ALERT_HANDLER
 
   // Initialize a global random number generator testutil context to provide
   // tests with a source of entropy for randomizing test behaviors.
   dif_rv_core_ibex_t rv_core_ibex;
-  CHECK_DIF_OK(dif_rv_core_ibex_init(
-      mmio_region_from_addr(TOP_EARLGREY_RV_CORE_IBEX_CFG_BASE_ADDR),
-      &rv_core_ibex));
+  CHECK_DIF_OK(dif_rv_core_ibex_init_from_dt(kDtRvCoreIbex, &rv_core_ibex));
   rand_testutils_rng_ctx = rand_testutils_init(&rv_core_ibex);
 
   // Run the test.
@@ -145,7 +196,7 @@ void _ottf_main(void) {
     // Run `test_main()` in a FreeRTOS task, allowing other FreeRTOS tasks to
     // be spawned, if requested in the main test task. Note, we spawn the main
     // test task at a priority level of 0.
-    ottf_task_create(test_wrapper, "test_main", kOttfFreeRtosMinStackSize, 0);
+    ottf_task_create(test_wrapper, "test_main", /*task_stack_depth=*/1024, 0);
     vTaskStartScheduler();
   } else {
     // Otherwise, launch `test_main()` on bare-metal.
@@ -155,3 +206,9 @@ void _ottf_main(void) {
   // Unreachable.
   CHECK(false);
 }
+
+/* Actual declaration of the weak report list. See comment above for context. */
+#define OTTF_STATUS_REPORT_DEFAULT_LIST_SIZE 10
+OT_WEAK const size_t kStatusReportListSize =
+    OTTF_STATUS_REPORT_DEFAULT_LIST_SIZE;
+OT_WEAK status_t status_report_list[OTTF_STATUS_REPORT_DEFAULT_LIST_SIZE];

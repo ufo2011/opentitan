@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,14 +8,30 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "sw/device/lib/base/status.h"
 #include "sw/device/lib/testing/usb_testutils.h"
+
+// DPI test numbers
+typedef enum usb_testutils_test_number {
+  kUsbTestNumberSmoke = 0,
+  kUsbTestNumberStreams,
+  kUsbTestNumberIso,
+  kUsbTestNumberMixed,
+  kUsbTestNumberSuspend,
+  kUsbTestNumberExc,
+  kUsbTestNumberPinCfg,
+} usb_testutils_test_number_t;
 
 typedef enum usb_testutils_ctstate {
   kUsbTestutilsCtIdle,
   kUsbTestutilsCtWaitIn,      // Queued IN data stage, waiting ack
   kUsbTestutilsCtStatOut,     // Waiting for OUT status stage
-  kUsbTestutilsCtAddrStatIn,  // Queued status stage, waiting ack.
-                              // After which, set dev_addr
+  kUsbTestutilsCtAddrStatIn,  // Queued Status stage of SET_ADDRESS; awaiting
+                              // host acknowledgement, after which the device
+                              // address will be set.
+  kUsbTestutilsCtCfgStatIn,   // Queued Status stage of SET_CONFIGURATION;
+                              // awaiting acknowledgement from host, after which
+                              // the new Configuration will be selected.
   kUsbTestutilsCtStatIn,      // Queued status stage, waiting ack
   kUsbTestutilsCtError        // Something bad
 } usb_testutils_ctstate_t;
@@ -31,10 +47,20 @@ typedef enum usb_testutils_device_state {
 
 typedef struct usb_testutils_controlep_ctx {
   usb_testutils_ctx_t *ctx;
-  int ep;
+  uint8_t ep;
   usb_testutils_ctstate_t ctrlstate;
   usb_testutils_device_state_t device_state;
-  uint32_t new_dev;
+  /**
+   * New Device Address, to be set upon successful Status stage
+   */
+  uint8_t new_dev;
+  /**
+   * New Device Configuration, to be set upon successful Status stage
+   */
+  uint8_t new_config;
+  /**
+   * Current Device Configuration
+   */
   uint8_t usb_config;
   /**
    * USB configuration descriptor
@@ -58,12 +84,26 @@ typedef struct usb_testutils_controlep_ctx {
  * @param cfg_dscr_len length of cfg_dscr
  * @param test_dscr optional test descriptor, or NULL
  * @param test_dscr_len length of test_dscr
+ * @return The result of the operation
  */
-void usb_testutils_controlep_init(usb_testutils_controlep_ctx_t *ctctx,
-                                  usb_testutils_ctx_t *ctx, int ep,
-                                  const uint8_t *cfg_dscr, size_t cfg_dscr_len,
-                                  const uint8_t *test_dscr,
-                                  size_t test_dscr_len);
+OT_WARN_UNUSED_RESULT
+status_t usb_testutils_controlep_init(usb_testutils_controlep_ctx_t *ctctx,
+                                      usb_testutils_ctx_t *ctx, uint8_t ep,
+                                      const uint8_t *cfg_dscr,
+                                      size_t cfg_dscr_len,
+                                      const uint8_t *test_dscr,
+                                      size_t test_dscr_len);
+
+/**
+ * Wait until the device configuration has been set by the host.
+ *
+ * @param ctctx uninitialized context for this instance.
+ * @param ctx initialized context for usbdev driver.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+status_t usb_testutils_controlep_config_wait(
+    usb_testutils_controlep_ctx_t *ctctx, usb_testutils_ctx_t *ctx);
 
 /***********************************************************************/
 /* Below this point are macros used to construct the USB configuration */
@@ -72,14 +112,14 @@ void usb_testutils_controlep_init(usb_testutils_controlep_ctx_t *ctctx,
 #define USB_CFG_DSCR_LEN 9
 #define USB_CFG_DSCR_HEAD(total_len, nint)                                   \
   /* This is the actual configuration descriptor                 */          \
-  USB_CFG_DSCR_LEN,     /* bLength                                   */      \
-      2,                /* bDescriptorType                           */      \
-      (total_len)&0xff, /* wTotalLength[0]                           */      \
-      (total_len) >> 8, /* wTotalLength[1]                           */      \
-      (nint),           /* bNumInterfaces                            */      \
-      1,                /* bConfigurationValue                       */      \
-      0,                /* iConfiguration                            */      \
-      0xC0,             /* bmAttributes: must-be-one, self-powered   */      \
+  USB_CFG_DSCR_LEN,       /* bLength                                   */    \
+      2,                  /* bDescriptorType                           */    \
+      (total_len) & 0xff, /* wTotalLength[0]                           */    \
+      (total_len) >> 8,   /* wTotalLength[1]                           */    \
+      (nint),             /* bNumInterfaces                            */    \
+      1,                  /* bConfigurationValue                       */    \
+      0,                  /* iConfiguration                            */    \
+      0xC0,               /* bmAttributes: must-be-one, self-powered   */    \
       50 /* bMaxPower                                 */ /* MUST be followed \
                                                             by (nint)        \
                                                             Interface +      \
@@ -112,7 +152,7 @@ void usb_testutils_controlep_init(usb_testutils_controlep_ctx_t *ctctx,
       5,                           /* bDescriptorType                      */ \
       (ep) | (((in) << 7) & 0x80), /* bEndpointAddress, top bit set for IN */ \
       attr,                        /* bmAttributes                         */ \
-      (maxsize)&0xff,              /* wMaxPacketSize[0]                    */ \
+      (maxsize) & 0xff,            /* wMaxPacketSize[0]                    */ \
       (maxsize) >> 8,              /* wMaxPacketSize[1]                    */ \
       (interval)                   /* bInterval                            */
 
@@ -122,8 +162,8 @@ void usb_testutils_controlep_init(usb_testutils_controlep_ctx_t *ctctx,
   USB_EP_DSCR_LEN,                 /* bLength                              */ \
       5,                           /* bDescriptorType                      */ \
       (ep) | (((in) << 7) & 0x80), /* bEndpointAddress, top bit set for IN */ \
-      0x02,                        /* bmAttributes (0x02=bulk, data)       */ \
-      (maxsize)&0xff,              /* wMaxPacketSize[0]                    */ \
+      kUsbTransferTypeBulk,        /* bmAttributes (0x02=bulk, data)       */ \
+      (maxsize) & 0xff,            /* wMaxPacketSize[0]                    */ \
       (maxsize) >> 8,              /* wMaxPacketSize[1]                    */ \
       (interval)                   /* bInterval                            */
 
@@ -133,14 +173,14 @@ void usb_testutils_controlep_init(usb_testutils_controlep_ctx_t *ctctx,
 /* Below this point are macros used to construct the test descriptor   */
 /* Use them to initialize a uint8_t array for test_dscr                */
 #define USB_TESTUTILS_TEST_DSCR_LEN 0x10u
-#define USB_TESTUTILS_TEST_DSCR(num, arg0, arg1, arg2, arg3)            \
-  0x7e, 0x57, 0xc0, 0xf1u,                /* Header signature        */ \
-      (USB_TESTUTILS_TEST_DSCR_LEN)&0xff, /* Descriptor length[0]    */ \
-      (USB_TESTUTILS_TEST_DSCR_LEN) >> 8, /* Descriptor length[1]    */ \
-      (num)&0xff,                         /* Test number[0]          */ \
-      (num) >> 8,                         /* Test number[1]          */ \
-      (arg0), (arg1), (arg2), (arg3),     /* Test-specific arugments */ \
-      0x1fu, 0x0cu, 0x75, 0xe7u           /* Tail signature */
+#define USB_TESTUTILS_TEST_DSCR(num, arg0, arg1, arg2, arg3)              \
+  0x7e, 0x57, 0xc0, 0xf1u,                  /* Header signature        */ \
+      (USB_TESTUTILS_TEST_DSCR_LEN) & 0xff, /* Descriptor length[0]    */ \
+      (USB_TESTUTILS_TEST_DSCR_LEN) >> 8,   /* Descriptor length[1]    */ \
+      (num) & 0xff,                         /* Test number[0]          */ \
+      (num) >> 8,                           /* Test number[1]          */ \
+      (arg0), (arg1), (arg2), (arg3),       /* Test-specific arugments */ \
+      0x1fu, 0x0cu, 0x75, 0xe7u             /* Tail signature */
 
 // KEEP BLANK LINE ABOVE, it is in the macro!
 

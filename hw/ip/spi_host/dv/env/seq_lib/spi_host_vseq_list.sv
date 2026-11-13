@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 `include "spi_host_tx_rx_vseq.sv"
 `include "spi_host_smoke_vseq.sv"
 `include "spi_host_speed_vseq.sv"
+`include "spi_host_upper_range_clkdiv_vseq.sv"
 `include "spi_host_event_vseq.sv"
 `include "spi_host_performance_vseq.sv"
 `include "spi_host_sw_reset_vseq.sv"

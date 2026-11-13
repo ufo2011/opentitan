@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,18 +22,14 @@ package spi_device_env_pkg;
 
   // local parameters and types
   typedef enum {
-    RxFifoFull,
-    RxFifoGeLevel,
-    TxFifoLtLevel,
-    RxFwModeErr,
-    RxFifoOverflow,
-    TxFifoUnderflow,
     CmdFifoNotEmpty,
     PayloadNotEmpty,
     PayloadOverflow,
     ReadbufWatermark,
     ReadbufFlip,
     TpmHeaderNotEmpty,
+    TpmRdFifoCmdEnd,
+    TpmRdFifoDrop,
     NumSpiDevIntr
   } spi_device_intr_e;
 
@@ -48,7 +44,7 @@ package spi_device_env_pkg;
   } tpm_cfg_mode_e;
 
   typedef enum {
-    GenericMode,
+    DisabledMode,
     FlashMode,
     PassthroughMode
   } device_mode_e;
@@ -74,11 +70,14 @@ package spi_device_env_pkg;
 
   // alerts
   parameter uint NUM_ALERTS = 1;
-  parameter string LIST_OF_ALERTS[] = {"fatal_fault"};
+  parameter string LIST_OF_ALERTS[NUM_ALERTS] = {"fatal_fault"};
 
-  // SPI SRAM is 2kB
+  // SPI SRAM is 4kB
   parameter uint SRAM_OFFSET                     = 'h1000;
-  parameter uint SRAM_SIZE                       = 4096; // 672 depth
+  parameter uint SRAM_SIZE                       = 4096;
+  parameter uint SRAM_EGRESS_SIZE                = 2048 + 1024 + 256 + 64; // 848 depth
+  parameter uint SRAM_FLASH_EGRESS_SIZE          = 2048 + 1024 + 256;  // 832 depth
+  parameter uint SRAM_INGRESS_SIZE               = 256 + 64 + 64 + 64; // 112 depth
   parameter uint SRAM_MSB                        = $clog2(SRAM_SIZE) - 1;
   parameter uint SRAM_PTR_PHASE_BIT              = SRAM_MSB + 1;
   parameter uint SRAM_WORD_SIZE                  = 4;
@@ -94,11 +93,6 @@ package spi_device_env_pkg;
   parameter uint SFDP_SIZE                       = 256;
   parameter uint PAYLOAD_FIFO_START_ADDR         = SFDP_START_ADDR + SFDP_SIZE; // 0xd00
   parameter uint PAYLOAD_FIFO_SIZE               = 256;
-  // CMD_FIFO_START_ADDR is 0xe00
-  parameter uint CMD_FIFO_START_ADDR             = PAYLOAD_FIFO_START_ADDR + PAYLOAD_FIFO_SIZE;
-  parameter uint CMD_FIFO_SIZE                   = 32;
-  parameter uint ADDR_FIFO_START_ADDR            = CMD_FIFO_START_ADDR + CMD_FIFO_SIZE; // 0xe20
-  parameter uint ADDR_FIFO_SIZE                  = 32;
 
   parameter uint FW_FLASH_CSB_ID                 = 0; // for both FW and flash/passthrough mode
   parameter uint TPM_CSB_ID                      = 1;
@@ -164,6 +158,8 @@ package spi_device_env_pkg;
   parameter bit[7:0] INTERNAL_PROCESS_CMD_LIST[] = {`ALL_INTERNAL_PROCESS_CMDS};
 
   string msg_id = "spi_device_env_pkg";
+
+  string sck_committed_status_path =  "tb.dut.u_spid_status.sck_status_committed";
 
   // functions
   // get size of empty space in mem

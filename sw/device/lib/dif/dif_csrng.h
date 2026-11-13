@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 
 /**
  * @file
- * @brief <a href="/hw/ip/csrng/doc/">CSRNG</a> Device Interface Functions
+ * @brief <a href="/book/hw/ip/csrng/">CSRNG</a> Device Interface Functions
  */
 
 #include <stdint.h>
@@ -16,6 +16,7 @@
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_base.h"
 
+#include "hw/top/csrng_regs.h"  // Generated
 #include "sw/device/lib/dif/autogen/dif_csrng_autogen.h"
 
 #ifdef __cplusplus
@@ -59,7 +60,7 @@ extern "C" {
  * - `dif_csrng_get_output_status()`
  *
  * Please see the following documentation for more information:
- * https://docs.opentitan.org/hw/ip/csrng/doc/
+ * https://opentitan.org/book/hw/ip/csrng/
  *
  * Remaining work:
  *
@@ -92,19 +93,6 @@ typedef enum dif_csrng_cmd_status_kind {
 typedef enum dif_csrng_fifo {
   kDifCsrngFifoCmd,
   kDifCsrngFifoGenBits,
-  kDifCsrngFifoCmdReq,
-  kDifCsrngFifoRcStage,
-  kDifCsrngFifoKeyVrc,
-  kDifCsrngFifoUpdateReq,
-  kDifCsrngFifoBencRec,
-  kDifCsrngFifoBencAck,
-  kDifCsrngFifoPData,
-  kDifCsrngFifoFinal,
-  kDifCsrngFifoGBencAck,
-  kDifCsrngFifoGrcStage,
-  kDifCsrngFifoGGenReq,
-  kDifCsrngFifoGadStage,
-  kDifCsrngFifoBlockEnc,
 } dif_csrng_fifo_t;
 
 /**
@@ -120,31 +108,23 @@ typedef enum dif_csrng_error {
    */
   kDifCsrngErrorMainSm,
   /**
-   * Indicates an error in the DRBG's generator state machine.
+   * Indicates an error in the CTR_DRBG data path state machine.
    */
-  kDifCsrngErrorDrbgGenSm,
-  /**
-   * Indicates an error in the DRBG's block encoding state machine.
-   */
-  kDifCsrngErrorDrbgUpdateBlockEncSm,
-  /**
-   * Indicates an error in the DRBG's block output state machine.
-   */
-  kDifCsrngErrorDrbgUpdateOutBlockSm,
+  kDifCsrngErrorCtrDrbgSm,
   /**
    * Indicates an error in the AES state machine.
    */
   kDifCsrngErrorAesSm,
   /**
-   * Indicates an error in the generate command's counter.
+   * Indicates an error in one of the counters.
    */
-  kDifCsrngErrorGenerateCmdCounter,
+  kDifCsrngErrorCounters,
   /**
-   * Indicates a write to a full FIFO occured.
+   * Indicates a write to a full FIFO occurred.
    */
   kDifCsrngErrorFifoWrite,
   /**
-   * Indicates a read from an empty FIFO occured.
+   * Indicates a read from an empty FIFO occurred.
    */
   kDifCsrngErrorFifoRead,
   /**
@@ -152,6 +132,36 @@ typedef enum dif_csrng_error {
    */
   kDifCsrngErrorFifoFullAndEmpty,
 } dif_csrng_error_t;
+
+/**
+ * Enumeration of CSRNG command status errors.
+ */
+typedef enum dif_csrng_cmd_sts_error {
+  /**
+   * Indicates that the command completed successfully.
+   */
+  kDifCsrngCmdStsSuccess = 0,
+  /**
+   * Indicates that an invalid apllication command has been issued.
+   */
+  kDifCsrngCmdStsInvalidAcmd = 1,
+  /**
+   * Indicates that the state wasn't zeroized properly after an uninstantiate
+   * command due to invalid state parameters in the cmd drbg.
+   */
+  kDifCsrngCmdStsInvalidStateParams = 2,
+  /**
+   * Indicates that CSRNG entropy was generated for a command that is not a
+   * generate command.
+   */
+  kDifCsrngCmdStsInvalidCtrDrbgCmd = 3,
+  /**
+   * Indicates that last command was not issued in sequence.
+   * E.g. an instantiate on an instantiated state or any command other than an
+   * instantiate on an uninstantiated state.
+   */
+  kDifCsrngCmdStsInvalidCmdSeq = 4,
+} dif_csrng_cmd_sts_t;
 
 /**
  * The status of the CSRNG block at a particular moment in time.
@@ -162,14 +172,9 @@ typedef struct dif_csrng_cmd_status {
    */
   dif_csrng_cmd_status_kind_t kind;
   /**
-   * A bitset of FIFOs in an unhealthy state, with bit indices given by
-   * `dif_csrng_fifo_t`.
+   * The status value CSRNG returns.
    */
-  uint32_t unhealthy_fifos;
-  /**
-   * A bitset of errors, with bit indices given by `dif_csrng_error_t`.
-   */
-  uint32_t errors;
+  dif_csrng_cmd_sts_t cmd_sts;
 } dif_csrng_cmd_status_t;
 
 /**
@@ -286,22 +291,86 @@ typedef enum dif_csrng_recoverable_alert {
    * Indicates a bad value was written to the ENABLE field of the control
    * register.
    */
-  kDifCsrngRecoverableAlertBadEnable,
+  kDifCsrngRecoverableAlertBadEnable =
+      1U << CSRNG_RECOV_ALERT_STS_ENABLE_FIELD_ALERT_BIT,
   /**
    * Indicates a bad value was written to the SW_APP_ENABLE field of the control
    * register.
    */
-  kDifCsrngRecoverableAlertBadSwAppEnable,
+  kDifCsrngRecoverableAlertBadSwAppEnable =
+      1U << CSRNG_RECOV_ALERT_STS_SW_APP_ENABLE_FIELD_ALERT_BIT,
   /**
    * Indicates a bad value was written to the READ_INT_STATE field of the
    * control register.
    */
-  kDifCsrngRecoverableAlertBadIntState,
+  kDifCsrngRecoverableAlertBadIntState =
+      1U << CSRNG_RECOV_ALERT_STS_READ_INT_STATE_FIELD_ALERT_BIT,
+  /**
+   * Indicates a bad value was written to the WRITE_INT_STATE field of the
+   * control register.
+   */
+  kDifCsrngRecoverableAlertBadWriteIntState =
+      1U << CSRNG_RECOV_ALERT_STS_WRITE_INT_STATE_FIELD_ALERT_BIT,
+  /**
+   * Indicates a bad value was written to the FIPS_FORCE_ENABLE field of the
+   * control register.
+   */
+  kDifCsrngRecoverableAlertBadFipsForceEnable =
+      1U << CSRNG_RECOV_ALERT_STS_FIPS_FORCE_ENABLE_FIELD_ALERT_BIT,
+  /**
+   * Indicates the FLAG0 field in the Application Command is set to a value
+   * other than kMultiBitBool4True or kMultiBitBool4False.
+   */
+  kDifCsrngRecoverableAlertBadFlag0 =
+      1U << CSRNG_RECOV_ALERT_STS_ACMD_FLAG0_FIELD_ALERT_BIT,
+  /**
+   * Indicates a Generate command abort was requested for an instance without a
+   * Generate command in progress.
+   */
+  kDifCsrngRecoverableAlertInvalidGenAbort =
+      1U << CSRNG_RECOV_ALERT_STS_GEN_ABORT_INVALID_ALERT_BIT,
+  /**
+   * Indicates a bad value was written to the GEN_ABORT register.
+   */
+  kDifCsrngRecoverableAlertBadGenAbort =
+      1U << CSRNG_RECOV_ALERT_STS_GEN_ABORT_FIELD_ALERT_BIT,
+  /**
+   * Indicates a bad value was written to the INT_STATE_HALT register.
+   */
+  kDifCsrngRecoverableAlertBadIntStateHalt =
+      1U << CSRNG_RECOV_ALERT_STS_INT_STATE_HALT_FIELD_ALERT_BIT,
+  /**
+   * Indicates the selected internal state was updated by CSRNG while it was
+   * being accessed via INT_STATE_VAL.
+   */
+  kDifCsrngRecoverableAlertIntStateOverwrite =
+      1U << CSRNG_RECOV_ALERT_STS_INT_STATE_OVERWRITE_ALERT_BIT,
   /**
    * Indicates the genbits bus saw two identical values, indicating a possible
    * attack.
    */
-  kDifCsrngRecoverableAlertRepeatedGenBits,
+  kDifCsrngRecoverableAlertRepeatedGenBits =
+      1U << CSRNG_RECOV_ALERT_STS_CS_BUS_CMP_ALERT_BIT,
+  /**
+   * Indicates an unsupported CSRNG command was issued.
+   */
+  kDifCsrngRecoverableAlertBadCsrngCmd =
+      1U << CSRNG_RECOV_ALERT_STS_CMD_STAGE_INVALID_ACMD_ALERT_BIT,
+  /**
+   * Indicates a Generate command was issued with a `glen` field of zero.
+   */
+  kDifCsrngRecoverableAlertBadGenCmd =
+      1U << CSRNG_RECOV_ALERT_STS_CMD_STAGE_INVALID_GEN_CMD_ALERT_BIT,
+  /**
+   * Indicates a supported CSRNG command was issued out of sequence.
+   */
+  kDifCsrngRecoverableAlertBadCsrngCmdSeq =
+      1U << CSRNG_RECOV_ALERT_STS_CMD_STAGE_INVALID_CMD_SEQ_ALERT_BIT,
+  /**
+   * Indicates that too many generate commands were issued in a row.
+   */
+  kDifCsrngRecoverableAlertMaxReseedsExceeded =
+      1U << CSRNG_RECOV_ALERT_STS_CMD_STAGE_RESEED_CNT_ALERT_BIT,
 } dif_csrng_recoverable_alert_t;
 
 /**
@@ -380,10 +449,16 @@ dif_result_t dif_csrng_update(const dif_csrng_t *csrng,
  * of the request to align it to the nearest 128-bit boundary.
  *
  * @param csrng A CSRNG handle.
+ * @param additional_data Additional data for the generate command. Set to NULL
+ * if unused.
  * @param len Number of uint32_t words to generate.
+ * @return The result of the operation. KDifOutOfRange if the `len` parameter
+ * results in a 128bit block level size greater than 0x800.
  */
 OT_WARN_UNUSED_RESULT
-dif_result_t dif_csrng_generate_start(const dif_csrng_t *csrng, size_t len);
+dif_result_t dif_csrng_generate_start(
+    const dif_csrng_t *csrng, const dif_csrng_seed_material_t *additional_data,
+    size_t len);
 
 /**
  * Reads the output of the last CSRNG generate call.
@@ -518,6 +593,20 @@ OT_WARN_UNUSED_RESULT
 dif_result_t dif_csrng_get_internal_state(
     const dif_csrng_t *csrng, dif_csrng_internal_state_id_t instance_id,
     dif_csrng_internal_state_t *state);
+
+/**
+ * Gets the reseed counter of a CSRNG instance.
+ *
+ * @param csrng A CSRNG handle
+ * @param instance_id CSRNG instance ID.
+ * @param[out] reseed counter The current reseed counter value of a CSRNG
+ * instance.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_csrng_get_reseed_counter(
+    const dif_csrng_t *csrng, dif_csrng_internal_state_id_t instance_id,
+    uint32_t *reseed_counter);
 
 /**
  * Locks out CSRNG functionality.

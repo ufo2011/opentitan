@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 
 #include "sw/device/lib/arch/device.h"
 #include "sw/device/lib/dif/dif_gpio.h"
-#include "sw/device/lib/dif/dif_spi_device.h"
 #include "sw/device/lib/dif/dif_uart.h"
 #include "sw/device/lib/runtime/hart.h"
 #include "sw/device/lib/runtime/log.h"
@@ -19,7 +18,7 @@ void demo_gpio_startup(dif_gpio_t *gpio) {
 
   // Give a LED pattern as startup indicator for 5 seconds.
   CHECK_DIF_OK(dif_gpio_write_all(gpio, 0x00ff));
-  for (int i = 0; i < 32; ++i) {
+  for (dif_gpio_pin_t i = 0; i < 32; ++i) {
     busy_spin_micros(5 * 1000);  // 5 ms
     CHECK_DIF_OK(dif_gpio_write(gpio, 8 + (i % 8), (i / 8) % 2));
   }
@@ -60,18 +59,6 @@ uint32_t demo_gpio_to_log_echo(dif_gpio_t *gpio, uint32_t prev_gpio_state) {
   }
 
   return gpio_state;
-}
-
-void demo_spi_to_log_echo(dif_spi_device_handle_t *spi) {
-  uint32_t spi_buf[8];
-  size_t spi_len;
-  CHECK_DIF_OK(dif_spi_device_recv(spi, spi_buf, sizeof(spi_buf), &spi_len));
-  if (spi_len > 0) {
-    uint32_t echo_word = spi_buf[0] ^ 0x01010101;
-    CHECK_DIF_OK(dif_spi_device_send(spi, &echo_word, sizeof(uint32_t),
-                                     /*bytes_sent=*/NULL));
-    LOG_INFO("SPI: %!s", spi_len, spi_buf);
-  }
 }
 
 void demo_uart_to_uart_and_gpio_echo(dif_uart_t *uart, dif_gpio_t *gpio) {

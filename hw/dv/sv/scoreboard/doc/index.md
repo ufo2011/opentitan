@@ -1,5 +1,0 @@
----
-title: "Scoreboard"
----
-
-**TODO**

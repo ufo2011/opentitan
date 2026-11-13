@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@
 #include "sw/device/lib/dif/dif_aes.h"
 #include "sw/device/lib/dif/dif_alert_handler.h"
 #include "sw/device/lib/dif/dif_clkmgr.h"
-#include "sw/device/lib/dif/dif_flash_ctrl.h"
 #include "sw/device/lib/dif/dif_hmac.h"
 #include "sw/device/lib/dif/dif_kmac.h"
 #include "sw/device/lib/dif/dif_otbn.h"
@@ -24,23 +23,24 @@
 #include "sw/device/lib/runtime/irq.h"
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/alert_handler_testutils.h"
-#include "sw/device/lib/testing/flash_ctrl_testutils.h"
 #include "sw/device/lib/testing/rand_testutils.h"
+#include "sw/device/lib/testing/ret_sram_testutils.h"
+#include "sw/device/lib/testing/rstmgr_testutils.h"
 #include "sw/device/lib/testing/rv_plic_testutils.h"
 #include "sw/device/lib/testing/test_framework/FreeRTOSConfig.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "aes_regs.h"
-#include "alert_handler_regs.h"
-#include "hmac_regs.h"
+#include "hw/top/aes_regs.h"
+#include "hw/top/alert_handler_regs.h"
+#include "hw/top/hmac_regs.h"
+#include "hw/top/i2c_regs.h"
+#include "hw/top/kmac_regs.h"
+#include "hw/top/otbn_regs.h"
+#include "hw/top/spi_host_regs.h"
+#include "hw/top/usbdev_regs.h"
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "i2c_regs.h"
-#include "kmac_regs.h"
-#include "otbn_regs.h"
-#include "spi_host_regs.h"
 #include "sw/device/lib/testing/autogen/isr_testutils.h"
-#include "usbdev_regs.h"
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -55,7 +55,6 @@ static dif_hmac_t hmac;
 static dif_kmac_t kmac;
 static dif_otbn_t otbn;
 static dif_rstmgr_t rstmgr;
-static dif_flash_ctrl_state_t flash_ctrl;
 
 static const uint32_t kPlicTarget = kTopEarlgreyPlicTargetIbex0;
 
@@ -89,7 +88,7 @@ static void init_peripherals(void) {
   CHECK_DIF_OK(dif_alert_handler_init(base_addr, &alert_handler));
 
   CHECK_DIF_OK(dif_clkmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_CLKMGR_AON_BASE_ADDR), &clkmgr));
+      mmio_region_from_addr(TOP_EARLGREY_CLKMGR_BASE_ADDR), &clkmgr));
 
   CHECK_DIF_OK(dif_spi_host_init(
       mmio_region_from_addr(TOP_EARLGREY_SPI_HOST0_BASE_ADDR), &spi_host0));
@@ -113,12 +112,7 @@ static void init_peripherals(void) {
       dif_otbn_init(mmio_region_from_addr(TOP_EARLGREY_OTBN_BASE_ADDR), &otbn));
 
   CHECK_DIF_OK(dif_rstmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR), &rstmgr));
-
-  // Initialize flash_ctrl
-  CHECK_DIF_OK(dif_flash_ctrl_init_state(
-      &flash_ctrl,
-      mmio_region_from_addr(TOP_EARLGREY_FLASH_CTRL_CORE_BASE_ADDR)));
+      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_BASE_ADDR), &rstmgr));
 }
 
 // List of alerts
@@ -258,7 +252,7 @@ static const test_t kPeripherals[] = {
         .fatal_alert_bit = 0,
         .alert_ids = spihost1_alerts,
         .num_alert_peri = num_spihost1_alerts,
-        .clk_index = kTopEarlgreyGateableClocksIoDiv2Peri,
+        .clk_index = kTopEarlgreyGateableClocksIoSpiHost1,
         .is_hintable = false,
     },
     {
@@ -291,9 +285,8 @@ static void alert_handler_config_peripherals(uint32_t num_peripherals,
   // Enable all alerts coming from the chosen peripherals
   // Configure them as Class A.
   size_t array_idx = 0;
-  test_t *peri_ptr;
   for (int ii = 0; ii < num_peripherals; ii++) {
-    peri_ptr = (test_t *)first_peripheral + ii;
+    const test_t *peri_ptr = &first_peripheral[ii];
     for (int jj = 0; jj < peri_ptr->num_alert_peri; jj++) {
       alerts[array_idx] = peri_ptr->alert_ids[jj];
       alert_classes[array_idx] = kDifAlertHandlerClassA;
@@ -338,8 +331,8 @@ static void alert_handler_config_peripherals(uint32_t num_peripherals,
       .ping_timeout = ping_timeout,
   };
 
-  alert_handler_testutils_configure_all(&alert_handler, config,
-                                        kDifToggleEnabled);
+  CHECK_STATUS_OK(alert_handler_testutils_configure_all(&alert_handler, config,
+                                                        kDifToggleEnabled));
   // Enables alert handler irq.
   CHECK_DIF_OK(dif_alert_handler_irq_set_enabled(
       &alert_handler, kDifAlertHandlerIrqClassa, kDifToggleEnabled));
@@ -375,13 +368,12 @@ void set_peripheral_clock(const test_t *peripheral,
           "intended_clk_state = %d, received_clk_state = %d", new_clk_state,
           clk_state);
   }
-};
-
+}
 /**
  * A utility function to wait enough until the alert handler pings a peripheral
  * alert
  */
-void wait_enough_for_alert_ping() {
+void wait_enough_for_alert_ping(void) {
   // wait enough
   if (kDeviceType == kDeviceFpgaCw310) {
     // NUM_ALERTS*2*margin_of_safety*(2**DW)*(1/kClockFreqPeripheralHz)
@@ -410,13 +402,13 @@ void wait_enough_for_alert_ping() {
  * line to the CPU, which results in a call to this OTTF ISR. This ISR
  * overrides the default OTTF implementation.
  */
-void ottf_external_isr(void) {
+void ottf_external_isr(uint32_t *exc_info) {
   top_earlgrey_plic_peripheral_t peripheral_serviced;
   dif_alert_handler_irq_t irq_serviced;
   isr_testutils_alert_handler_isr(plic_ctx, alert_handler_ctx,
                                   &peripheral_serviced, &irq_serviced);
   CHECK(peripheral_serviced == kTopEarlgreyPlicPeripheralAlertHandler,
-        "Interurpt from unexpected peripheral: %d", peripheral_serviced);
+        "Interrupt from unexpected peripheral: %d", peripheral_serviced);
 }
 
 enum {
@@ -428,10 +420,7 @@ enum {
 bool test_main(void) {
   init_peripherals();
 
-  // A generic loop variable
-  int ii;
-  // To keep the test results
-  bool is_cause;
+  ret_sram_testutils_init();
 
   // The test consists of multiple test phases
   // Each test phase consists of ARRAYSIZE(kPeripherals) steps
@@ -440,23 +429,25 @@ bool test_main(void) {
   size_t test_step_cnt;
   size_t peri_idx;
 
+  dif_rstmgr_reset_info_bitfield_t rst_info;
+  rst_info = rstmgr_testutils_reason_get();
+  rstmgr_testutils_reason_clear();
+  if (rst_info & kDifRstmgrResetInfoPor) {
+    // Initialize retention sram counters if running on Cw310.
+    if (kDeviceType == kDeviceFpgaCw310) {
+      CHECK_STATUS_OK(ret_sram_testutils_counter_clear(kCounterTestSteps));
+      CHECK_STATUS_OK(
+          ret_sram_testutils_counter_get(kCounterTestSteps, &test_step_cnt));
+    }
+  }
+  // To keep the test results
+  bool is_cause;
+
   // Need a NVM counter to keep the test-step info
   // between resets on the FPGA.
   if (kDeviceType == kDeviceFpgaCw310) {
-    // Enable flash access
-    flash_ctrl_testutils_default_region_access(&flash_ctrl,
-                                               /*rd_en*/ true,
-                                               /*prog_en*/ true,
-                                               /*erase_en*/ true,
-                                               /*scramble_en*/ false,
-                                               /*ecc_en*/ false,
-                                               /*he_en*/ false);
-
-    test_step_cnt = flash_ctrl_testutils_counter_get(kCounterTestSteps);
-    if (test_step_cnt == 256) {
-      flash_ctrl_testutils_counter_init_zero(&flash_ctrl, kCounterTestSteps);
-      test_step_cnt = flash_ctrl_testutils_counter_get(kCounterTestSteps);
-    }
+    CHECK_STATUS_OK(
+        ret_sram_testutils_counter_get(kCounterTestSteps, &test_step_cnt));
   } else {
     // Initialize the test_step counter to zero for the simulation
     test_step_cnt = 0;
@@ -472,17 +463,20 @@ bool test_main(void) {
       2- Enable the corresponding alerts
       3- Wait long enough
       4- Confirm that ping_timeout has not been triggered
-      5- Reset the the device to test the next peripheral
+      5- Reset the device to test the next peripheral
   */
   while (test_step_cnt < 1 * ARRAYSIZE(kPeripherals)) {
     // Run the negative test only on the FPGA
     // This will save the test time in the simulation
+    LOG_INFO("Phase 0");
     if (kDeviceType == kDeviceFpgaCw310) {
       // Read the test_step_cnt and compute the test phase
-      // amd the peripheral ID to test
-      test_step_cnt = flash_ctrl_testutils_counter_get(kCounterTestSteps);
+      // and the peripheral ID to test
+      CHECK_STATUS_OK(
+          ret_sram_testutils_counter_get(kCounterTestSteps, &test_step_cnt));
       test_phase = test_step_cnt / ARRAYSIZE(kPeripherals);
       peri_idx = test_step_cnt - (test_phase)*ARRAYSIZE(kPeripherals);
+      LOG_INFO("Testing peripheral %d", peri_idx);
 
       // Wait for a random time <= 1024us
       busy_spin_micros(rand_testutils_gen32_range(1, 1024));
@@ -501,21 +495,21 @@ bool test_main(void) {
       CHECK_DIF_OK(dif_alert_handler_local_alert_is_cause(
           &alert_handler, kDifAlertHandlerLocalAlertAlertPingFail, &is_cause));
       CHECK(!is_cause,
-            "Expected response is ping_timeout_fail= 0! But we got "
-            "ping_timrout_fail = 1 for peripheral[%d]",
+            "Expected response is ping_timeout_fail == 0! But we got "
+            "ping_timeout_fail = 1 for peripheral[%d]",
             peri_idx);
 
       // Enable the clock again
       set_peripheral_clock(&kPeripherals[peri_idx], kDifToggleEnabled);
 
       // Increment the test_step counter
-      flash_ctrl_testutils_counter_increment(&flash_ctrl, kCounterTestSteps);
+      CHECK_STATUS_OK(ret_sram_testutils_counter_increment(kCounterTestSteps));
       // Request system reset to unlock the alert handler config and test the
       // next peripheral
       CHECK_DIF_OK(dif_rstmgr_software_device_reset(&rstmgr));
     } else {
       // For the simulation, only increment the test_step counter
-      // to procced to the next phase without resetting the device
+      // to proceed to the next phase without resetting the device
       test_step_cnt++;
     }
   }
@@ -535,6 +529,7 @@ bool test_main(void) {
 
   // Enable and lock the all peripherals' alerts at the beginning of the PHASE
   // #1
+  LOG_INFO("Phase 1");
   if (test_step_cnt == 1 * ARRAYSIZE(kPeripherals)) {
     alert_handler_config_peripherals(
         /*num_peripherals*/ ARRAYSIZE(kPeripherals),

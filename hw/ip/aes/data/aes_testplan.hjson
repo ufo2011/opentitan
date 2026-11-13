@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -7,6 +7,7 @@
                      "hw/dv/tools/dvsim/testplans/shadow_reg_errors_testplan.hjson",
                      "hw/dv/tools/dvsim/testplans/alert_test_testplan.hjson",
                      "hw/dv/tools/dvsim/testplans/tl_device_access_types_testplan.hjson",
+                     "hw/dv/tools/dvsim/testplans/stress_all_with_reset_testplan.hjson",
                      "aes_sec_cm_testplan.hjson"]
   testpoints: [
    // {
@@ -96,6 +97,13 @@
       tests: ["aes_nist_vectors"]
     }
     {
+      name: nist_test_vectors_gcm
+      desc: '''
+            Verify that the DUT handles the NIST GCM test vectors correctly.'''
+      stage: V2
+      tests: ["aes_nist_vectors_gcm"]
+    }
+    {
       name: reset_recovery
       desc: '''
             Pull reset at random times, make sure DUT recover/resets correctly and there is no residual data left in the registers.'''
@@ -125,11 +133,31 @@
       tests: ["aes_deinit"]
     }
     {
+      name: stress_all
+      desc: '''
+            Run assorted sequences back-to-back.
+            '''
+      stage: V2
+      tests: ["aes_stress_all"]
+    }
+    {
+      name: gcm_save_and_restore
+      desc: '''
+            Verify that saving and restoring contexts in GCM works correctly.
+            When triggered, save the current context, clear the entire state, restore the context, and proceed with the operation.
+            '''
+      stage: V2
+      tests: ["aes_gcm_save_restore"]
+    }
+    {
       name: reseeding
       desc: '''
-            excercise the different PRNG reseeding configurations
-            for reseeding every 8k blocks the DUT internal block counter will be manually changed to something close to 8k.
-            to provoke the reseeding within reasonable simulation time '''
+            Verify that internal PRNGs are effectively reseeded upon manually triggering a PRNG reseed, and - depending on the configuration - if the initial key changes.
+            Verify that the masking PRNG is reseeded automatically at the correct reseed rate.
+            To reduce simulation time, the block counter triggering the automatic reseeding is manually changed to lower values.
+            Verify that the PRNGs do not get reseeded unexpectedly.
+            Verify that the data received from EDN effectively propagates into the PRNGs.
+            '''
       stage: V2S
       tests: ["aes_reseed"]
     }
@@ -167,6 +195,28 @@ covergroups: [
            - manual operation
 
            All valid combinations of these will be crossed.
+           '''
+    }
+    {
+     name: ctrl_gcm_reg_cg
+     desc: '''
+           Covers that all valid settings have been tested.
+           Further more it covers that also illegal values have been tested.
+           Individual control settings that are covered include:
+           - phase (all phases including illegal values)
+           - restore after init
+           - save after aad/text
+           '''
+    }
+    {
+     name: gcm_len_cg
+     desc: '''
+           Covers that, when in AES-GCM mode, different sized AAD and TEXT blocks have
+           been tested. This includes:
+           - enc / dec
+           - zero sized AAD block
+           - Full and partial AAD / TEXT blocks
+           - Single and multiple AAD / TEXT blocks
            '''
     }
     {

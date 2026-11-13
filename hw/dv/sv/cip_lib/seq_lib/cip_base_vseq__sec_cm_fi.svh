@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,7 +34,7 @@ virtual task check_sec_cm_fi_resp(sec_cm_base_if_proxy if_proxy);
   // This is a fatal alert and design keeps sending it until reset is issued.
   // Check alerts are triggered for a few times
   repeat (5) begin
-    wait_alert_trigger(cfg.sec_cm_alert_name, .wait_complete(1));
+    wait_alert_trigger(cfg.sec_cm_alert_name, .wait_complete(1), .max_wait_cycle(8));
   end
 endtask : check_sec_cm_fi_resp
 
@@ -44,6 +44,10 @@ virtual task test_sec_cm_fi();
   if_proxy_q.shuffle();
   while (if_proxy_q.size) begin
     sec_cm_base_if_proxy if_proxy = if_proxy_q.pop_front();
+
+    // If fault injection is disabled at this instance of the interface, skip it (and don't inject
+    // anything)
+    if (if_proxy.fi_disabled) continue;
 
     sec_cm_fi_ctrl_svas(if_proxy, .enable(0));
     sec_cm_inject_fault(if_proxy);
@@ -62,9 +66,13 @@ virtual task test_sec_cm_fi();
       check_sec_cm_fi_resp(if_proxy);
     end
 
-    sec_cm_fi_ctrl_svas(if_proxy, .enable(1));
     // issue hard reset for fatal alert to recover
     dut_init("HARD");
+
+    // Finally, turn SVAs back on again. Note that this must be done after reset because the fault
+    // injection might have put the device in a state that will fail assertions: we only want to put
+    // the assertions back after the internal state has been reset again.
+    sec_cm_fi_ctrl_svas(if_proxy, .enable(1));
   end
 endtask : test_sec_cm_fi
 

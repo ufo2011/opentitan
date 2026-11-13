@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -68,39 +68,43 @@ package kmac_pkg;
   } key_len_e;
 
 
+  // SEC_CM: SW_CMD.CTRL.SPARSE
   // kmac_cmd_e defines the possible command sets that software issues via
   // !!CMD register. This is mainly to limit the error scenario that SW writes
   // multiple commands at once. Additionally they are sparse encoded to harden
   // against FI attacks
   //
-  // Encoding generated with:
-  // $ ./util/design/sparse-fsm-encode.py -d 3 -m 5 -n 6 \
-  //      -s 1891656028 --language=sv
+  // Encoding generated at commit 88ec88cefa using Python 3.12.13 with:
+  // $ ./util/design/sparse-fsm-encode.py --language=sv --avoid-zero \
+  //     --seed 1891656028 --distance 3 --states 7 --bits 6
   //
   // Hamming distance histogram:
   //
   //  0: --
   //  1: --
   //  2: --
-  //  3: |||||||||||||||||||| (50.00%)
-  //  4: |||||||||||||||| (40.00%)
-  //  5: |||| (10.00%)
+  //  3: |||||||||||||||||||| (57.14%)
+  //  4: ||||||||||||||| (42.86%)
+  //  5: --
   //  6: --
   //
   // Minimum Hamming distance: 3
-  // Maximum Hamming distance: 5
+  // Maximum Hamming distance: 4
   // Minimum Hamming weight: 3
   // Maximum Hamming weight: 4
   //
-  typedef enum logic [5:0] {
-    //CmdNone      = 6'b001011, // dec 10
+  localparam int CmdStateWidth = 6;
+  typedef enum logic [CmdStateWidth-1:0] {
+    CmdNone       = 6'b000000, // dec  0
     // CmdNone is manually set to all zero by design!
     // The minimum Hamming distance is still 3
-    CmdNone      = 6'b000000, // dec  0
-    CmdStart     = 6'b011101, // dec 29
-    CmdProcess   = 6'b101110, // dec 46
-    CmdManualRun = 6'b110001, // dec 49
-    CmdDone      = 6'b010110  // dec 22
+    CmdStart      = 6'b000111, // dec  7
+    CmdProcess    = 6'b110010, // dec 50
+    CmdManualRun  = 6'b101110, // dec 46
+    CmdDone       = 6'b110101, // dec 53
+    CmdStop       = 6'b011100, // dec 28
+    CmdContinue   = 6'b101001, // dec 41
+    CmdStateWrite = 6'b011011  // dec 27
   } kmac_cmd_e;
 
   // Timer
@@ -115,21 +119,21 @@ package kmac_pkg;
   } entropy_mode_e;
 
   // PRNG (kmac_entropy)
-  parameter int unsigned EntropyLfsrW = 800;
-  parameter int unsigned ChunkSizeEntropyLfsr = 32;
-  parameter int unsigned NumChunksEntropyLfsr = EntropyLfsrW / ChunkSizeEntropyLfsr;
+  parameter int unsigned EntropyOutputW = 800;
+  parameter int unsigned EntropyStateW = 288;
+
+  // These LFSR parameters have been generated with
+  // $ ./util/design/gen-lfsr-seed.py --width 288 --seed 31468618 --prefix ""
+  typedef logic [EntropyStateW-1:0] lfsr_seed_t;
+  parameter lfsr_seed_t RndCnstLfsrSeedDefault = {
+    32'h758a4420,
+    256'h31e1c461_6ea343ec_153282a3_0c132b57_23c5a4cf_4743b3c7_c32d580f_74f1713a
+  };
 
   // We use a single seed that is split down into chunks internally.
   // These LFSR parameters have been generated with
   // $ ./util/design/gen-lfsr-seed.py --width 800 --seed 3369807298 --prefix ""
-  typedef logic [EntropyLfsrW-1:0] lfsr_seed_t;
-  typedef logic [EntropyLfsrW-1:0][$clog2(EntropyLfsrW)-1:0] lfsr_perm_t;
-  parameter lfsr_seed_t RndCnstLfsrSeedDefault = {
-    32'h34a19ca3,
-    256'he514d8e17a5630c287247dff3d354c022f581ace4b6c5736b5efa4160261ab0f,
-    256'h6cb2915197ab3588982bcffc9cf3b46a250cebf728c0e76f0e680420d7f428f2,
-    256'h092c1e308f7c8f9d8bacc20cd18fd586d58879654aa4851de224033bfdcbc578
-  };
+  typedef logic [EntropyOutputW-1:0][$clog2(EntropyOutputW)-1:0] lfsr_perm_t;
   parameter lfsr_perm_t RndCnstLfsrPermDefault = {
     64'hb1a3e87aeb4e69f0,
     256'h2d8a6ee2c9ac567b2aa401a639a2a8ea2553614c0a8daf672c06546fc0d35267,
@@ -166,11 +170,13 @@ package kmac_pkg;
   };
 
   // These LFSR parameters have been generated with
-  // $ ./util/design/gen-lfsr-seed.py --width 32 --seed 2336700764 --prefix ""
-  parameter int LfsrFwdWidth = 32;
-  typedef logic [LfsrFwdWidth-1:0][$clog2(LfsrFwdWidth)-1:0] lfsr_fwd_perm_t;
-  parameter lfsr_fwd_perm_t RndCnstLfsrFwdPermDefault = {
-    160'h7f3ac6d173d78678d84908157fba482e76685704
+  // $ ./util/design/gen-lfsr-seed.py --width 800 --seed 31468618 --prefix "Buffer"
+  typedef logic [EntropyOutputW-1:0] buffer_lfsr_seed_t;
+  parameter buffer_lfsr_seed_t RndCnstBufferLfsrSeedDefault = {
+    32'h292603b4,
+    256'hf1d83863_e0bd0634_4544ad28_a91d8668_24b66efd_92ad8123_5381f2bc_3d65392c,
+    256'h83c01ea5_d8be84f1_e2588917_11849a07_5a71f35f_e9b31605_f9077a6b_758a4420,
+    256'h31e1c461_6ea343ec_153282a3_0c132b57_23c5a4cf_4743b3c7_c32d580f_74f1713a
   };
 
   // Message permutation
@@ -187,30 +193,19 @@ package kmac_pkg;
   // Application interface //
   ///////////////////////////
 
-  // Number of the application interface
-  // Currently KMAC has three interface.
-  // 0: KeyMgr
-  // 1: LC_CTRL
-  // 2: ROM_CTRL
-  // Make sure to change `width` of app inter-module signal definition
-  // if this value is changed.
-  parameter int unsigned NumAppIntf = 3;
+  // Application interface type. Either use a compile-time defined configuration or the app
+  // provides a hashing configuration at runtime.
+  typedef enum logic {
+    AppStatic  = 1'b0,
+    AppDynamic = 1'b1
+  } app_type_e;
 
-  // Application Algorithm
-  // Each interface can choose algorithms among SHA3, cSHAKE, KMAC
-  typedef enum bit [1:0] {
-    // SHA3 mode doer not nees any additional information.
-    // Prefix will be tied to all zero and not used.
-    AppSHA3   = 0,
-
-    // In CShake/ KMAC mode, the Prefix can be determined by the compile-time
-    // parameter or through CSRs.
-    AppCShake = 1,
-
-    // In KMAC mode, the secret key always comes from sideload.
-    // KMAC mode needs uniformly distributed entropy. The request will be
-    // silently discarded in Reset state.
-    AppKMAC   = 2
+  // The possible hashing operation for an interface.
+  typedef enum logic [1:0] {
+    AppSHA3   = 2'b00,
+    AppShake  = 2'b01,
+    AppCShake = 2'b10,
+    AppKMAC   = 2'b11
   } app_mode_e;
 
   // Predefined encoded_string
@@ -223,47 +218,130 @@ package kmac_pkg;
   parameter int unsigned NSPrefixW = sha3_pkg::NSRegisterSize*8;
 
   typedef struct packed {
-    app_mode_e Mode;
+    // PrefixMode determines whether to take the prefix from the CSR or use the hardcoded prefix.
+    // For static interfaces, if PrefixMode is 1, the Prefix will be used for both cSHAKE and
+    // KMAC operations. If 0, the CSR value is used.
+    // For dynamic interfaces, PrefixMode has no direct effect. The prefix is selected depending
+    // on the selected mode.
+    // If the mode is cSHAKE, it is always the CSR prefix used.
+    // If the mode is KMAC, it is always the compile-time value used.
+    logic prefix_mode;
 
-    sha3_pkg::keccak_strength_e Strength;
+    // The hashing mode which is performed.
+    app_mode_e mode;
 
-    // PrefixMode determines the origin value of Prefix that is used in KMAC
-    // and cSHAKE operations.
-    // Choose **0** for CSRs (!!PREFIX), or **1** to use `Prefix` parameter
-    // below.
-    bit PrefixMode;
+    // The strength of the selected mode.
+    sha3_pkg::keccak_strength_e kstrength;
 
-    // If `PrefixMode` is 1'b 1, then this `Prefix` value will be used in
-    // cSHAKE or KMAC operation.
-    logic [NSPrefixW-1:0] Prefix;
+    // If 1, the app interface will automatically trigger a RUN command once it has pushed the
+    // full rate on the response channel. If 0, no squeeze can be performed at all and only the
+    // first rate is pushed. Only applicable to SHAKE and cSHAKE. Must be 0 for a dynamic interface
+    // if mode is SHA3 or KMAC. Must always be 0 if the interface is static. Results in a service
+    // rejected error if set wrongly.
+    logic en_xof;
+  } app_ses_config_t;
+
+  // Per default use an invalid configuration.
+  parameter app_ses_config_t AppSesCfgDefault = '0;
+
+  typedef struct packed {
+    /////////////////////////////////
+    // Compile-time configurations //
+    /////////////////////////////////
+
+    // Whether the interface is static or dynamic. For static interfaces all configs below are fix.
+    // For dynamic interfaces, certain config values are sent as first message part.
+    app_type_e if_type;
+
+    // Specify whether the input comes in shares. If set, message FIFO is bypassed. This parameter
+    // is only relevant if the EnMasking parameter is set.
+    logic masked;
+
+    // A compile-time defined prefix used for cSHAKE or KMAC operations. See PrefixMode when this
+    // value is used.
+    logic [NSPrefixW-1:0] prefix;
+
+    // If set, non-standard combinations of mode and strength are supported for this dynamic
+    // interface. Otherwise a non-standard combination will result in a service rejected error.
+    logic en_unsup_comb;
+
+    ///////////////////////////
+    // Session configuration //
+    ///////////////////////////
+    // These configurations can be overwritten by a dynamic interface instance at runtime but are
+    // fix for static interfaces.
+    app_ses_config_t session_cfg;
   } app_config_t;
 
-  parameter app_config_t AppCfg [NumAppIntf] = '{
-    // KeyMgr
-    '{
-      Mode:       AppKMAC, // KeyMgr uses KMAC operation
-      Strength:   sha3_pkg::L256,
-      PrefixMode: 1'b 1,   // Use prefix parameter
-      // {fname: encoded_string("KMAC"), custom_str: encoded_string("")}
-      Prefix:     NSPrefixW'({EncodedStringEmpty, EncodedStringKMAC})
-    },
+  parameter app_config_t AppCfgKeyMgr = '{
+    if_type:       AppStatic,
+    masked:        1'b0,
+    // {fname: encoded_string("KMAC"), custom_str: encoded_string("")}
+    prefix:        NSPrefixW'({EncodedStringEmpty, EncodedStringKMAC}),
+    en_unsup_comb: 1'b0,
+    session_cfg: '{
+      prefix_mode: 1'b1,
+      mode:        AppKMAC,
+      kstrength:   sha3_pkg::L256,
+      en_xof:      1'b0
+    }
+  };
 
-    // LC_CTRL
-    '{
-      Mode:       AppCShake,
-      Strength:   sha3_pkg::L128,
-      PrefixMode: 1'b 1,     // Use prefix parameter
-      // {fname: encode_string(""), custom_str: encode_string("LC_CTRL")}
-      Prefix: NSPrefixW'({EncodedStringLcCtrl, EncodedStringEmpty})
-    },
+  // Used instead of AppCfgKeyMgr if the KMAC functionality is stripped (EnFullKmac == 0). The keyed
+  // MAC is not available in that case, so KeyMgr uses the underlying cSHAKE operation.
+  parameter app_config_t AppCfgKeyMgrStripped = '{
+    if_type:       AppStatic,
+    masked:        1'b0,
+    // {fname: encoded_string("KMAC"), custom_str: encoded_string("")}
+    prefix:        NSPrefixW'({EncodedStringEmpty, EncodedStringKMAC}),
+    en_unsup_comb: 1'b0,
+    session_cfg: '{
+      prefix_mode: 1'b1,
+      mode:        AppCShake,
+      kstrength:   sha3_pkg::L256,
+      en_xof:      1'b0
+    }
+  };
 
-    // ROM_CTRL
-    '{
-      Mode:       AppCShake,
-      Strength:   sha3_pkg::L256,
-      PrefixMode: 1'b 1,     // Use prefix parameter
-      // {fname: encode_string(""), custom_str: encode_string("ROM_CTRL")}
-      Prefix: NSPrefixW'({EncodedStringRomCtrl, EncodedStringEmpty})
+  parameter app_config_t AppCfgLcCtrl= '{
+    if_type:       AppStatic,
+    masked:        1'b0,
+    // {fname: encode_string(""), custom_str: encode_string("LC_CTRL")}
+    prefix:        NSPrefixW'({EncodedStringLcCtrl, EncodedStringEmpty}),
+    en_unsup_comb: 1'b0,
+    session_cfg: '{
+      prefix_mode: 1'b1,
+      mode:        AppCShake,
+      kstrength:   sha3_pkg::L128,
+      en_xof:      1'b0
+    }
+  };
+
+  parameter app_config_t AppCfgRomCtrl = '{
+    if_type:       AppStatic,
+    masked:        1'b0,
+    // {fname: encode_string(""), custom_str: encode_string("ROM_CTRL")}
+    prefix:        NSPrefixW'({EncodedStringRomCtrl, EncodedStringEmpty}),
+    en_unsup_comb: 1'b0,
+    session_cfg: '{
+      prefix_mode: 1'b1,
+      mode:        AppCShake,
+      kstrength:   sha3_pkg::L256,
+      en_xof:      1'b0
+    }
+  };
+
+  parameter app_config_t AppCfgOtbn = '{
+    if_type:       AppDynamic,
+    masked:        1'b1,
+    // Fixed "KMAC" prefix for KMAC operation.
+    prefix:        NSPrefixW'({EncodedStringEmpty, EncodedStringKMAC}),
+    en_unsup_comb: 1'b0,
+    session_cfg: '{
+      prefix_mode: 1'b0,
+      mode:        AppShake,
+      kstrength:   sha3_pkg::L256,
+      en_xof:      1'b1
     }
   };
 
@@ -295,45 +373,114 @@ package kmac_pkg;
     SelSw     = 5'b01111
   } app_mux_sel_e ;
 
+  // Encoding generated at commit 7d1ca7e858 using Python 3.12.13 with:
+  // $ ./util/design/sparse-fsm-encode.py --language=sv \
+  //     --seed 1224720565 --distance 3 --states 18 --bits 10
+  //
+  // Hamming distance histogram:
+  //
+  //  0: --
+  //  1: --
+  //  2: --
+  //  3: ||||||| (10.46%)
+  //  4: |||||||||||||| (21.57%)
+  //  5: |||||||||||||||||||| (29.41%)
+  //  6: |||||||||||||| (21.57%)
+  //  7: |||||| (9.15%)
+  //  8: ||| (4.58%)
+  //  9: || (3.27%)
+  // 10: --
+  //
+  // Minimum Hamming distance: 3
+  // Maximum Hamming distance: 9
+  // Minimum Hamming weight: 2
+  // Maximum Hamming weight: 7
+  //
+  localparam int AppStateWidth = 10;
+  typedef enum logic [AppStateWidth-1:0] {
+    StIdle = 10'b1001011000,
 
+    // In StAppCfg state, it latches the cfg from AppCfg parameter to determine the kmac_mode,
+    // sha3_mode, and keccak strength.
+    // In StAppOutLen, the app interface pushes encoded output length into the core.
+    StAppCfg        = 10'b0100000100,
+    StAppMsg        = 10'b0010101111,
+    StAppOutLen     = 10'b1100011110,
+    StAppProcess    = 10'b0010011101,
+    StAppWait       = 10'b1001010011,
+    StAppPushDigest = 10'b1011111010,
+    StAppFinish     = 10'b1010111001,
+
+    // SW Controlled
+    // If start request comes from SW first, until the operation ends, all
+    // requests from apps will be stalled.
+    StSw = 10'b0100010011,
+
+    // SW claimed the block to restore a previously saved Keccak state. Writes
+    // to the state window are only accepted here. SW leaves this state with
+    // the Continue command, or with the Done command to release the block
+    // again.
+    StStateWrite = 10'b1101110101,
+
+    // Error KeyNotValid triggers if key is used but it is not valid at the time.
+    StErrorKeyNotValid = 10'b0111110011,
+
+    StErrorAwaitMsg         = 10'b0111001001,
+    StErrorNotify           = 10'b0011000101,
+    StErrorAwaitTermination = 10'b1011100000,
+    StErrorFinish           = 10'b1111101100,
+    StErrorAwaitSw          = 10'b0110101000,
+    StErrorAwaitAbsorbed    = 10'b1100100010,
+
+    // This state is used for terminal errors
+    StTerminalError = 10'b0100111111
+  } st_e;
 
   // MsgWidth : 64
   // MsgStrbW : 8
-  parameter int unsigned AppDigestW = 384;
+  parameter int unsigned AppDigestW = 512;
   parameter int unsigned AppKeyW = 256;
+  // Width of one digest chunk returned per rsp_valid pulse in AppDynamic mode.
+  parameter int unsigned DynAppDigestW = MsgWidth;
 
   typedef struct packed {
-    logic valid;
-    logic [MsgWidth-1:0] data;
+    logic req_valid;
+    logic [MsgWidth-1:0] data_s0;
+    logic [MsgWidth-1:0] data_s1;
     logic [MsgStrbW-1:0] strb;
-    logic last;
+    logic req_last;
+    logic rsp_ready;
   } app_req_t;
 
   typedef struct packed {
-    logic ready;
-    logic done;
-    logic [AppDigestW-1:0] digest_share0;
-    logic [AppDigestW-1:0] digest_share1;
-    // Error is valid when done is high. If any error occurs during KDF, KMAC
+    logic req_ready;
+    logic rsp_valid;
+    logic [AppDigestW-1:0] digest_s0;
+    logic [AppDigestW-1:0] digest_s1;
+    // Error is valid when rsp_valid is high. If any error occurs during KDF, KMAC
     // returns the garbage digest data with error. The KeyMgr discards the
     // digest and may re-initiate the process.
     logic error;
+    logic rsp_finish;
   } app_rsp_t;
 
   parameter app_req_t APP_REQ_DEFAULT = '{
-    valid: 1'b 0,
-    data: '0,
-    strb: '0,
-    last: 1'b 0
-  };
-  parameter app_rsp_t APP_RSP_DEFAULT = '{
-    ready: 1'b1,
-    done:  1'b1,
-    digest_share0: AppDigestW'(32'hDEADBEEF),
-    digest_share1: AppDigestW'(32'hFACEBEEF),
-    error: 1'b1
+    req_valid: 1'b0,
+    data_s0:   '0,
+    data_s1:   '0,
+    strb:      '0,
+    req_last:  1'b0,
+    rsp_ready: 1'b0
   };
 
+  parameter app_rsp_t APP_RSP_DEFAULT = '{
+    req_ready:  1'b0,
+    rsp_valid:  1'b0,
+    digest_s0:  '0,
+    digest_s1:  '0,
+    error:      1'b0,
+    rsp_finish: 1'b0
+  };
 
   ////////////////////
   // Error Handling //
@@ -384,8 +531,11 @@ package kmac_pkg;
     //  - Sw issues KMAC op without Entropy setting.
     ErrSwHashingWithoutEntropyReady = 8'h 09,
 
-    // Error Shadow register update
-    ErrShadowRegUpdate = 8'h C0,
+    // ErrSwStopNotBlockAligned
+    ErrSwStopNotBlockAligned = 8'h 0A,
+
+    // ErrSwSaveRestoreSideload
+    ErrSwSaveRestoreSideload = 8'h 0B,
 
     // Error due to lc_escalation_en_i or fatal fault
     ErrFatalError = 8'h C1,
@@ -414,13 +564,9 @@ package kmac_pkg;
 
   // Endian conversion functions (32-bit, 64-bit)
   function automatic logic [31:0] conv_endian32( input logic [31:0] v, input logic swap);
-    logic [31:0] conv_data = {<<8{v}};
+    logic [31:0] conv_data;
+    conv_data = {<<8{v}};
     conv_endian32 = (swap) ? conv_data : v ;
   endfunction : conv_endian32
-
-  function automatic logic [63:0] conv_endian64( input logic [63:0] v, input logic swap);
-    logic [63:0] conv_data = {<<8{v}};
-    conv_endian64 = (swap) ? conv_data : v ;
-  endfunction : conv_endian64
 
 endpackage : kmac_pkg

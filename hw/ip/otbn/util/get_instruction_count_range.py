@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,7 @@ def main() -> int:
         help=('The specific subroutine to check. If not provided, the start '
               'point is _imem_start (whole program).'))
     args = parser.parse_args()
-    program = decode_elf(args.elf)
+    program = decode_elf(args.elf, [])
 
     # Compute instruction count range.
     if args.subroutine is None:

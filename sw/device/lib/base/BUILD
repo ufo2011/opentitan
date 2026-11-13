@@ -1,19 +1,140 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-load("//rules:cross_platform.bzl", "dual_cc_library", "dual_inputs")
+load("//rules:cross_platform.bzl", "dual_cc_device_library_of", "dual_cc_library", "dual_inputs")
 load(
-    "//rules:opentitan_test.bzl",
-    "cw310_params",
-    "opentitan_functest",
+    "//rules/opentitan:defs.bzl",
+    "EARLGREY_SILICON_OWNER_ROM_EXT_ENVS",
+    "EARLGREY_TEST_ENVS",
+    "fpga_params",
+    "opentitan_test",
+    "verilator_params",
 )
+load("@bazel_skylib//lib:dicts.bzl", "dicts")
+load("//rules:doxygen.bzl", "doxygen_gather_all_package_cc")
 
 package(default_visibility = ["//visibility:public"])
+
+BASE_EXEC_ENVS = dicts.add(
+    EARLGREY_TEST_ENVS,
+    EARLGREY_SILICON_OWNER_ROM_EXT_ENVS,
+    {
+        "//hw/top_earlgrey:fpga_cw340_sival_rom_ext": None,
+    },
+)
+
+filegroup(
+    name = "doc_files",
+    srcs = glob(["**/*.md"]) + ["//sw/device/lib/base/freestanding:doc_files"],
+)
+
+dual_cc_library(
+    name = "crc32",
+    srcs = dual_inputs(
+        device = ["crc32.c"],
+        host = ["mock_crc32.cc"],
+    ),
+    hdrs = dual_inputs(
+        host = ["mock_crc32.h"],
+        shared = ["crc32.h"],
+    ),
+    # This library is a dependancy of the ujson library.
+    visibility = ["//sw/device/lib/ujson:__pkg__"],
+    deps = dual_inputs(
+        host = [
+            ":global_mock",
+            "@googletest//:gtest",
+        ],
+        shared = [
+            ":memory",
+            ":macros",
+        ],
+    ),
+)
+
+# Make the non-mock version of CRC32 visible outside of this package.
+alias(
+    name = "crc32_device_library",
+    actual = dual_cc_device_library_of(":crc32"),
+)
+
+cc_test(
+    name = "crc32_unittest",
+    srcs = ["crc32_unittest.cc"],
+    deps = [
+        dual_cc_device_library_of(":crc32"),
+        "@googletest//:gtest_main",
+    ],
+)
+
+opentitan_test(
+    name = "crc32_functest",
+    srcs = ["crc32_functest.c"],
+    exec_env = BASE_EXEC_ENVS,
+    verilator = verilator_params(
+        timeout = "long",
+    ),
+    deps = [
+        ":crc32",
+        "//sw/device/lib/testing/test_framework:ottf_main",
+    ],
+)
+
+opentitan_test(
+    name = "crc32_perftest",
+    srcs = ["crc32_perftest.c"],
+    exec_env = dicts.add(
+        BASE_EXEC_ENVS,
+        {
+            "//hw/top_earlgrey:fpga_cw340_test_rom": None,
+        },
+    ),
+    fpga = fpga_params(
+        tags = [
+            "manual",
+        ],
+    ),
+    deps = [
+        ":crc32",
+        ":macros",
+        "//sw/device/lib/runtime:ibex",
+        "//sw/device/lib/runtime:log",
+        "//sw/device/lib/testing/test_framework:check",
+        "//sw/device/lib/testing/test_framework:ottf_main",
+        "//sw/device/lib/testing/test_framework:ottf_test_config",
+    ],
+)
 
 cc_library(
     name = "global_mock",
     hdrs = ["global_mock.h"],
+)
+
+cc_test(
+    name = "global_mock_unittest",
+    srcs = ["global_mock_unittest.cc"],
+    # Enable UBSan by setting copts and linkopts. This is roughly what
+    # `--config=ubsan` does, as defined in `.bazelrc`.
+    copts = [
+        "-fsanitize=undefined",
+        "-g",
+        "-fno-omit-frame-pointer",
+        # Make detected UB fatal. Without this flag, the test would always pass.
+        "-fno-sanitize-recover",
+    ],
+    linkopts = [
+        "-fsanitize=undefined",
+    ] + select({
+        "@rules_cc//cc/compiler:clang": [
+            "-fsanitize-link-c++-runtime",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":global_mock",
+        "@googletest//:gtest_main",
+    ],
 )
 
 cc_library(
@@ -53,7 +174,7 @@ cc_test(
 alias(
     name = "math_builtins",
     actual = select({
-        "//sw/device:measure_coverage_on_target": "//sw/device:nothing",
+        "//rules/coverage:enabled": "//sw/device:nothing",
         "//conditions:default": ":math_polyfills",
     }),
     visibility = ["//visibility:private"],
@@ -63,7 +184,10 @@ cc_library(
     name = "math",
     srcs = ["math.c"],
     hdrs = ["math.h"],
-    deps = [":math_builtins"],
+    deps = [
+        ":macros",
+        ":math_builtins",
+    ],
 )
 
 cc_test(
@@ -98,17 +222,13 @@ cc_library(
     ],
 )
 
-opentitan_functest(
+opentitan_test(
     name = "memory_perftest",
     srcs = ["memory_perftest.c"],
-    cw310 = cw310_params(
-        tags = [
-            "flaky",
-            "manual",
-        ],
+    exec_env = BASE_EXEC_ENVS,
+    fpga = fpga_params(
+        tags = ["coverage_broken"],  # perftest instrumentation overhead
     ),
-    manifest = "//sw/device/silicon_creator/rom_ext:manifest_standard",
-    targets = ["cw310_test_rom"],
     deps = [
         ":macros",
         ":memory",
@@ -151,24 +271,17 @@ cc_test(
     ],
 )
 
-cc_library(
-    name = "hardened_status",
-    srcs = ["hardened_status.c"],
-    hdrs = ["hardened_status.h"],
+opentitan_test(
+    name = "hardened_functest",
+    srcs = ["hardened_functest.c"],
+    exec_env = BASE_EXEC_ENVS,
+    verilator = verilator_params(
+        timeout = "long",
+    ),
     deps = [
-        ":bitfield",
         ":hardened",
-        ":macros",
-        ":status",
-    ],
-)
-
-cc_test(
-    name = "hardened_status_unittest",
-    srcs = ["hardened_status_unittest.cc"],
-    deps = [
-        ":hardened_status",
-        "@googletest//:gtest_main",
+        "//sw/device/lib/runtime:ibex",
+        "//sw/device/lib/testing/test_framework:ottf_main",
     ],
 )
 
@@ -176,7 +289,30 @@ cc_library(
     name = "random_order",
     srcs = ["random_order.c"],
     hdrs = ["random_order.h"],
-    deps = [":bitfield"],
+    deps = [
+        ":bitfield",
+        ":hardened",
+        "//sw/device/lib/crypto/drivers:rv_core_ibex",
+    ],
+)
+
+cc_library(
+    name = "lz4",
+    srcs = ["lz4.c"],
+    hdrs = ["lz4.h"],
+    deps = [
+        ":memory",
+        "//sw/device/lib/base:macros",
+    ],
+)
+
+cc_test(
+    name = "random_order_unittest",
+    srcs = ["random_order_unittest.cc"],
+    deps = [
+        ":random_order",
+        "@googletest//:gtest_main",
+    ],
 )
 
 cc_library(
@@ -188,6 +324,7 @@ cc_library(
         ":macros",
         ":memory",
         ":random_order",
+        "//sw/device/lib/crypto/impl:status",
     ],
 )
 
@@ -198,6 +335,33 @@ cc_test(
         ":hardened_memory",
         ":random_order",
         "@googletest//:gtest_main",
+    ],
+)
+
+opentitan_test(
+    name = "hardened_memory_functest",
+    srcs = ["hardened_memory_functest.c"],
+    exec_env = dicts.add(
+        BASE_EXEC_ENVS,
+        {
+            # This test expects constant cycle count which cannot be guaranteed on the RRAM.
+            # see https://github.com/lowRISC/opentitan/issues/30895
+            "//hw/top_earlgrey:fpga_cw340_sival_rom_ext": "fpga_sival_skip_ci",
+            "//hw/top_earlgrey:fpga_cw340_rom_with_fake_keys": "fpga_sival_skip_ci",
+        },
+    ),
+    fpga_sival_skip_ci = fpga_params(
+        tags = ["skip_in_ci"],
+    ),
+    deps = [
+        "//hw/top:rv_core_ibex_c_regs",
+        "//hw/top/dt:rv_core_ibex",
+        "//sw/device/lib/base:csr",
+        "//sw/device/lib/base:hardened_memory",
+        "//sw/device/lib/crypto/drivers:rv_core_ibex",
+        "//sw/device/lib/runtime:log",
+        "//sw/device/lib/testing:profile",
+        "//sw/device/lib/testing/test_framework:ottf_main",
     ],
 )
 
@@ -312,6 +476,7 @@ cc_library(
         ":macros",
         "//sw/device/lib/base/internal:status",
         "//sw/device/lib/dif:base",
+        "//sw/device/silicon_creator/lib:error",
     ],
 )
 
@@ -322,4 +487,54 @@ cc_test(
         ":status",
         "@googletest//:gtest_main",
     ],
+)
+
+cc_library(
+    name = "status_report_unittest_c",
+    srcs = ["status_report_unittest_c.c"],
+    hdrs = ["status_report_unittest_c.h"],
+    deps = [
+        ":status",
+    ],
+)
+
+cc_test(
+    name = "status_report_unittest",
+    srcs = [
+        "status_report_unittest.cc",
+    ],
+    deps = [
+        ":status",
+        ":status_report_unittest_c",
+        "@googletest//:gtest_main",
+    ],
+)
+
+test_suite(
+    name = "base_functest_suite",
+    tests = [
+        ":crc32_functest",
+        ":hardened_memory_functest",
+    ],
+)
+
+test_suite(
+    name = "base_unittest_suite",
+    tests = [
+        ":crc32_unittest",
+        ":global_mock_unittest",
+        ":hardened_memory_unittest",
+        ":hardened_unittest",
+        ":math_unittest",
+        ":memory_unittest",
+        ":mmio_unittest",
+        ":mock_csr_unittest",
+        ":random_order_unittest",
+        ":status_report_unittest",
+        ":status_unittest",
+    ],
+)
+
+doxygen_gather_all_package_cc(
+    name = "doxy_target",
 )

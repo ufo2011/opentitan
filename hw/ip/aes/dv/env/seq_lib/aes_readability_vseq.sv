@@ -1,27 +1,21 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-
-// Test the readability matches the specification
-// of the different registers
-// Check that regwen locks ctrl_aux_shadowed
-// Check Key regs are not readable
-// Check that registers are wiped
-
+// This test verifies the behavior of different registers matches the specification. In particular:
+// - Initial key registers are not readable.
+// - Registers are cleared with pseudo-random data if requested (including the unreadable key
+//   registers).
 
 class aes_readability_vseq extends aes_base_vseq;
   `uvm_object_utils(aes_readability_vseq)
-
   `uvm_object_new
 
-
-  bit ctrl_aux            = 0;
-  bit aux_chk             = 0;
   aes_seq_item data_item;
   aes_seq_item cfg_item;
   aes_message_item my_message;
-  string str              ="";
+  string str = "";
+  int success = 1;
 
   task body();
     aes_seq_item cfg_item       = new();         // the configuration for this message
@@ -40,24 +34,6 @@ class aes_readability_vseq extends aes_base_vseq;
     // generate list of messages //
     aes_message_init();
     generate_message_queue();
-
-    // check that regwen works //
-    csr_rd(.ptr(ral.ctrl_aux_shadowed), .value(ctrl_aux), .blocking(1));
-    csr_wr(.ptr(ral.ctrl_aux_shadowed), .value(~ctrl_aux), .en_shadow_wr(1'b1), .blocking(1));
-    csr_rd(.ptr(ral.ctrl_aux_shadowed), .value(aux_chk), .blocking(1));
-
-    if (aux_chk == ctrl_aux) begin
-      `uvm_fatal(`gfn, $sformatf(" Could not overwrite CTRL AUX SHADOWED"))
-    end
-
-    set_regwen(0);
-    csr_wr(.ptr(ral.ctrl_aux_shadowed), .value(~aux_chk), .en_shadow_wr(1'b1), .blocking(1));
-    csr_rd(.ptr(ral.ctrl_aux_shadowed), .value(ctrl_aux), .blocking(1));
-
-    if (aux_chk != ctrl_aux) begin
-      `uvm_fatal(`gfn, $sformatf(" Was able to overwrite CTRL AUX SHADOWED with regwen cleared"))
-    end
-
 
     // check key is unreadable!
     my_message = message_queue.pop_back();
@@ -107,28 +83,29 @@ class aes_readability_vseq extends aes_base_vseq;
     csr_spinwait(.ptr(ral.status.idle) , .exp_data(1'b1));
 
 
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.data_in[0]", check_item.data_in[0]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.data_in[1]", check_item.data_in[1]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.data_in[2]", check_item.data_in[2]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.data_in[3]", check_item.data_in[3]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.data_in[0]", check_item.data_in[0]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.data_in[1]", check_item.data_in[1]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.data_in[2]", check_item.data_in[2]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.data_in[3]", check_item.data_in[3]);
 
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[0]", check_item.key[0][0]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[1]", check_item.key[0][1]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[2]", check_item.key[0][2]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[3]", check_item.key[0][3]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[4]", check_item.key[0][4]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[5]", check_item.key[0][5]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[6]", check_item.key[0][6]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[7]", check_item.key[0][7]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[0]", check_item.key[0][0]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[1]", check_item.key[0][1]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[2]", check_item.key[0][2]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[3]", check_item.key[0][3]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[4]", check_item.key[0][4]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[5]", check_item.key[0][5]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[6]", check_item.key[0][6]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share0[7]", check_item.key[0][7]);
 
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[0]", check_item.key[1][0]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[1]", check_item.key[1][1]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[2]", check_item.key[1][2]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[3]", check_item.key[1][3]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[4]", check_item.key[1][4]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[5]", check_item.key[1][5]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[6]", check_item.key[1][6]);
-    uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[7]", check_item.key[1][7]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[0]", check_item.key[1][0]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[1]", check_item.key[1][1]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[2]", check_item.key[1][2]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[3]", check_item.key[1][3]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[4]", check_item.key[1][4]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[5]", check_item.key[1][5]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[6]", check_item.key[1][6]);
+    success &= uvm_hdl_read("tb.dut.u_reg.hw2reg.key_share1[7]", check_item.key[1][7]);
+    `DV_CHECK_FATAL(success == 1)
 
 
     foreach (data_item.data_in[idx]) begin

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -102,7 +102,7 @@ module prim_packer #(
     // incr_en: Increase the pos by cnt_step. ack_in && !ack_out
     // decr_en: Decrease the pos by cnt_step. !ack_in && ack_out
     // set_en:  Set to specific value in case of ack_in && ack_out.
-    //          This case, the value could be increased or descreased based on
+    //          This case, the value could be increased or decreased based on
     //          the input size (inmask_ones)
     logic            cnt_incr_en, cnt_decr_en, cnt_set_en;
     logic [PtrW-1:0] cnt_step, cnt_set;
@@ -133,17 +133,18 @@ module prim_packer #(
       .clk_i,
       .rst_ni,
 
-      .clr_i      (flush_done),
+      .clr_i              (flush_done),
 
-      .set_i      (cnt_set_en),
-      .set_cnt_i  (cnt_set   ),
+      .set_i              (cnt_set_en),
+      .set_cnt_i          (cnt_set   ),
 
-      .incr_en_i  (cnt_incr_en),
-      .decr_en_i  (cnt_decr_en),
-      .step_i     (cnt_step   ),
+      .incr_en_i          (cnt_incr_en),
+      .decr_en_i          (cnt_decr_en),
+      .step_i             (cnt_step   ),
+      .commit_i           (1'b1       ),
 
-      .cnt_o      (pos_q     ), // Current counter state
-      .cnt_next_o (          ), // Next counter state
+      .cnt_o              (pos_q     ), // Current counter state
+      .cnt_after_commit_o (          ), // Next counter state
 
       .err_o
     );

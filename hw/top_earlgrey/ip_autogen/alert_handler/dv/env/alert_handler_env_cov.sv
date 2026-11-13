@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -76,11 +76,9 @@ class alert_handler_env_cov extends cip_base_env_cov #(.CFG_T(alert_handler_env_
   covergroup alert_cause_cg with function sample(int alert_index, int class_index);
     alert_cause_cp: coverpoint alert_index {
       bins alert[NUM_ALERTS] = {[0:NUM_ALERTS-1]};
-      illegal_bins il = default;
     }
     class_index_cp: coverpoint class_index {
       bins class_i[NUM_ALERT_CLASSES] = {[0:NUM_ALERT_CLASSES-1]};
-      illegal_bins il = default;
     }
     alert_cause_cross_class_index: cross alert_cause_cp, class_index_cp;
   endgroup
@@ -91,15 +89,12 @@ class alert_handler_env_cov extends cip_base_env_cov #(.CFG_T(alert_handler_env_
     loc_alert_cause_cp: coverpoint local_alert {
       bins alert_ping_fail = {LocalAlertPingFail};
       bins alert_integrity_fail = {LocalAlertIntFail};
-      illegal_bins il = default;
     }
     alert_index_cp: coverpoint alert_index {
       bins alert[NUM_ALERTS] = {[0:NUM_ALERTS-1]};
-      illegal_bins il = default;
     }
     class_index_cp: coverpoint class_index {
       bins class_i[NUM_ALERT_CLASSES] = {[0:NUM_ALERT_CLASSES-1]};
-      illegal_bins il = default;
     }
     loc_alert_cause_cross_alert_index: cross loc_alert_cause_cp, alert_index_cp;
     loc_alert_cause_cross_class_index: cross loc_alert_cause_cp, class_index_cp;
@@ -111,15 +106,12 @@ class alert_handler_env_cov extends cip_base_env_cov #(.CFG_T(alert_handler_env_
     loc_alert_cause_cp: coverpoint local_alert {
       bins esc_ping_fail = {LocalEscPingFail};
       bins esc_integrity_fail = {LocalEscIntFail};
-      illegal_bins il = default;
     }
     esc_index_cp: coverpoint esc_index {
       bins alert[NUM_ESCS] = {[0:NUM_ESCS-1]};
-      illegal_bins il = default;
     }
     class_index_cp: coverpoint class_index {
       bins class_i[NUM_ALERT_CLASSES] = {[0:NUM_ALERT_CLASSES-1]};
-      illegal_bins il = default;
     }
     loc_alert_cause_cross_alert_index: cross loc_alert_cause_cp, esc_index_cp;
     loc_alert_cause_cross_class_index: cross loc_alert_cause_cp, class_index_cp;
@@ -154,11 +146,9 @@ class alert_handler_env_cov extends cip_base_env_cov #(.CFG_T(alert_handler_env_
     num_cycles_cp: coverpoint num_cycles_between_pings{
       bins less_than_5000_cycs = {[1:4_999]};
       bins less_than_100k_cycs = {[5_000:99_999]};
-      bins less_than_200k_cycs = {[100_000:199_999]};
-      bins less_than_300k_cycs = {[200_000:299_999]};
-      bins less_than_400k_cycs = {[300_000:399_999]};
-      bins less_than_500k_cycs = {[400_000:499_999]};
-      bins more_than_500k_cycs = {[500_000:'hFFFF]};
+      bins less_than_150k_cycs = {[5_000:149_999]};
+      bins less_than_200k_cycs = {[150_000:199_999]};
+      bins more_than_200k_cycs = {[200_000:$]};
     }
   endgroup
 

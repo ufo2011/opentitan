@@ -1,23 +1,33 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sw/device/lib/crypto/drivers/otbn.h"
 
+#include "hw/top/dt/otbn.h"
 #include "sw/device/lib/base/abs_mmio.h"
 #include "sw/device/lib/base/bitfield.h"
+#include "sw/device/lib/base/crc32.h"
 #include "sw/device/lib/base/hardened.h"
+#include "sw/device/lib/base/lz4.h"
+#include "sw/device/lib/base/macros.h"
+#include "sw/device/lib/base/random_order.h"
 #include "sw/device/lib/base/status.h"
+#include "sw/device/lib/crypto/impl/state.h"
 #include "sw/device/lib/crypto/impl/status.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "otbn_regs.h"  // Generated.
+#include "hw/top/otbn_regs.h"  // Generated.
+
+// Module ID for status codes.
+#define MODULE_ID MAKE_MODULE_ID('d', 'b', 'n')
+
+static const dt_otbn_t kOtbnDt = kDtOtbn;
+
+static inline uint32_t otbn_base(void) {
+  return dt_otbn_primary_reg_block(kOtbnDt);
+}
 
 enum {
-  /**
-   * Base address for OTBN.
-   */
-  kBase = TOP_EARLGREY_OTBN_BASE_ADDR,
   /**
    * DMEM size in bytes.
    */
@@ -32,7 +42,7 @@ enum {
    * Although some parts of the ERR_BITS register are marked reserved, the OTBN
    * documentation explicitly guarantees that ERR_BITS is zero for a successful
    * execution:
-   *   https://docs.opentitan.org/hw/ip/otbn/doc/#design-details-software-execution
+   *   https://opentitan.org/book/hw/ip/otbn/doc/theory_of_operation.html#software-execution-design-details
    */
   kOtbnErrBitsNoError = 0,
 };
@@ -68,11 +78,20 @@ typedef enum otbn_status {
  */
 static status_t check_offset_len(uint32_t offset_bytes, size_t num_words,
                                  size_t mem_size) {
-  if (offset_bytes + num_words * sizeof(uint32_t) <
-          num_words * sizeof(uint32_t) ||
-      offset_bytes + num_words * sizeof(uint32_t) > mem_size) {
+  if (num_words > UINT32_MAX / sizeof(uint32_t)) {
     return OTCRYPTO_BAD_ARGS;
   }
+  uint32_t num_bytes = num_words * sizeof(uint32_t);
+
+  if (offset_bytes > UINT32_MAX - num_bytes) {
+    return OTCRYPTO_BAD_ARGS;
+  }
+  uint32_t adjusted_offset_bytes = offset_bytes + num_bytes;
+
+  if (adjusted_offset_bytes > mem_size) {
+    return OTCRYPTO_BAD_ARGS;
+  }
+
   return OTCRYPTO_OK;
 }
 
@@ -85,55 +104,108 @@ static status_t check_offset_len(uint32_t offset_bytes, size_t num_words,
  * @return Result of the operation.
  */
 static status_t otbn_assert_idle(void) {
-  uint32_t status = launder32(~kOtbnStatusIdle);
-  status_t res = (status_t){.value = launder32(OTCRYPTO_OK.value ^ status)};
-  status = abs_mmio_read32(kBase + OTBN_STATUS_REG_OFFSET);
+  uint32_t status = launder32(~(uint32_t)kOtbnStatusIdle);
+  status_t res = (status_t){
+      .value = (int32_t)launder32((uint32_t)OTCRYPTO_OK.value ^ status)};
+  status = abs_mmio_read32(otbn_base() + OTBN_STATUS_REG_OFFSET);
   res.value ^= ~status;
-  if (launder32(hardened_status_ok(res)) == kHardenedBoolTrue) {
-    HARDENED_CHECK_EQ(hardened_status_ok(res), kHardenedBoolTrue);
-    HARDENED_CHECK_EQ(abs_mmio_read32(kBase + OTBN_STATUS_REG_OFFSET),
+  if (launder32(OT_UNSIGNED(res.value)) == kHardenedBoolTrue) {
+    HARDENED_CHECK_EQ(res.value, kHardenedBoolTrue);
+    HARDENED_CHECK_EQ(abs_mmio_read32(otbn_base() + OTBN_STATUS_REG_OFFSET),
                       kOtbnStatusIdle);
     return res;
   }
   return OTCRYPTO_ASYNC_INCOMPLETE;
 }
 
-/**
- * Helper function for writing to OTBN's DMEM or IMEM.
- *
- * @param dest_addr Destination address.
- * @param src Source buffer.
- * @param num_words Number of words to copy.
- */
-static void otbn_write(uint32_t dest_addr, const uint32_t *src,
-                       size_t num_words) {
-  // TODO: replace 0 with a random index like the silicon_creator driver
-  // (requires an interface to Ibex's RND valid bit and data register).
-  size_t i = ((uint64_t)0 * (uint64_t)num_words) >> 32;
-  enum { kStep = 1 };
-  size_t iter_cnt = 0;
-  for (; launder32(iter_cnt) < num_words; ++iter_cnt) {
-    abs_mmio_write32(dest_addr + i * sizeof(uint32_t), src[i]);
-    i += kStep;
-    if (launder32(i) >= num_words) {
-      i -= num_words;
-    }
-    HARDENED_CHECK_LT(i, num_words);
-  }
-  HARDENED_CHECK_EQ(iter_cnt, num_words);
-}
-
-static status_t otbn_imem_write(size_t num_words, const uint32_t *src,
-                                otbn_addr_t dest) {
-  HARDENED_TRY(check_offset_len(dest, num_words, kOtbnIMemSizeBytes));
-  otbn_write(kBase + OTBN_IMEM_REG_OFFSET + dest, src, num_words);
-  return OTCRYPTO_OK;
-}
-
 status_t otbn_dmem_write(size_t num_words, const uint32_t *src,
                          otbn_addr_t dest) {
   HARDENED_TRY(check_offset_len(dest, num_words, kOtbnDMemSizeBytes));
-  otbn_write(kBase + OTBN_DMEM_REG_OFFSET + dest, src, num_words);
+
+  // Reset the LOAD_CHECKSUM register.
+  const uint32_t kBase = otbn_base();
+  abs_mmio_write32(kBase + OTBN_LOAD_CHECKSUM_REG_OFFSET, 0);
+
+  // Initialize the CRC.
+  uint32_t ctx;
+  crc32_init(&ctx);
+
+  // Setup the random order construct.
+  random_order_t order;
+  random_order_init(&order, num_words);
+
+  size_t count = 0;
+
+  for (; launderw(count) < num_words; count = launderw(count) + 1) {
+    // The value obtained from `advance()` is laundered, to prevent
+    // implementation details from leaking across procedures.
+    size_t idx = launderw(random_order_advance(&order));
+    size_t idx_word = idx * sizeof(uint32_t);
+
+    // Prevent the compiler from reordering the loop; this ensures a
+    // happens-before among indices consistent with `order`.
+    barrierw(idx);
+
+    // Perform the write.
+    abs_mmio_write32(kBase + OTBN_DMEM_REG_OFFSET + dest + idx_word, src[idx]);
+
+    // Update the CRC. According to the OTBN documentation, each CRC update
+    // consists of 48-bit: {imem, idx, wdata}
+    // imem: set to 0 for DMEM writes.
+    // idx: the index padded to 15b.
+    // wdata: the 32b word written into DMEM.
+    uint32_t offset = ((dest + idx_word) >> 2) & 0x7FFF;
+    crc32_add32(&ctx, src[idx]);
+    crc32_add8(&ctx, (uint8_t)offset);
+    crc32_add8(&ctx, (uint8_t)(offset >> 8));
+  }
+  RANDOM_ORDER_HARDENED_CHECK_DONE(order);
+  HARDENED_CHECK_EQ(count, num_words);
+
+  // Get the computed (expected) checksum, fetch the checksum from the OTBN
+  // LOAD_CHECKSUM register, and compare both registers.
+  uint32_t checksum_expected = crc32_finish(&ctx);
+  uint32_t checksum = abs_mmio_read32(kBase + OTBN_LOAD_CHECKSUM_REG_OFFSET);
+  HARDENED_CHECK_EQ(checksum, checksum_expected);
+
+  return OTCRYPTO_OK;
+}
+
+status_t otbn_dmem_write_public(size_t num_words, const uint32_t *src,
+                                otbn_addr_t dest) {
+  HARDENED_TRY(check_offset_len(dest, num_words, kOtbnDMemSizeBytes));
+
+  // Reset the LOAD_CHECKSUM register.
+  const uint32_t kBase = otbn_base();
+  abs_mmio_write32(kBase + OTBN_LOAD_CHECKSUM_REG_OFFSET, 0);
+
+  // Initialize the CRC.
+  uint32_t ctx;
+  crc32_init(&ctx);
+
+  size_t i = 0;
+  for (; launder32(i) < num_words; ++i) {
+    size_t idx_word = i * sizeof(uint32_t);
+    abs_mmio_write32(kBase + OTBN_DMEM_REG_OFFSET + dest + idx_word, src[i]);
+
+    // Update the CRC. According to the OTBN documentation, each CRC update
+    // consists of 48-bit: {imem, idx, wdata}
+    // imem: set to 0 for DMEM writes.
+    // idx: the index padded to 15b.
+    // wdata: the 32b word written into DMEM.
+    uint32_t offset = ((dest + idx_word) >> 2) & 0x7FFF;
+    crc32_add32(&ctx, src[i]);
+    crc32_add8(&ctx, (uint8_t)offset);
+    crc32_add8(&ctx, (uint8_t)(offset >> 8));
+  }
+  HARDENED_CHECK_EQ(i, num_words);
+
+  // Get the computed (expected) checksum, fetch the checksum from the OTBN
+  // LOAD_CHECKSUM register, and compare both registers.
+  uint32_t checksum_expected = crc32_finish(&ctx);
+  uint32_t checksum = abs_mmio_read32(kBase + OTBN_LOAD_CHECKSUM_REG_OFFSET);
+  HARDENED_CHECK_EQ(checksum, checksum_expected);
+
   return OTCRYPTO_OK;
 }
 
@@ -142,6 +214,7 @@ status_t otbn_dmem_set(size_t num_words, const uint32_t src, otbn_addr_t dest) {
 
   // No need to randomize here, since all the values are the same.
   size_t i = 0;
+  const uint32_t kBase = otbn_base();
   for (; launder32(i) < num_words; ++i) {
     abs_mmio_write32(kBase + OTBN_DMEM_REG_OFFSET + dest + i * sizeof(uint32_t),
                      src);
@@ -155,6 +228,7 @@ status_t otbn_dmem_read(size_t num_words, otbn_addr_t src, uint32_t *dest) {
   HARDENED_TRY(check_offset_len(src, num_words, kOtbnDMemSizeBytes));
 
   size_t i = 0;
+  const uint32_t kBase = otbn_base();
   for (; launder32(i) < num_words; ++i) {
     dest[i] = abs_mmio_read32(kBase + OTBN_DMEM_REG_OFFSET + src +
                               i * sizeof(uint32_t));
@@ -168,24 +242,35 @@ status_t otbn_execute(void) {
   // Ensure OTBN is idle before attempting to run a command.
   HARDENED_TRY(otbn_assert_idle());
 
+  const uint32_t kBase = otbn_base();
+  // Clear any pending DONE interrupt state before starting execution.
+  abs_mmio_write32(kBase + OTBN_INTR_STATE_REG_OFFSET,
+                   1u << OTBN_INTR_STATE_DONE_BIT);
+
   abs_mmio_write32(kBase + OTBN_CMD_REG_OFFSET, kOtbnCmdExecute);
   return OTCRYPTO_OK;
 }
 
 status_t otbn_busy_wait_for_done(void) {
   uint32_t status = launder32(UINT32_MAX);
-  status_t res = (status_t){.value = launder32(OTCRYPTO_OK.value ^ status)};
+  const uint32_t kBase = otbn_base();
+  status_t res = (status_t){
+      .value = (int32_t)launder32((uint32_t)kHardenedBoolTrue ^ status)};
   do {
     status = abs_mmio_read32(kBase + OTBN_STATUS_REG_OFFSET);
   } while (launder32(status) != kOtbnStatusIdle &&
            launder32(status) != kOtbnStatusLocked);
   res.value ^= ~status;
 
+  // Clear the DONE interrupt state now that the operation has completed.
+  abs_mmio_write32(kBase + OTBN_INTR_STATE_REG_OFFSET,
+                   1u << OTBN_INTR_STATE_DONE_BIT);
+
   uint32_t err_bits = otbn_err_bits_get();
 
-  if (launder32(hardened_status_ok(res)) == kHardenedBoolTrue &&
+  if (launder32(OT_UNSIGNED(res.value)) == kHardenedBoolTrue &&
       launder32(err_bits) == kOtbnErrBitsNoError) {
-    HARDENED_CHECK_EQ(hardened_status_ok(res), kHardenedBoolTrue);
+    HARDENED_CHECK_EQ(res.value, kHardenedBoolTrue);
     err_bits = otbn_err_bits_get();
     HARDENED_CHECK_EQ(err_bits, kOtbnErrBitsNoError);
     HARDENED_CHECK_EQ(abs_mmio_read32(kBase + OTBN_STATUS_REG_OFFSET),
@@ -195,7 +280,19 @@ status_t otbn_busy_wait_for_done(void) {
 
   // If OTBN is idle (not locked), then return a recoverable error.
   if (launder32(status) == kOtbnStatusIdle) {
+    // COVERAGE (HW ERR) This requires the OTBN to reach an error.
     HARDENED_CHECK_EQ(status, kOtbnStatusIdle);
+#ifdef FIPS_MODE
+    // If unimp (ILLEGAL_INSN) executed (such as for PCT), lock cryptolib state.
+    if ((err_bits & (1u << 3)) != 0) {
+      crypto_state_t state;
+      if (status_ok(read_state(&state))) {
+        state.locked_state = kHardenedByteBoolTrue;
+        HARDENED_TRY(store_state(&state));
+      }
+      return OTCRYPTO_FATAL_ERR;
+    }
+#endif
     return OTCRYPTO_RECOV_ERR;
   }
 
@@ -205,68 +302,185 @@ status_t otbn_busy_wait_for_done(void) {
 }
 
 uint32_t otbn_err_bits_get(void) {
-  return abs_mmio_read32(kBase + OTBN_ERR_BITS_REG_OFFSET);
+  return abs_mmio_read32(otbn_base() + OTBN_ERR_BITS_REG_OFFSET);
 }
 
 uint32_t otbn_instruction_count_get(void) {
-  return abs_mmio_read32(kBase + OTBN_INSN_CNT_REG_OFFSET);
+  return abs_mmio_read32(otbn_base() + OTBN_INSN_CNT_REG_OFFSET);
 }
 
-status_t otbn_imem_sec_wipe(void) {
+/**
+ * Runs an OTBN command synchronously while masking OTBN interrupts.
+ *
+ * Temporarily disables `OTBN_INTR_ENABLE` so synchronous internal commands
+ * (such as secure memory wipes or intermediate synchronous calculations) do
+ * not trigger spurious external `otbn_done` interrupts, and restores
+ * `OTBN_INTR_ENABLE` after `OTBN_INTR_STATE.done` is cleared.
+ *
+ * @param cmd The OTBN command to execute.
+ * @return Result of the operation.
+ */
+static status_t otbn_run_cmd_sync(otbn_cmd_t cmd) {
   HARDENED_TRY(otbn_assert_idle());
-  abs_mmio_write32(kBase + OTBN_CMD_REG_OFFSET, kOtbnCmdSecWipeImem);
-  HARDENED_TRY(otbn_busy_wait_for_done());
+  const uint32_t kBase = otbn_base();
+  uint32_t intr_enable = abs_mmio_read32(kBase + OTBN_INTR_ENABLE_REG_OFFSET);
+  abs_mmio_write32(kBase + OTBN_INTR_ENABLE_REG_OFFSET, 0);
+  abs_mmio_write32(kBase + OTBN_INTR_STATE_REG_OFFSET,
+                   1u << OTBN_INTR_STATE_DONE_BIT);
+  abs_mmio_write32(kBase + OTBN_CMD_REG_OFFSET, cmd);
+  status_t res = otbn_busy_wait_for_done();
+  abs_mmio_write32(kBase + OTBN_INTR_ENABLE_REG_OFFSET, intr_enable);
+  return res;
+}
+
+status_t otbn_execute_sync(void) { return otbn_run_cmd_sync(kOtbnCmdExecute); }
+
+status_t otbn_imem_sec_wipe(void) {
+  HARDENED_TRY(otbn_run_cmd_sync(kOtbnCmdSecWipeImem));
+
+  crypto_state_t state;
+  // Check whether the state is present and use it if so
+  if (status_ok(read_state(&state))) {
+    state.imem_cache = 0;
+    HARDENED_TRY(store_state(&state));
+  }
+
   return OTCRYPTO_OK;
 }
 
 status_t otbn_dmem_sec_wipe(void) {
+  return otbn_run_cmd_sync(kOtbnCmdSecWipeDmem);
+}
+
+static status_t otbn_set_bit_in_ctrl_reg(bitfield_bit32_index_t bit,
+                                         bool enable) {
+  // Ensure OTBN is idle (otherwise CTRL writes will be ignored).
   HARDENED_TRY(otbn_assert_idle());
-  abs_mmio_write32(kBase + OTBN_CMD_REG_OFFSET, kOtbnCmdSecWipeDmem);
-  HARDENED_TRY(otbn_busy_wait_for_done());
+
+  // Preserve the other CTRL fields via a read-modify-write.
+  uint32_t ctrl_reg = abs_mmio_read32(otbn_base() + OTBN_CTRL_REG_OFFSET);
+  ctrl_reg = bitfield_bit32_write(ctrl_reg, bit, enable);
+
+  abs_mmio_write32(otbn_base() + OTBN_CTRL_REG_OFFSET, ctrl_reg);
+
   return OTCRYPTO_OK;
 }
 
 status_t otbn_set_ctrl_software_errs_fatal(bool enable) {
-  // Ensure OTBN is idle (otherwise CTRL writes will be ignored).
-  HARDENED_TRY(otbn_assert_idle());
+  return otbn_set_bit_in_ctrl_reg(OTBN_CTRL_SOFTWARE_ERRS_FATAL_BIT, enable);
+}
 
-  // Only one bit in the CTRL register so no need to read current value.
-  uint32_t new_ctrl;
-
-  if (enable) {
-    new_ctrl = 1;
-  } else {
-    new_ctrl = 0;
-  }
-
-  abs_mmio_write32(kBase + OTBN_CTRL_REG_OFFSET, new_ctrl);
-
-  return OTCRYPTO_OK;
+status_t otbn_set_ctrl_wfi_enable(bool enable) {
+  return otbn_set_bit_in_ctrl_reg(OTBN_CTRL_WFI_ENABLED_BIT, enable);
 }
 
 /**
- * Checks if the OTBN application's IMEM and DMEM address parameters are valid.
+ * Checks if the OTBN application's compressed IMEM and DMEM address parameters
+ * are valid.
  *
  * This function checks the following properties:
- * - IMEM and DMEM ranges must not be "backwards" in memory, with the end
- * address coming before the start address.
- * - The IMEM range must be non-empty.
+ * - IMEM and DMEM compressed pointer ranges must not be "backwards" in memory.
+ * - The uncompressed IMEM range must be non-empty.
  *
  * @param app the OTBN application to check
  * @return `OTCRYPTO_OK` if checks pass, otherwise `OTCRYPTO_BAD_ARGS`.
  */
 static status_t check_app_address_ranges(const otbn_app_t *app) {
-  // IMEM must not be backwards or empty.
-  if (app->imem_end <= app->imem_start) {
+  // Compressed IMEM must not be backwards, and uncompressed size must not
+  // be empty.
+  if (app->imem_compressed_end <= app->imem_compressed_start ||
+      app->imem_uncompressed_words == 0) {
+    // COVERAGE (SW ERR) This is an internal function, we only provide it valid
+    // inputs.
     return OTCRYPTO_BAD_ARGS;
   }
-  HARDENED_CHECK_LT(app->imem_start, app->imem_end);
+  HARDENED_CHECK_LT((uintptr_t)app->imem_compressed_start,
+                    (uintptr_t)app->imem_compressed_end);
+  HARDENED_CHECK_GT(app->imem_uncompressed_words, 0);
 
-  // DMEM data section must not be backwards.
-  if (app->dmem_data_end < app->dmem_data_start) {
+  // Compressed DMEM must not be backwards.
+  if (app->dmem_compressed_end < app->dmem_compressed_start) {
+    // COVERAGE (SW ERR) This is an internal function, we only provide it valid
+    // inputs.
     return OTCRYPTO_BAD_ARGS;
   }
-  HARDENED_CHECK_LE(app->dmem_data_start, app->dmem_data_end);
+  HARDENED_CHECK_LE((uintptr_t)app->dmem_compressed_start,
+                    (uintptr_t)app->dmem_compressed_end);
+
+  return OTCRYPTO_OK;
+}
+
+/**
+ * Decompresses an LZ4-compressed payload and writes it to an OTBN address.
+ *
+ * @param src Start of the compressed payload.
+ * @param src_end End of the compressed payload.
+ * @param mmio_addr Destination MMIO address in OTBN memory.
+ * @param expected_words Expected uncompressed size in 32-bit words.
+ * @return `OTCRYPTO_OK` if successful, otherwise `OTCRYPTO_FATAL_ERR`.
+ */
+static status_t decompress_load(const uint8_t *src, const uint8_t *src_end,
+                                uint32_t mmio_addr, size_t expected_words) {
+  // A 1024-byte stack buffer (256 32-bit words) for chunked
+  // decompression.
+  uint32_t local_chunk_buf[1024 / sizeof(uint32_t)];
+
+  uint32_t words_written = 0;
+
+  while (src < src_end) {
+    // Check the header size
+    if ((size_t)(src_end - src) < 4) {
+      // COVERAGE (SW ERR) Decompression is only called on valid build-time
+      // compressed OTBN images.
+      return OTCRYPTO_FATAL_ERR;
+    }
+    // Parse the 4-byte chunk header as unsigned 32-bit integers
+    uint32_t comp_len = (uint32_t)(src[0] | (src[1] << 8));
+    uint32_t uncomp_len = (uint32_t)(src[2] | (src[3] << 8));
+    src += 4;
+
+    if (comp_len > (size_t)(src_end - src)) {
+      // COVERAGE (SW ERR) Decompression is only called on valid build-time
+      // compressed OTBN images.
+      return OTCRYPTO_FATAL_ERR;
+    }
+
+    if (uncomp_len % sizeof(uint32_t) != 0) {
+      // COVERAGE (SW ERR) Decompression is only called on valid build-time
+      // compressed OTBN images.
+      return OTCRYPTO_FATAL_ERR;
+    }
+
+    if (LZ4_decompress((const char *)src, (char *)local_chunk_buf,
+                       (int)comp_len,
+                       (int)sizeof(local_chunk_buf)) != (int)uncomp_len) {
+      // COVERAGE (SW ERR) Decompression is only called on valid build-time
+      // compressed OTBN images.
+      return OTCRYPTO_FATAL_ERR;
+    }
+
+    // Write the decompressed data portion to OTBN memory.
+    uint32_t words = uncomp_len / (uint32_t)sizeof(uint32_t);
+    if (words > expected_words - words_written) {
+      // COVERAGE (SW ERR) Decompression is only called on valid build-time
+      // compressed OTBN images.
+      return OTCRYPTO_FATAL_ERR;
+    }
+
+    for (uint32_t i = 0; launder32(i) < words; i++) {
+      abs_mmio_write32(mmio_addr + i * sizeof(uint32_t), local_chunk_buf[i]);
+    }
+
+    src += comp_len;
+    mmio_addr += uncomp_len;
+    words_written += words;
+  }
+
+  if (words_written != expected_words) {
+    // COVERAGE (SW ERR) Decompression is only called on valid build-time
+    // compressed OTBN images.
+    return OTCRYPTO_FATAL_ERR;
+  }
 
   return OTCRYPTO_OK;
 }
@@ -277,20 +491,80 @@ status_t otbn_load_app(const otbn_app_t app) {
   // Ensure OTBN is idle.
   HARDENED_TRY(otbn_assert_idle());
 
-  const size_t imem_num_words = app.imem_end - app.imem_start;
-  const size_t data_num_words = app.dmem_data_end - app.dmem_data_start;
+  crypto_state_t state;
+  bool has_state = status_ok(read_state(&state));
+  hardened_bool_t skip_imem = kHardenedBoolFalse;
+  // Check whether the state is present and use it if so
+  if (has_state) {
+    if (launder32(state.imem_cache) ==
+        (uint32_t)(uintptr_t)app.imem_compressed_start) {
+      HARDENED_CHECK_EQ(state.imem_cache,
+                        (uint32_t)(uintptr_t)app.imem_compressed_start);
+      skip_imem = kHardenedBoolTrue;
+    }
+  }
 
-  HARDENED_TRY(otbn_imem_sec_wipe());
+  const size_t imem_num_words = app.imem_uncompressed_words;
+  const size_t data_num_words = app.dmem_uncompressed_words;
+
+  if (launder32(skip_imem) != kHardenedBoolTrue) {
+    HARDENED_TRY(otbn_imem_sec_wipe());
+  }
   HARDENED_TRY(otbn_dmem_sec_wipe());
 
-  // IMEM always starts at zero.
-  otbn_addr_t imem_start_addr = 0;
-  HARDENED_TRY(
-      otbn_imem_write(imem_num_words, app.imem_start, imem_start_addr));
+  // Reset the LOAD_CHECKSUM register.
+  abs_mmio_write32(otbn_base() + OTBN_LOAD_CHECKSUM_REG_OFFSET, 0);
 
-  if (data_num_words > 0) {
-    HARDENED_TRY(otbn_dmem_write(data_num_words, app.dmem_data_start,
-                                 app.dmem_data_start_addr));
+  // Ensure that the IMEM section fits in IMEM and the data section fits in
+  // DMEM.
+  HARDENED_TRY(check_offset_len(app.dmem_data_start_addr, data_num_words,
+                                kOtbnDMemSizeBytes));
+
+  if (launder32(skip_imem) != kHardenedBoolTrue) {
+    // Write to IMEM. Always starts at zero on the OTBN side.
+    otbn_addr_t imem_offset = 0;
+    HARDENED_TRY(
+        check_offset_len(imem_offset, imem_num_words, kOtbnIMemSizeBytes));
+    uint32_t imem_start_addr = otbn_base() + OTBN_IMEM_REG_OFFSET + imem_offset;
+    HARDENED_TRY(decompress_load(app.imem_compressed_start,
+                                 app.imem_compressed_end, imem_start_addr,
+                                 imem_num_words));
+  } else {
+    HARDENED_CHECK_EQ(skip_imem, kHardenedBoolTrue);
+  }
+
+  // Write the data portion to DMEM.
+  otbn_addr_t data_offset = app.dmem_data_start_addr;
+  HARDENED_TRY(
+      check_offset_len(data_offset, data_num_words, kOtbnDMemSizeBytes));
+  uint32_t data_start_addr = otbn_base() + OTBN_DMEM_REG_OFFSET + data_offset;
+  HARDENED_TRY(decompress_load(app.dmem_compressed_start,
+                               app.dmem_compressed_end, data_start_addr,
+                               data_num_words));
+
+  if (launder32(skip_imem) != kHardenedBoolTrue) {
+    // Ensure that the checksum matches expectations.
+    uint32_t checksum =
+        abs_mmio_read32(otbn_base() + OTBN_LOAD_CHECKSUM_REG_OFFSET);
+    if (launder32(checksum) != app.checksum) {
+      // COVERAGE (HW ERR) Checksum mismatch only occurs on hardware fault or
+      // memory corruption during IMEM load.
+      if (has_state) {
+        HARDENED_TRY(read_state(&state));
+        state.imem_cache = 0;
+        HARDENED_TRY(store_state(&state));
+      }
+      return OTCRYPTO_FATAL_ERR;
+    }
+    HARDENED_CHECK_EQ(checksum, app.checksum);
+
+    if (has_state) {
+      HARDENED_TRY(read_state(&state));
+      state.imem_cache = (uint32_t)(uintptr_t)app.imem_compressed_start;
+      HARDENED_TRY(store_state(&state));
+    }
+  } else {
+    HARDENED_CHECK_EQ(skip_imem, kHardenedBoolTrue);
   }
 
   return OTCRYPTO_OK;

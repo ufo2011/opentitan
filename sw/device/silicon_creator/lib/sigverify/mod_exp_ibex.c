@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@
  * @param[in,out] a Buffer that holds `a`, little-endian.
  * @return Borrow.
  */
+OT_WARN_UNUSED_RESULT
 static uint32_t subtract_modulus(const sigverify_rsa_key_t *key,
                                  sigverify_rsa_buffer_t *a) {
   uint32_t borrow = 0;
@@ -39,6 +40,7 @@ static uint32_t subtract_modulus(const sigverify_rsa_key_t *key,
  * @param a Buffer that holds `a`, little-endian.
  * @return Comparison result.
  */
+OT_WARN_UNUSED_RESULT
 static bool greater_equal_modulus(const sigverify_rsa_key_t *key,
                                   const sigverify_rsa_buffer_t *a) {
   // Note: Loop terminates when `i` wraps around.
@@ -59,6 +61,7 @@ static bool greater_equal_modulus(const sigverify_rsa_key_t *key,
  * @param[in,out] a Buffer that holds `a`, little-endian.
  * @return Most significant bit of the result.
  */
+OT_WARN_UNUSED_RESULT
 static uint32_t shift_left(sigverify_rsa_buffer_t *a) {
   const uint32_t msb = a->data[ARRAYSIZE(a->data) - 1] >> 31;
   for (size_t i = ARRAYSIZE(a->data) - 1; i > 0; --i) {
@@ -123,9 +126,9 @@ static void mont_mul(const sigverify_rsa_key_t *key,
     // at most 1, we can subtract the modulus from `result` without taking it
     // into account and fit `result` into `kSigVerifyRsaNumWords`. Since this is
     // not a direct comparison with the modulus, the final result is not
-    // guaranteed to be the the least non-negative residue of x*y*R^-1 mod n.
+    // guaranteed to be the least non-negative residue of x*y*R^-1 mod n.
     if (acc0 >> 32) {
-      subtract_modulus(key, result);
+      OT_DISCARD(subtract_modulus(key, result));
     }
   }
 }
@@ -143,7 +146,7 @@ static void calc_r_square(const sigverify_rsa_key_t *key,
   // This subtraction sets buf = -n mod R = R - n, which is equivalent to R
   // modulo n and ensures that `buf` fits in `kSigVerifyRsaNumWords` going
   // into the loop.
-  subtract_modulus(key, &buf);
+  OT_DISCARD(subtract_modulus(key, &buf));
 
   // Compute (2^96 * R) mod n.
   // Each run of the loop doubles buf and reduces modulo n.
@@ -170,7 +173,7 @@ rom_error_t sigverify_mod_exp_ibex(const sigverify_rsa_key_t *key,
   // Reject the signature if it is too large (n <= sig): RFC 8017, section
   // 5.2.2, step 1.
   if (greater_equal_modulus(key, sig)) {
-    return kErrorSigverifyBadSignature;
+    return kErrorSigverifyLargeRsaSignature;
   }
 
   sigverify_rsa_buffer_t buf;
@@ -192,7 +195,7 @@ rom_error_t sigverify_mod_exp_ibex(const sigverify_rsa_key_t *key,
   // the least non-negative residue. We need to subtract the modulus n from
   // `result` at most once because R/2 < n < R.
   if (greater_equal_modulus(key, result)) {
-    subtract_modulus(key, result);
+    OT_DISCARD(subtract_modulus(key, result));
   }
 
   return kErrorOk;

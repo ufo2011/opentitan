@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,14 +11,17 @@
 
 module usbdpi #(
   parameter string NAME = "usb0",
-  parameter LOG_LEVEL = 1
+  parameter int LOG_LEVEL = 1
 )(
   input  logic clk_i,
   input  logic rst_ni,
   input  logic clk_48MHz_i,
+  input  logic enable,
+  output logic dp_en_p2d,
   output logic dp_p2d,
   input  logic dp_d2p,
   input  logic dp_en_d2p,
+  output logic dn_en_p2d,
   output logic dn_p2d,
   input  logic dn_d2p,
   input  logic dn_en_d2p,
@@ -52,7 +55,6 @@ module usbdpi #(
 
   initial begin
     ctx = usbdpi_create(NAME, LOG_LEVEL);
-    sense_p2d = 1'b0;
   end
 
   final begin
@@ -93,7 +95,8 @@ module usbdpi #(
     HS_WAITACK2 = 13,
     HS_STREAMOUT = 14,
     HS_STREAMIN = 15,
-    HS_NEXTFRAME = 16
+    HS_NEXTFRAME = 16,
+    HS_ERROR = 17
   } usbdpi_host_state_t;
 
   // Bus state
@@ -113,19 +116,28 @@ module usbdpi #(
     kUsbControlDataInAck,
     kUsbControlStatusOut,
     kUsbControlStatusOutAck,  // 0xc
-    kUsbIsoToken,
-    kUsbIsoDataIn,
-    kUsbIsoDataOut,
 
+    // Isochronous Transfers
+    kUsbIsoOut,
+    kUsbIsoInToken,
+    kUsbIsoInData,
+
+    // Bulk Transfers
     kUsbBulkOut,  // 0x10
     kUsbBulkOutAck,
     kUsbBulkInToken,
     kUsbBulkInData,
-    kUsbBulkInAck
+
+    // Interrupt transfers
+    kUsbInterruptOut,  // 0x14
+    kUsbInterruptOutAck,
+    kUsbInterruptInToken,
+    kUsbInterruptInData
   } usbdpi_bus_state_t;
 
   // USB monitor state
   // Note: MUST be kept consistent with usbdpi_monitor_state_t in usb_monitor.c
+  // to aid in reading waveform traces.
   typedef enum bit [1:0] {
     MS_IDLE = 0,
     MS_GET_PID,
@@ -133,7 +145,8 @@ module usbdpi #(
   } usb_monitor_state_t;
 
   // USB driver state
-  // Note: MUST be kept consistent with usbdpi_drv_state_t in usbdpi.h
+  // Note: MUST be kept consistent with usbdpi_drv_state_t in usbdpi.h to
+  // aid in reading waveform traces.
   typedef enum bit [3:0] {
     ST_IDLE = 0,
     ST_SEND = 1,
@@ -144,9 +157,11 @@ module usbdpi #(
   } usbdpi_drv_state_t;
 
   // Test steps
+  // Note: MUST be kept consistent with usbdpi_test_step_t in usbdpi_test.h to
+  // aid in reading waveform traces.
   typedef enum bit [6:0] {
 
-    STEP_BUS_RESET = 0,
+    STEP_BUS_RESET = 7'h0,
     STEP_SET_DEVICE_ADDRESS,
     STEP_GET_DEVICE_DESCRIPTOR,
     STEP_GET_CONFIG_DESCRIPTOR,
@@ -169,13 +184,13 @@ module usbdpi #(
     STEP_ENDPT_UNIMPL_IN,
     STEP_DEVICE_UK_SETUP,
     STEP_IDLE_START,
-    STEP_IDLE_END = STEP_IDLE_START + 4,
+    STEP_IDLE_END = STEP_IDLE_START + 7'h4,
 
     // usbdev_stream_test
-    STEP_STREAM_SERVICE = 'h20,
+    STEP_STREAM_SERVICE = 7'h20,
 
     // Disconnect the device and stop
-    STEP_BUS_DISCONNECT = 'h7f
+    STEP_BUS_DISCONNECT = 7'h7f
   } usbdpi_test_step_t;
 
   // Make usb_monitor diagnostic information viewable in waveforms
@@ -212,22 +227,33 @@ module usbdpi #(
 
   assign d2p = {dp_d2p, dp_en_d2p, dn_d2p, dn_en_d2p, d_d2p, d_en_d2p, se0_d2p, tx_use_d_se0_d2p,
                 pullupdp_d2p, pullupdn_d2p, rx_enable};
-  always_ff @(posedge clk_48MHz_i) begin
-    if (!sense_p2d || pullup_detect) begin
-      automatic byte p2d = usbdpi_host_to_device(ctx, d2p);
-      d_last <= d_p2d;
-      dp_int <= p2d[2];
-      dn_int <= p2d[1];
-      sense_p2d <= p2d[0];
-      unused_dummy <= |p2d[7:4];
-      d2p_r <= d2p;
-      if (d2p_r != d2p) begin
-        usbdpi_device_to_host(ctx, d2p);
-      end
-    end else begin // if (pullup_detect)
+  always_ff @(posedge clk_48MHz_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      sense_p2d <= 1'b0;
+      dp_en_p2d <= 1'b0;
+      dn_en_p2d <= 1'b0;
       d_last <= 0;
       dp_int <= 0;
       dn_int <= 0;
+    end else if (enable) begin
+      if (!sense_p2d || pullup_detect) begin
+        automatic byte p2d = usbdpi_host_to_device(ctx, d2p);
+        d_last <= d_p2d;
+        dp_en_p2d <= p2d[4];
+        dn_en_p2d <= p2d[4];
+        dp_int <= p2d[2];
+        dn_int <= p2d[1];
+        sense_p2d <= p2d[0];
+        unused_dummy <= |p2d[7:5];
+        d2p_r <= d2p;
+        if (d2p_r != d2p) begin
+          usbdpi_device_to_host(ctx, d2p);
+        end
+      end else begin
+        d_last <= 0;
+        dp_int <= 0;
+        dn_int <= 0;
+      end
     end
   end
 

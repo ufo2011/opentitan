@@ -1,5 +1,5 @@
 CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 name: "lowrisc:dv:jtag_agent:0.1"
@@ -13,6 +13,7 @@ filesets:
       - lowrisc:dv:csr_utils
     files:
       - jtag_if.sv
+      - jtag_mon_if.sv
       - jtag_agent_pkg.sv
       - jtag_agent_cfg.sv: {is_include_file: true}
       - jtag_agent_cov.sv: {is_include_file: true}

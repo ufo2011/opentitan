@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -746,7 +746,7 @@ class jtag_rv_debugger extends uvm_object;
   // Clear trigger data1 register and optionally, tdata2 as well.
   //
   // clear_tdata2: Knob to clear tdata2 as well.
-  // Note: It is upto the the caller to ensure the right trigger is selected first. Also, we are
+  // Note: It is upto the caller to ensure the right trigger is selected first. Also, we are
   // leaving tdata2 in a stale state.
   protected virtual task clear_tdata1(bit clear_tdata2);
     abstract_cmd_err_e status;
@@ -1020,7 +1020,7 @@ class jtag_rv_debugger extends uvm_object;
     if (req.bus_op == BusOpRead) begin
       case ({req.readondata, req.readonaddr})
         2'b00: begin
-          // No SBA read will be triggered. Read sbdata0 and and check status anyway (25% of the
+          // No SBA read will be triggered. Read sbdata0 and check status anyway (25% of the
           // time). The external scoreboard is expected to verify that no SBA transaction is seen.
           if (!cfg.in_reset && !$urandom_range(0, 3)) begin  // 25%
             csr_rd(.ptr(ral.sbdata0), .value(rdata), .blocking(1));
@@ -1116,7 +1116,8 @@ class jtag_rv_debugger extends uvm_object;
           wait(cfg.in_reset);
           begin
             // TODO: Make this timeout controllable.
-            #(cfg.vif.tck_period_ps * 100000 * 1ps);
+            cfg.vif.wait_tck(100000);
+
             req.timed_out = 1'b1;
             `uvm_info(`gfn, $sformatf("SBA req timed out: %0s",
                                       req.sprint(uvm_default_line_printer)), UVM_LOW)

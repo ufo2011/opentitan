@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -7,44 +7,48 @@
 `include "prim_assert.sv"
 
 module alert_handler
-  import alert_pkg::*;
+  import alert_handler_pkg::*;
   import prim_alert_pkg::*;
   import prim_esc_pkg::*;
 #(
-  // Compile time random constants, to be overriden by topgen.
+  // Number of cycles a differential skew is tolerated on the alert and escalation signal
+  parameter int unsigned AlertSkewCycles = 1,
+  parameter int EscNumSeverities = 4,
+  parameter int EscPingCountWidth = 16,
+  // Compile time random constants, to be overridden by topgen.
   parameter lfsr_seed_t RndCnstLfsrSeed = RndCnstLfsrSeedDefault,
   parameter lfsr_perm_t RndCnstLfsrPerm = RndCnstLfsrPermDefault
 ) (
-  input                                    clk_i,
-  input                                    rst_ni,
-  input                                    rst_shadowed_ni,
-  input                                    clk_edn_i,
-  input                                    rst_edn_ni,
+  input                                           clk_i,
+  input                                           rst_ni,
+  input                                           rst_shadowed_ni,
+  input                                           clk_edn_i,
+  input                                           rst_edn_ni,
   // Bus Interface (device)
-  input  tlul_pkg::tl_h2d_t                tl_i,
-  output tlul_pkg::tl_d2h_t                tl_o,
+  input  tlul_pkg::tl_h2d_t                       tl_i,
+  output tlul_pkg::tl_d2h_t                       tl_o,
   // Interrupt Requests
-  output logic                             intr_classa_o,
-  output logic                             intr_classb_o,
-  output logic                             intr_classc_o,
-  output logic                             intr_classd_o,
+  output logic                                    intr_classa_o,
+  output logic                                    intr_classb_o,
+  output logic                                    intr_classc_o,
+  output logic                                    intr_classd_o,
   // Clock gating and reset info from rstmgr and clkmgr
   // SEC_CM: LPG.INTERSIG.MUBI
-  input  prim_mubi_pkg::mubi4_t [NLpg-1:0] lpg_cg_en_i,
-  input  prim_mubi_pkg::mubi4_t [NLpg-1:0] lpg_rst_en_i,
+  input  prim_mubi_pkg::mubi4_t [NLpg-1:0]        lpg_cg_en_i,
+  input  prim_mubi_pkg::mubi4_t [NLpg-1:0]        lpg_rst_en_i,
   // State information for HW crashdump
-  output alert_crashdump_t                 crashdump_o,
+  output alert_crashdump_t                        crashdump_o,
   // Entropy Input
-  output edn_pkg::edn_req_t                edn_o,
-  input  edn_pkg::edn_rsp_t                edn_i,
+  output edn_pkg::edn_req_t                       edn_o,
+  input  edn_pkg::edn_rsp_t                       edn_i,
   // Alert Sources
   // SEC_CM: ALERT.INTERSIG.DIFF
-  input  alert_tx_t [NAlerts-1:0]          alert_tx_i,
-  output alert_rx_t [NAlerts-1:0]          alert_rx_o,
+  input  prim_alert_pkg::alert_tx_t [NAlerts-1:0] alert_tx_i,
+  output prim_alert_pkg::alert_rx_t [NAlerts-1:0] alert_rx_o,
   // Escalation outputs
   // SEC_CM: ESC.INTERSIG.DIFF
-  input  esc_rx_t [N_ESC_SEV-1:0]          esc_rx_i,
-  output esc_tx_t [N_ESC_SEV-1:0]          esc_tx_o
+  input  prim_esc_pkg::esc_rx_t [N_ESC_SEV-1:0]   esc_rx_i,
+  output prim_esc_pkg::esc_tx_t [N_ESC_SEV-1:0]   esc_tx_o
 );
 
   //////////////////////////////////
@@ -185,7 +189,8 @@ module alert_handler
   // Target interrupt notification
   for (genvar k = 0 ; k < NAlerts ; k++) begin : gen_alerts
     prim_alert_receiver #(
-      .AsyncOn(AsyncOn[k])
+      .AsyncOn(AsyncOn[k]),
+      .SkewCycles(AlertSkewCycles)
     ) u_alert_receiver (
       .clk_i,
       .rst_ni,
@@ -290,7 +295,9 @@ module alert_handler
     // put this RTL label inside that module due to the way our countermeasure annotation check
     // script discovers the RTL files. The label is thus put here. Please refer to
     // prim_esc_receiver.sv for the actual implementation of this mechanism.
-    prim_esc_sender u_esc_sender (
+    prim_esc_sender # (
+      .SkewCycles(AlertSkewCycles)
+    ) u_esc_sender (
       .clk_i,
       .rst_ni,
       .ping_req_i   ( esc_ping_req[k]  ),
@@ -304,6 +311,9 @@ module alert_handler
   end
 
   assign loc_alert_trig[3] = |esc_integfail;
+
+  logic unused_params;
+  assign unused_params = ^{EscNumSeverities, EscPingCountWidth};
 
   ////////////////
   // Assertions //

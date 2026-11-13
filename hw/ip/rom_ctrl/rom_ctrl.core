@@ -1,5 +1,5 @@
 CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 name: "lowrisc:ip:rom_ctrl:0.1"
@@ -23,7 +23,6 @@ filesets:
       - lowrisc:ip:tlul
     files:
       - rtl/rom_ctrl_regs_reg_top.sv
-      - rtl/rom_ctrl_rom_reg_top.sv
       - rtl/rom_ctrl.sv
       - rtl/rom_ctrl_compare.sv
       - rtl/rom_ctrl_counter.sv
@@ -50,6 +49,12 @@ filesets:
       - lint/rom_ctrl.waiver
     file_type: waiver
 
+  files_slang_waiver:
+    depend:
+      # common waivers
+      - lowrisc:lint:common
+      - lowrisc:lint:comportable
+
 parameters:
   SYNTHESIS:
     datatype: bool
@@ -58,8 +63,9 @@ parameters:
 targets:
   default: &default_target
     filesets:
-      - tool_verilator ? (files_verilator_waiver)
+      - tool_verilator  ? (files_verilator_waiver)
       - tool_ascentlint ? (files_ascentlint_waiver)
+      - tool_slang      ? (files_slang_waiver)
       - files_rtl
     toplevel: rom_ctrl
 
@@ -73,3 +79,8 @@ targets:
         mode: lint-only
         verilator_options:
           - "-Wall"
+
+  formal:
+    filesets:
+      - files_rtl
+    toplevel: rom_ctrl_fsm

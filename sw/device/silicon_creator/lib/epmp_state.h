@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,16 +42,42 @@ enum {
  *    W  |  1
  *    X  |  2
  *
- * Combinations not exposed by this enum should not be used. The 'unlocked'
- * zero value should only be used for entries that are configured as OFF.
+ * NOTE: Because the chip is configured with MMWP=1 and MML=0, the ePMP bit
+ * patterns can sometimes have counterintuitive meanings.
+ *
+ * NOTE: After setting MML=1, the meanings of some of the bit patterns will
+ * change.  See section 2.2 of the "PMP Enhancements for memory access and
+ * execution prevention on Machine mode (Smepmp)" document
+ * (https://github.com/riscv/riscv-tee/blob/main/Smepmp/Smepmp.pdf).
  */
 typedef enum epmp_perm {
   kEpmpPermUnlocked = 0,
+  /** M mode: no access. U mode: no access. */
   kEpmpPermLockedNoAccess = EPMP_CFG_L,
+
+  /** M mode: read only. U mode: no access. */
   kEpmpPermLockedReadOnly = EPMP_CFG_LR,
+
+  /** M mode: read/write. U mode: no access. */
   kEpmpPermLockedReadWrite = EPMP_CFG_LRW,
+
+  /** M mode: read/execute. U mode: no access. */
   kEpmpPermLockedReadExecute = EPMP_CFG_LRX,
+
+  /** M mode: read/execute. U mode: read/execute. */
   kEpmpPermLockedReadWriteExecute = EPMP_CFG_LRWX,
+
+  /** M mode: read/write/execute. U mode: read only. */
+  kEpmpPermReadOnly = EPMP_CFG_R,
+
+  /** M mode: read/write/execute. U mode: read/write. */
+  kEpmpPermReadWrite = EPMP_CFG_R | EPMP_CFG_W,
+
+  /** M mode: read/write/execute. U mode: read/execute. */
+  kEpmpPermReadExecute = EPMP_CFG_R | EPMP_CFG_X,
+
+  /** M mode: read/write/execute. U mode: read/write/execute. */
+  kEpmpPermReadWriteExecute = EPMP_CFG_R | EPMP_CFG_W | EPMP_CFG_X,
 } epmp_perm_t;
 
 /**
@@ -74,8 +100,8 @@ typedef enum epmp_mode {
  * The `start` address is inclusive and the `end` address is exclusive.
  */
 typedef struct epmp_region {
-  uintptr_t start;
-  uintptr_t end;
+  ot_word_t start;
+  ot_word_t end;
 } epmp_region_t;
 
 /**
@@ -164,7 +190,7 @@ inline void epmp_state_configure_tor(uint32_t entry, epmp_region_t region,
   // Set configuration register.
   bitfield_field32_t field = {.mask = 0xff, .index = (entry % 4) * 8};
   epmp_state.pmpcfg[entry / 4] = bitfield_field32_write(
-      epmp_state.pmpcfg[entry / 4], field, kEpmpModeTor | perm);
+      epmp_state.pmpcfg[entry / 4], field, kEpmpModeTor | (epmp_mode_t)perm);
 }
 
 /**
@@ -184,7 +210,7 @@ inline void epmp_state_configure_na4(uint32_t entry, epmp_region_t region,
   // Set configuration register.
   bitfield_field32_t field = {.mask = 0xff, .index = (entry % 4) * 8};
   epmp_state.pmpcfg[entry / 4] = bitfield_field32_write(
-      epmp_state.pmpcfg[entry / 4], field, kEpmpModeNa4 | perm);
+      epmp_state.pmpcfg[entry / 4], field, kEpmpModeNa4 | (epmp_mode_t)perm);
 }
 
 /**
@@ -205,7 +231,7 @@ inline void epmp_state_configure_napot(uint32_t entry, epmp_region_t region,
   // Set configuration register.
   bitfield_field32_t field = {.mask = 0xff, .index = (entry % 4) * 8};
   epmp_state.pmpcfg[entry / 4] = bitfield_field32_write(
-      epmp_state.pmpcfg[entry / 4], field, kEpmpModeNapot | perm);
+      epmp_state.pmpcfg[entry / 4], field, kEpmpModeNapot | (epmp_mode_t)perm);
 }
 
 /**
@@ -215,6 +241,7 @@ inline void epmp_state_configure_napot(uint32_t entry, epmp_region_t region,
  * @param state Expected values of the ePMP CSRs.
  * @return Whether the check succeeded.
  */
+OT_WARN_UNUSED_RESULT
 rom_error_t epmp_state_check(void);
 
 #ifdef __cplusplus

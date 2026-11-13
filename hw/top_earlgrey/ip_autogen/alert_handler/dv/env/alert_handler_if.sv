@@ -1,11 +1,11 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Interface for LPG and crashdump output.
 interface alert_handler_if(input clk, input rst_n);
   import uvm_pkg::*;
-  import alert_pkg::*;
+  import alert_handler_pkg::*;
   import prim_mubi_pkg::*;
   import cip_base_pkg::*;
   import alert_handler_env_pkg::*;

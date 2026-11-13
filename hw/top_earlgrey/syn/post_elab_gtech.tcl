@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -8,4 +8,3 @@
 # Remove generic views of ram macros
 remove_design prim_generic_ram_1p_Width*
 remove_design prim_generic_ram_2p_Width*
-

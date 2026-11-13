@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,16 +16,16 @@
 #include "sw/device/silicon_creator/lib/error.h"
 #include "sw/device/silicon_creator/lib/manifest_def.h"
 
+#include "hw/top/otp_ctrl_regs.h"
+#include "hw/top/pinmux_regs.h"
+#include "hw/top/uart_regs.h"
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "otp_ctrl_regs.h"
-#include "pinmux_regs.h"
-#include "uart_regs.h"
 
 enum {
   /**
    * Base address of the pinmux registers.
    */
-  kPinmuxBase = TOP_EARLGREY_PINMUX_AON_BASE_ADDR,
+  kPinmuxBase = TOP_EARLGREY_PINMUX_BASE_ADDR,
   /**
    * Base address of the UART registers.
    */
@@ -77,14 +77,18 @@ static void fault(void) {
  * and then reading back, because the pad attribute registers have
  * write-any-read-legal behavior.
  */
-static uint32_t pad_attr_mask_get() {
-  CHECK_EQ(kDeviceType, kDeviceFpgaCw310,
-           "This test is only supported for CW310");
+static uint32_t pad_attr_mask_get(void) {
+  if (kDeviceType != kDeviceFpgaCw310 && kDeviceType != kDeviceFpgaCw340) {
+    LOG_ERROR("This test is only supported for CW310 and CW340");
+  }
 
-  // The only legal attributes on CW310 are `invert` and `virtual_od_en`.
+  // The only legal attributes on the FPGA are `invert`, `virtual_od_en`, and
+  // `input_disable`.
   uint32_t mask = 0;
   mask = bitfield_bit32_write(mask, PINMUX_MIO_PAD_ATTR_0_INVERT_0_BIT, true);
   mask = bitfield_bit32_write(mask, PINMUX_MIO_PAD_ATTR_0_VIRTUAL_OD_EN_0_BIT,
+                              true);
+  mask = bitfield_bit32_write(mask, PINMUX_MIO_PAD_ATTR_0_INPUT_DISABLE_0_BIT,
                               true);
 
   // Save the original attributes for pad 0.
@@ -120,9 +124,9 @@ static uint32_t pad_attr_mask_get() {
  *     * IOC4 -> UART TX (output)
  */
 static void pinmux_init_test(void) {
-  uint32_t bootstrap_en =
-      otp_read32(OTP_CTRL_PARAM_OWNER_SW_CFG_ROM_BOOTSTRAP_EN_OFFSET);
-  if (bootstrap_en == kHardenedBoolTrue) {
+  uint32_t bootstrap_dis =
+      otp_read32(OTP_CTRL_PARAM_OWNER_SW_CFG_ROM_BOOTSTRAP_DIS_OFFSET);
+  if (bootstrap_dis != kHardenedBoolTrue) {
     uint32_t attr_mask = pad_attr_mask_get();
 
     // GPIO 22 (input 22) -> IOC0 (MIO pad 22)
@@ -177,12 +181,13 @@ static void pinmux_init_test(void) {
         false, "GPIO 24 pull select");
   }
 
-  // UART RX (input 42) -> IOC3 (MIO pad 25)
+  // UART RX -> IOC3 (MIO pad 25)
   uint32_t insel_uartrx =
-      abs_mmio_read32(kPinmuxBase + PINMUX_MIO_PERIPH_INSEL_42_REG_OFFSET);
+      abs_mmio_read32(kPinmuxBase + PINMUX_MIO_PERIPH_INSEL_0_REG_OFFSET +
+                      kTopEarlgreyPinmuxPeripheralInUart0Rx * sizeof(uint32_t));
   CHECK_EQ(insel_uartrx, kTopEarlgreyPinmuxInselIoc3, "UART Rx input selector");
 
-  // IOC4 (MIO pad 26) -> UART TX (output 42)
+  // IOC4 (MIO pad 26) -> UART TX
   uint32_t outsel_ioc4 =
       abs_mmio_read32(kPinmuxBase + PINMUX_MIO_OUTSEL_26_REG_OFFSET);
   CHECK_EQ(outsel_ioc4, kTopEarlgreyPinmuxOutselUart0Tx,

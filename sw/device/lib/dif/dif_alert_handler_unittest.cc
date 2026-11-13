@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,7 @@
 #include "sw/device/lib/base/mock_mmio.h"
 #include "sw/device/lib/dif/dif_test_base.h"
 
-#include "alert_handler_regs.h"  // Generated.
+#include "hw/top/alert_handler_regs.h"  // Generated.
 
 namespace dif_alert_handler_unittest {
 namespace {
@@ -30,7 +30,7 @@ using ::testing::Return;
 // so if the number of alerts change, the digest will be changed
 // as well.  This process is not yet automated, so the user
 // must be aware on how to update the value.
-static_assert(ALERT_HANDLER_PARAM_N_ALERTS == 65,
+static_assert(ALERT_HANDLER_PARAM_N_ALERTS == 69,
               "The number of alerts have changed.");
 
 constexpr int kAlerts = ALERT_HANDLER_PARAM_N_ALERTS;

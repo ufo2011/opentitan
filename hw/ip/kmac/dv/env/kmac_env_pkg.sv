@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ package kmac_env_pkg;
   import kmac_app_agent_pkg::*;
   import kmac_ral_pkg::*;
   import kmac_pkg::*;
-  import keymgr_pkg::*;
+  import keymgr_dpe_pkg::*;
   import key_sideload_agent_pkg::*;
   import sec_cm_pkg::*;
 
@@ -67,9 +67,14 @@ package kmac_env_pkg;
   parameter uint HASH_CNT_WIDTH = 10;
   // alerts
   parameter uint NUM_ALERTS = 2;
-  parameter string LIST_OF_ALERTS[] = {"recov_operation_err", "fatal_fault_err"};
+  parameter string LIST_OF_ALERTS[NUM_ALERTS] = {"recov_operation_err", "fatal_fault_err"};
 
   parameter uint NUM_EDN = 1;
+
+  parameter uint NUM_APP_INTF = 4;
+  parameter app_config_t APP_CFG[NUM_APP_INTF] =
+    '{kmac_pkg::AppCfgKeyMgr, kmac_pkg::AppCfgLcCtrl,
+      kmac_pkg::AppCfgRomCtrl, kmac_pkg::AppCfgOtbn};
 
   /////////////////////////////
   // Timing Model Parameters //
@@ -121,7 +126,9 @@ package kmac_env_pkg;
     KmacStatusFifoDepthLSB = 8,
     KmacStatusFifoDepthMSB = 12,
     KmacStatusFifoEmpty = 14,
-    KmacStatusFifoFull = 15
+    KmacStatusFifoFull = 15,
+    KmacStatusEntropyReady = 20,
+    KmacStatusEntropyReseeding = 21
   } kmac_status_e;
 
   typedef enum int {
@@ -140,7 +147,8 @@ package kmac_env_pkg;
   typedef enum int {
     AppKeymgr,
     AppLc,
-    AppRom
+    AppRom,
+    AppOtbn
   } kmac_app_e;
 
   // state values of the App FSM
@@ -151,8 +159,10 @@ package kmac_env_pkg;
     StAppOutLen             = 10'b1011001111,
     StAppProcess            = 10'b1000100110,
     StAppWait               = 10'b0010010110,
+    StAppPushDigest         = 10'b0000000001,
+    StAppFinish             = 10'b0000000010,
     StSw                    = 10'b0111111111,
-    StKeyMgrErrKeyNotValid  = 10'b1001110100,
+    StErrorKeyNotValid      = 10'b1001110100,
     StError                 = 10'b1101011101
   } kmac_app_st_e;
 

@@ -1,10 +1,11 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
 from itertools import cycle
-from typing import Optional, TextIO
+from typing import Dict, Optional, TextIO
 from .sim import OTBNSim
+from .state import FsmState
 
 _TEST_RND_DATA = cycle([
     0xAAAAAAAA_99999999_AAAAAAAA_99999999_AAAAAAAA_99999999_AAAAAAAA_99999999,
@@ -12,11 +13,11 @@ _TEST_RND_DATA = cycle([
 ])
 
 
-# This is the default seed for URND PRNG. Note that the actualy URND value will
+# This is the default seed for URND PRNG. Note that the actually URND value will
 # be random since we are modelling PRNG inside the URND register model.
-_TEST_URND_DATA = [
-    0x84ddfadaf7e1134d, 0x70aa1c59de6197ff,
-    0x25a4fe335d095f1e, 0x2cba89acbe4a07e9
+_TEST_URND_SEED = [
+    0x11111111, 0x22222222, 0x33333333,
+    0x44444444, 0x55555555, 0x66666666
 ]
 
 
@@ -28,30 +29,63 @@ class StandaloneSim(OTBNSim):
 
         '''
         insn_count = 0
-        # ISS will stall at start until URND data is valid; immediately set it
-        # valid when in free running mode as nothing else will.
-        self.state.wsrs.URND.set_seed(_TEST_URND_DATA)
-        # Similarly, set the initial secure wipe to complete.
+        urnd_seed_count = 0
+
+        # Skip the initial secure wipe
         self.state.complete_init_sec_wipe()
-        while self.state.executing():
+
+        # There is no host to enable wfi or to issue RESUME in standalone mode,
+        # so allow wfi and have it resume immediately (a regular 1-cycle insn).
+        self.state.wfi_enabled = True
+        self.state.wfi_auto_resume = True
+
+        # There is no host to enable the URND control interface in standalone
+        # mode, so enable it here so tests can exercise it.
+        self.state.urnd_ctrl_enabled = True
+
+        while True:
             # If there's a RND request, respond immediately
             if self.state.ext_regs.read('RND_REQ', True):
                 self.state.wsrs.RND.set_unsigned(next(_TEST_RND_DATA), False,
                                                  False)
+
             # If there's a URND request, respond immediately.
-            if not self.state.wsrs.URND.running:
-                self.state.wsrs.URND.set_seed(_TEST_URND_DATA)
+            if self.state.wsrs.URND.requesting:
+                self.state.wsrs.URND.set_seed(_TEST_URND_SEED[urnd_seed_count])
+                urnd_seed_count = (urnd_seed_count + 1) % len(_TEST_URND_SEED)
+                if urnd_seed_count == 0:
+                    self.state.wsrs.URND.reseed_done = True
 
             self.step(verbose)
             insn_count += 1
 
             # Dump registers on the first wipe cycle. This makes sure that we
             # dump them before zeroing.
-            if dump_file is not None and self.state.wiping():
-                self.dump_regs(dump_file)
-                dump_file = None
+            if self.state.get_fsm_state() in [FsmState.IDLE, FsmState.LOCKED]:
+                if dump_file is not None:
+                    self.dump_regs(dump_file)
+                break
 
         return insn_count
+
+    def load_dmem_vars(self, dmem_vars: Dict[str, bytes]) -> None:
+        for label, value in dmem_vars.items():
+            offset = self.symbols.get(label)
+            if offset is None:
+                raise KeyError(f'Symbol {label} does not exist in the elf')
+            assert offset % 4 == 0, "Only word-aligned variables are supported."
+            self.state.dmem.load_le_words(value, has_validity=False, word_offset=offset // 4)
+
+    def load_regs_vars(self, regs: Dict[str, int]) -> None:
+        for label, value in regs.items():
+            if label.startswith('x'):
+                gpr_idx = int(label[1:])
+                self.state.gprs.get_reg(gpr_idx).write_unsigned(value)
+            elif label.startswith('w'):
+                wdr_idx = int(label[1:])
+                self.state.wdrs.get_reg(wdr_idx).write_unsigned(value)
+            else:
+                self.state.ext_regs.write(label, value, from_hw=False)
 
     def dump_regs(self, tgt: TextIO) -> None:
         for reg in ['ERR_BITS', 'INSN_CNT', 'STOP_PC']:

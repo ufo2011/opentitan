@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -22,15 +22,15 @@
   // TODO: switch the tool to formal once the corresponding edalize backend is avaiable
 
   fusesoc_target:    formal
-  sv_flist_gen_opts: ["--cores-root {proj_root}",
+  sv_flist_gen_opts: ["--cores-root {proj_root}/hw",
                       "run",
                        "{sv_flist_gen_flags}",
                       "--tool=icarus",
                       "--target={fusesoc_target}",
-                      "--build-root={build_dir}",
+                      "--work-root={build_dir}/fusesoc-work",
                       "--setup {fusesoc_core}"]
-  sv_flist_gen_dir:  "{build_dir}/{fusesoc_target}-icarus"
-  sv_flist_gen_flags: ["--flag=fileset_{design_level}"]
+  sv_flist_gen_dir:  "{build_dir}/fusesoc-work"
+  sv_flist_gen_flags: ["--mapping=lowrisc:prim_generic:all:0.1"]
 
   report_cmd:  "python3 {formal_root}/tools/{tool}/parse-formal-report.py"
   report_opts: ["--logpath={build_log}",

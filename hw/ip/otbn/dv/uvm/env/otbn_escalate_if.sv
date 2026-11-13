@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -23,9 +23,9 @@ interface otbn_escalate_if (
     // Send Req
     `DV_SPINWAIT_EXIT(begin
         repeat (n) @(posedge clk_i);
-          req <= cip_base_pkg::get_rand_lc_tx_val(.t_weight(t_weight),
-                                                  .f_weight(f_weight),
-                                                  .other_weight(other_weight));
+        req <= cip_base_pkg::get_rand_lc_tx_val(.t_weight(t_weight),
+                                                .f_weight(f_weight),
+                                                .other_weight(other_weight));
       end, @(negedge rst_ni);, "Not setting req signal because we've gone into reset",
                       "otbn_escalate_if")
   endtask

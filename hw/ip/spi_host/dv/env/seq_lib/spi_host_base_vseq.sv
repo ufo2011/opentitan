@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,8 +27,11 @@ class spi_host_base_vseq extends cip_base_vseq #(
   // transaction item contains a full spi transaction
   spi_transaction_item       transaction;
 
-  // re-active sequence
+  // reactive sequences to run on spi_agent (configured as a Device)
   spi_device_cmd_rsp_seq m_spi_device_seq[SPI_HOST_NUM_CS];
+
+  // Used to control when csr_spinwaits are spinning
+  uvm_event start_stop_spinwait_ev = uvm_event_pool::get_global("start_stop_spinwait_ev");
 
   // constraints for simulation loops
   constraint num_trans_c {
@@ -49,34 +52,29 @@ class spi_host_base_vseq extends cip_base_vseq #(
 
   constraint spi_config_regs_c {
       // configopts regs
-      foreach (spi_config_regs.cpol[i]) {
-        spi_config_regs.cpol[i] dist {
-          1'b0 :/ 1,
-          1'b1 :/ 1
-        };
-      }
-      foreach (spi_config_regs.cpha[i]) {
-        spi_config_regs.cpha[i] dist {
-          1'b0 :/ 1,
-          1'b1 :/ 1
-        };
-      }
-      foreach (spi_config_regs.csnlead[i]) {
-        spi_config_regs.csnlead[i] inside {[cfg.seq_cfg.host_spi_min_csn_latency :
-                                          cfg.seq_cfg.host_spi_max_csn_latency]};
-      }
-      foreach (spi_config_regs.csntrail[i]) {
-        spi_config_regs.csntrail[i] inside {[cfg.seq_cfg.host_spi_min_csn_latency :
-                                           cfg.seq_cfg.host_spi_max_csn_latency]};
-      }
-      foreach (spi_config_regs.csnidle[i]) {
-        spi_config_regs.csnidle[i] inside {[cfg.seq_cfg.host_spi_min_csn_latency :
-                                          cfg.seq_cfg.host_spi_max_csn_latency]};
-      }
-      foreach (spi_config_regs.clkdiv[i]) {
-        spi_config_regs.clkdiv[i] inside {[cfg.seq_cfg.host_spi_min_clkdiv :
-                                         cfg.seq_cfg.host_spi_max_clkdiv]};
-      }
+      spi_config_regs.cpol dist {
+        1'b0 :/ 1,
+        1'b1 :/ 1
+      };
+      spi_config_regs.cpha dist {
+        1'b0 :/ 1,
+        1'b1 :/ 1
+      };
+      spi_config_regs.csnlead inside {[cfg.seq_cfg.host_spi_min_csn_latency :
+                                       cfg.seq_cfg.host_spi_max_csn_latency]};
+      spi_config_regs.csntrail inside {[cfg.seq_cfg.host_spi_min_csn_latency :
+                                        cfg.seq_cfg.host_spi_max_csn_latency]};
+      spi_config_regs.csnidle inside {[cfg.seq_cfg.host_spi_min_csn_latency :
+                                       cfg.seq_cfg.host_spi_max_csn_latency]};
+  }
+
+  // Separate constraint to allow easy override in child sequences
+  constraint spi_config_regs_clkdiv_c {
+    spi_config_regs.clkdiv dist {
+      [cfg.seq_cfg.host_spi_min_clkdiv : cfg.seq_cfg.host_spi_lower_middle_clkdiv]      :/90,
+      [cfg.seq_cfg.host_spi_lower_middle_clkdiv+1 : cfg.seq_cfg.host_spi_middle_clkdiv] :/7,
+      [cfg.seq_cfg.host_spi_middle_clkdiv+1 : cfg.seq_cfg.host_spi_upper_middle_clkdiv] :/3
+    };
   }
 
   constraint spi_ctrl_regs_c {
@@ -97,6 +95,38 @@ class spi_host_base_vseq extends cip_base_vseq #(
       };
   }
 
+  function void post_randomize();
+    super.post_randomize();
+    // We currently support 1 chip-select line only
+
+    // We set the timeout to it's default value every time upon entry here.
+    // This is because the sim may go through multiple resets and if we don't
+    // re-set it's value it may not be useful as a timeout value
+    cfg.set_default_csr_timeout();
+    case(spi_config_regs.clkdiv) inside
+      // After randomization we set a different timeout based on the clock divider
+      [cfg.seq_cfg.host_spi_min_clkdiv : cfg.seq_cfg.host_spi_lower_middle_clkdiv]: ;
+      [cfg.seq_cfg.host_spi_lower_middle_clkdiv+1 : cfg.seq_cfg.host_spi_middle_clkdiv]: begin
+        cfg.csr_spinwait_timeout_ns *= 1.5;
+      end
+      [cfg.seq_cfg.host_spi_middle_clkdiv+1 : cfg.seq_cfg.host_spi_upper_middle_clkdiv]: begin
+        cfg.csr_spinwait_timeout_ns *= 3;
+      end
+      [cfg.seq_cfg.host_spi_middle_clkdiv+1 : 16'hFFF] : begin
+        cfg.csr_spinwait_timeout_ns *= 5;
+      end
+      [16'hFFF+1 : cfg.seq_cfg.host_spi_max_clkdiv] : begin
+        cfg.csr_spinwait_timeout_ns *= 10;
+      end
+      default : begin
+        `uvm_fatal(`gfn, $sformatf("spi_config_regs.clkdiv[0]=0x%0x is out of range",
+                                   spi_config_regs.clkdiv))
+      end
+    endcase
+    `uvm_info(`gfn, $sformatf("%m: CSR_SPINWAIT Timeout set to %0dns", cfg.csr_spinwait_timeout_ns),
+              UVM_DEBUG)
+  endfunction
+
 
   virtual task pre_start();
     // sync monitor and scoreboard setting
@@ -105,19 +135,148 @@ class spi_host_base_vseq extends cip_base_vseq #(
                               cfg.en_scb ? "enable" : "disable"), UVM_DEBUG)
     num_runs.rand_mode(0);
     num_trans_c.constraint_mode(0);
-    transaction = new();
+    transaction = spi_transaction_item::type_id::create("transaction");
     super.pre_start();
   endtask : pre_start
 
-  virtual task start_reactive_seq();
-    // start device seq's
+  // Like csr_spinwait, only the timeout can be stop by using an event.
+  // In addition, one needs to pass the clock cycle period.
+  // This can be used instead of csr_spinwait for moments in which the timeout needs to be
+  // controlled due to RTL conditions such as SW_rest or the module being disabled.
+  task automatic csr_spinwait_stoppable(
+    input   uvm_object ptr,
+    input   uvm_reg_data_t exp_data,
+    input   uvm_check_e check = default_csr_check,
+    input   uvm_path_e path = UVM_DEFAULT_PATH,
+    input   uvm_reg_map map = null,
+    input   uvm_reg_frontdoor user_ftdr = default_user_frontdoor,
+    input   uint spinwait_delay_ns = 0,
+    input   uint timeout_ns = default_spinwait_timeout_ns,
+    input   compare_op_e compare_op = CompareOpEq,
+    input   bit backdoor = 0,
+    input   uvm_verbosity verbosity = UVM_HIGH,
+    input   uint clk_cycle_period_ns,
+    input   string start_stop_ev_name = "start_stop_spinwait_ev"
+    );
+    static int     count;
+    count++;
+    `uvm_info($sformatf("%m()"),
+              $sformatf("- (call_count=%0d, backdoor=%0d, exp_data=%0d, ptr=%s)",
+                        count,backdoor,exp_data, ptr.get_name()), verbosity)
+    fork
+      begin : isolation_fork
+        fork
+          begin
+            csr_utils_pkg::csr_spinwait(.ptr(ptr),
+                                        .exp_data(exp_data),
+                                        .check(check),
+                                        .path(path),
+                                        .map(map),
+                                        .user_ftdr(user_ftdr),
+                                        .spinwait_delay_ns(spinwait_delay_ns),
+                                        // Timeout is 1000 longer than actual timeout so
+                                        // the stoppable timeout part of the fork below can
+                                        // block the count
+                                        .timeout_ns(timeout_ns*10000),
+                                        .compare_op(compare_op),
+                                        .backdoor(backdoor),
+                                        .verbosity(verbosity)
+                                        );
+          end
+          begin: timeout_block
+            stoppable_timeout(clk_cycle_period_ns, timeout_ns, start_stop_ev_name, exp_data,
+                              compare_op, ptr, count);
+          end : timeout_block
+        join_any
+        disable fork;
+      end : isolation_fork
+    join
+  endtask
+
+  // This task applies a timeout that can be stopped. It's used in situations where spi_host is
+  // disabled or when there is a SW reset
+  task stoppable_timeout(input uint clk_cycle_period_ns,
+                         input        uint timeout_ns,
+                         input string start_stop_ev_name,
+                         input        uvm_reg_data_t exp_data,
+                         input        compare_op_e compare_op,
+                         input        uvm_object ptr,
+                         input int    call_count
+                         );
+    int unsigned clk_cycles = 0;
+    csr_spinwait_ctrl_object obj;
+    uvm_event start_stop_spinwait_ev = uvm_event_pool::get_global(start_stop_ev_name);
+    csr_field_t csr_or_fld;
+
+    while ( (clk_cycles * clk_cycle_period_ns) <= timeout_ns) begin
+      clk_cycles++;
+      #(clk_cycle_period_ns * 1ns);
+      if (start_stop_spinwait_ev.is_on()) begin
+        uvm_object ev_obj;
+        // Event triggerred
+        ev_obj = start_stop_spinwait_ev.get_trigger_data();
+        if (!$cast(obj, ev_obj))
+          `uvm_fatal($sformatf("%m()"), "CAST FAILED")
+
+        if (obj.stop) begin
+          start_stop_spinwait_ev.wait_ptrigger_data(ev_obj);
+          `uvm_info($sformatf("%m"), "Event triggered to halt the timeout", UVM_DEBUG)
+          if (!$cast(obj, ev_obj))
+            `uvm_fatal($sformatf("%m()"), "CAST FAILED")
+          if(obj.stop)
+            `uvm_fatal($sformatf("%m"), "Event has already been triggered with stop=1")
+        end
+      end
+    end
+
+    csr_or_fld = decode_csr_or_field(ptr);
+    `uvm_fatal($sformatf("%m()"),
+               $sformatf({"timeout = %0dns %0s (addr=0x%0h,",
+                          " Comparison=%s, exp_data=0x%0h, call_count=%0d"} ,timeout_ns,
+                         ptr.get_full_name(), csr_or_fld.csr.get_address(),
+                         compare_op.name, exp_data, call_count))
+  endtask
+
+  // wrapping csr_spinwait over csr_spinwait_stoppable so we can stop the timeout
+  // count in circumstances like the RTL being disable due to spien or sw_rst.
+  virtual task automatic csr_spinwait( input  uvm_object        ptr,
+                                       input  uvm_reg_data_t    exp_data,
+                                       input  uvm_check_e       check = default_csr_check,
+                                       input  uvm_path_e        path = UVM_DEFAULT_PATH,
+                                       input  uvm_reg_map       map = null,
+                                       input  uvm_reg_frontdoor user_ftdr =
+                                                                default_user_frontdoor,
+                                       input  uint              spinwait_delay_ns = 0,
+                                       input  uint              timeout_ns =
+                                                                  cfg.csr_spinwait_timeout_ns,
+                                       input  compare_op_e      compare_op = CompareOpEq,
+                                       input  bit               backdoor = 0,
+                                       input  uvm_verbosity     verbosity = UVM_HIGH,
+                                       input  uint              clk_cycle_period_ns =
+                                                                  (cfg.clk_rst_vif.clk_period_ps
+                                                                  / 1000),
+                                       input  string start_stop_ev_name = "start_stop_spinwait_ev"
+                                      );
+    csr_spinwait_stoppable( .ptr(ptr), .exp_data(exp_data), .check(check),
+                            .path(path), .map(map), .user_ftdr(user_ftdr),
+                            .spinwait_delay_ns(spinwait_delay_ns),
+                            .timeout_ns(timeout_ns), .compare_op(compare_op),
+                            .backdoor(backdoor), .verbosity(verbosity),
+                            .clk_cycle_period_ns(clk_cycle_period_ns),
+                            .start_stop_ev_name("start_stop_spinwait_ev")
+                            );
+  endtask
+
+  // Start sequences on the spi_agent (configured as a Device) that will respond to host bus activity.
+  // Currently we use "spi_device_cmd_rsp_seq", which discards write-data, and responds with random data for reads.
+  virtual task start_agent_reactive_seqs();
     fork
       for( int i = 0; i < SPI_HOST_NUM_CS; i++) begin
         m_spi_device_seq[i] = spi_device_cmd_rsp_seq::type_id::create($sformatf("spi_host[%0d]",i));
         m_spi_device_seq[i].start(p_sequencer.spi_sequencer_h);
       end
     join
-  endtask // start_reactive_seq
+  endtask : start_agent_reactive_seqs
 
   // Call this function to cleanup the above started reactive-sequences, such as if we
   // exit early, or are running sequences back-to-back.
@@ -125,7 +284,7 @@ class spi_host_base_vseq extends cip_base_vseq #(
     p_sequencer.spi_sequencer_h.stop_sequences();
     if (cfg.m_spi_agent_cfg.has_req_fifo) p_sequencer.spi_sequencer_h.req_analysis_fifo.flush();
     if (cfg.m_spi_agent_cfg.has_rsp_fifo) p_sequencer.spi_sequencer_h.rsp_analysis_fifo.flush();
-  endtask // cleanup_reactive_seq
+  endtask : cleanup_reactive_seq
 
   task post_start();
     super.post_start();
@@ -133,7 +292,7 @@ class spi_host_base_vseq extends cip_base_vseq #(
   endtask
 
   function void transaction_init();
-    transaction = new();
+    transaction = spi_transaction_item::type_id::create("transaction");
 
     transaction.read_weight     = cfg.seq_cfg.read_pct;
     transaction.write_weight    = cfg.seq_cfg.write_pct;
@@ -147,6 +306,7 @@ class spi_host_base_vseq extends cip_base_vseq #(
     transaction.spi_num_seg_min = cfg.seq_cfg.host_spi_min_num_seg;
     transaction.spi_num_seg_max = cfg.seq_cfg.host_spi_max_num_seg;
     transaction.num_cmd_bytes   = cfg.num_cmd_bytes;
+    transaction.num_dummy       = cfg.num_dummy;
   endfunction
 
 
@@ -164,13 +324,30 @@ class spi_host_base_vseq extends cip_base_vseq #(
     csr_wr(.ptr(ral.intr_state), .value(intr_state));
   endtask : spi_host_init
 
+  // In addition to un/setting sw_rst also triggers a uvm_event (and uvm_object)
+  // so any csr_spinwaits can be halted until the reset is over
   virtual task program_spi_host_sw_reset(int drain_cycles = SPI_HOST_RX_DEPTH);
+    uvm_reg_data_t control_reg;
+    csr_spinwait_ctrl_object spinwait_ctrl_obj;
+    spinwait_ctrl_obj = csr_spinwait_ctrl_object::type_id::create("spinwait_ctrl_obj");
     ral.control.sw_rst.set(1'b1);
     csr_update(ral.control);
+
+    spinwait_ctrl_obj.stop = 1;
+    start_stop_spinwait_ev.trigger(spinwait_ctrl_obj);
+    `uvm_info(`gfn, "Triggered 'start_stop_spinwait_ev' due to SW_RST=1", UVM_DEBUG)
     // make sure data completely drained from fifo then release reset
     wait_for_fifos_empty(AllFifos);
-    ral.control.sw_rst.set(1'b0);
-    csr_update(ral.control);
+    // Backdoor read to avoid writing something different to what's there
+    csr_rd(.ptr(ral.control), .value(control_reg), .backdoor(1));
+    control_reg[30] = 0; // SW reset field
+    csr_wr(.ptr(ral.control), .value(control_reg));
+    spinwait_ctrl_obj.stop = 0;
+    start_stop_spinwait_ev.trigger(spinwait_ctrl_obj);
+    `uvm_info(`gfn, "Triggered 'start_stop_spinwait_ev' due to SW_RST=0", UVM_DEBUG)
+
+    start_stop_spinwait_ev.reset();
+    `uvm_info(`gfn, "Resetting 'start_stop_spinwait_ev'", UVM_DEBUG)
   endtask : program_spi_host_sw_reset
 
   virtual task program_spi_host_regs();
@@ -181,7 +358,7 @@ class spi_host_base_vseq extends cip_base_vseq #(
     csr_wr(.ptr(ral.error_enable), .value(error_enable));
     csr_wr(.ptr(ral.event_enable), .value(event_enable));
     csr_wr(.ptr(ral.intr_enable), .value(intr_enable));
-    // TODO
+    // TODO(#18886)
     update_spi_agent_regs();
   endtask : program_spi_host_regs
 
@@ -202,16 +379,14 @@ class spi_host_base_vseq extends cip_base_vseq #(
 
   // CONFIGOPTS register fields
   virtual task program_configopt_regs();
-    for (int i = 0; i < SPI_HOST_NUM_CS; i++) begin
-      ral.configopts[i].cpol.set(spi_config_regs.cpol[0]);
-      ral.configopts[i].cpha.set(spi_config_regs.cpha[0]);
-      ral.configopts[i].fullcyc.set(spi_config_regs.fullcyc[0]);
-      ral.configopts[i].csnlead.set(spi_config_regs.csnlead[0]);
-      ral.configopts[i].csntrail.set(spi_config_regs.csntrail[0]);
-      ral.configopts[i].csnidle.set(spi_config_regs.csnidle[0]);
-      ral.configopts[i].clkdiv.set(spi_config_regs.clkdiv[0]);
-      csr_wr(ral.configopts[i], .value(ral.configopts[i].get()));
-    end
+    ral.configopts.cpol.set(spi_config_regs.cpol);
+    ral.configopts.cpha.set(spi_config_regs.cpha);
+    ral.configopts.fullcyc.set(spi_config_regs.fullcyc);
+    ral.configopts.csnlead.set(spi_config_regs.csnlead);
+    ral.configopts.csntrail.set(spi_config_regs.csntrail);
+    ral.configopts.csnidle.set(spi_config_regs.csnidle);
+    ral.configopts.clkdiv.set(spi_config_regs.clkdiv);
+    csr_wr(ral.configopts, .value(ral.configopts.get()));
   endtask : program_configopt_regs
 
 
@@ -262,8 +437,8 @@ class spi_host_base_vseq extends cip_base_vseq #(
 
 
   // wait dut ready for new command
-  virtual task wait_ready_for_command();
-    csr_spinwait(.ptr(ral.status.ready), .exp_data(1'b1));
+  virtual task wait_ready_for_command(bit backdoor = 1'b0);
+    csr_spinwait(.ptr(ral.status.ready), .exp_data(1'b1), .backdoor(backdoor));
   endtask : wait_ready_for_command
 
 
@@ -281,6 +456,9 @@ class spi_host_base_vseq extends cip_base_vseq #(
 
   // wait until fifos has available entries to read/write
   virtual task wait_for_fifos_available(spi_host_fifo_e fifo = AllFifos);
+    // Wait for control.sw_rst = 0 before checking for fifo availability, since
+    // a SW reset causes both TX/RX FIFOs to drain
+    csr_spinwait(.ptr(ral.control.sw_rst), .exp_data(1'b0));
     if (fifo == TxFifo || fifo == AllFifos) begin
       csr_spinwait(.ptr(ral.status.txfull), .exp_data(1'b0));
     end
@@ -305,29 +483,18 @@ class spi_host_base_vseq extends cip_base_vseq #(
 
   // update spi_agent registers
   virtual function void update_spi_agent_regs();
+    // CONFIGOPTS applies to all CSB lines.
     for (int i = 0; i < SPI_HOST_NUM_CS; i++) begin
-      cfg.m_spi_agent_cfg.sck_polarity[i] = spi_config_regs.cpol[i];
-      cfg.m_spi_agent_cfg.sck_phase[i]    = spi_config_regs.cpha[i];
-      cfg.m_spi_agent_cfg.full_cyc[i]      = spi_config_regs.fullcyc[i];
-      cfg.m_spi_agent_cfg.csn_lead[i]      = spi_config_regs.csnlead[i];
+      cfg.m_spi_agent_cfg.sck_polarity[i] = spi_config_regs.cpol;
+      cfg.m_spi_agent_cfg.sck_phase[i]    = spi_config_regs.cpha;
+      cfg.m_spi_agent_cfg.full_cyc[i]     = spi_config_regs.fullcyc;
+      cfg.m_spi_agent_cfg.csn_lead[i]     = spi_config_regs.csnlead;
     end
-    cfg.m_spi_agent_cfg.csid              = spi_host_ctrl_reg.csid;
-    cfg.m_spi_agent_cfg.spi_mode          = spi_host_command_reg.mode;
-    cfg.m_spi_agent_cfg.decode_commands   = 1'b1;
+    cfg.m_spi_agent_cfg.csid            = spi_host_ctrl_reg.csid;
+    cfg.m_spi_agent_cfg.spi_mode        = spi_host_command_reg.mode;
+    cfg.m_spi_agent_cfg.decode_commands = 1'b1;
     print_spi_host_regs();
   endfunction : update_spi_agent_regs
-
-
-  virtual function bit [TL_AW-1:0] get_aligned_tl_addr(spi_host_fifo_e fifo);
-    bit [TL_AW-1:0] fifo_addr;
-    if (fifo == TxFifo) begin
-      fifo_addr = SPI_HOST_TXDATA_OFFSET;
-    end else if (fifo == RxFifo) begin
-      fifo_addr = SPI_HOST_RXDATA_OFFSET;
-    end
-    return fifo_addr;
-  endfunction : get_aligned_tl_addr
-
 
   // print the content of spi_host_regs[channel]
   virtual function void print_spi_host_regs(uint en_print = 1);
@@ -342,16 +509,14 @@ class spi_host_base_vseq extends cip_base_vseq #(
       str = {str, $sformatf("\n    direction    %s",  spi_host_command_reg.direction.name())};
       str = {str, $sformatf("\n    csaat        %b",  spi_host_command_reg.csaat)};
       str = {str, $sformatf("\n    len          %0d", spi_host_command_reg.len)};
-      for (int i = 0; i < SPI_HOST_NUM_CS; i++) begin
-        str = {str, $sformatf("\n    config[%0d]", i)};
-        str = {str, $sformatf("\n      cpol       %b", spi_config_regs.cpol[i])};
-        str = {str, $sformatf("\n      cpha       %b", spi_config_regs.cpha[i])};
-        str = {str, $sformatf("\n      fullcyc    %b", spi_config_regs.fullcyc[i])};
-        str = {str, $sformatf("\n      csnlead    %0d", spi_config_regs.csnlead[i])};
-        str = {str, $sformatf("\n      csntrail   %0d", spi_config_regs.csntrail[i])};
-        str = {str, $sformatf("\n      csnidle    %0d", spi_config_regs.csnidle[i])};
-        str = {str, $sformatf("\n      clkdiv     %0d\n", spi_config_regs.clkdiv[i])};
-      end
+      str = {str, $sformatf("\n    config")};
+      str = {str, $sformatf("\n      cpol       %b", spi_config_regs.cpol)};
+      str = {str, $sformatf("\n      cpha       %b", spi_config_regs.cpha)};
+      str = {str, $sformatf("\n      fullcyc    %b", spi_config_regs.fullcyc)};
+      str = {str, $sformatf("\n      csnlead    %0d", spi_config_regs.csnlead)};
+      str = {str, $sformatf("\n      csntrail   %0d", spi_config_regs.csntrail)};
+      str = {str, $sformatf("\n      csnidle    %0d", spi_config_regs.csnidle)};
+      str = {str, $sformatf("\n      clkdiv     %0d\n", spi_config_regs.clkdiv)};
       `uvm_info(`gfn, str, UVM_LOW)
     end
   endfunction : print_spi_host_regs
@@ -367,37 +532,78 @@ class spi_host_base_vseq extends cip_base_vseq #(
   endtask : do_phase_align_reset
 
 
-  // send tl read/write request to a memory address (window type)
-  virtual task send_tl_access(bit [TL_AW-1:0]  addr,
-                              bit [TL_DW-1:0]  data,
-                              bit              write,
-                              bit [TL_DBW-1:0] mask = {TL_DBW{1'b1}},
-                              bit              blocking = $urandom_range(0, 1));
-    tl_access(.addr(addr), .write(write), .data(data), .mask(mask), .blocking(blocking));
-    `uvm_info(`gfn, $sformatf("\n  rxtx_vseq, TL_%s to addr 0x%0x, data: 0x%8x, blk %b, mask %b",
-        write ? "WRITE" : "READ", addr, data, blocking, mask), UVM_HIGH)
-  endtask : send_tl_access
+  // Send TL-UL read/write request to a memory address (window type)
+  // > Randomly select between blocking/non-blocking accesses by default
+  virtual local task tl_access_inner(bit [TL_AW-1:0]  addr,
+                                     bit [TL_DW-1:0]  data,
+                                     bit              write,
+                                     bit [TL_DBW-1:0] mask = {TL_DBW{1'b1}},
+                                     bit              blocking = $urandom_range(0, 1));
+    super.tl_access(.addr(addr), .write(write), .data(data), .mask(mask), .blocking(blocking));
+    `uvm_info(`gfn,
+              $sformatf("\n  rxtx_vseq, TL_%s to addr 0x%0x, data: 0x%8x, blk %b, mask %b",
+                        write ? "WRITE" : "READ", addr, data, blocking, mask),
+              UVM_HIGH)
+  endtask : tl_access_inner
 
+  // TODO (#24198): incorporate into a tl_access task wrapper and use whenever the mask is 0x0,
+  // or non-3 byte strobes for TXFIFO
+  virtual task accessinval_error_check(bit [TL_DBW-1:0] mask, bit txfifo);
+    int num_try = 2;
+    bit accessinval_error;
+
+    if (!is_valid_mask (mask, txfifo)) begin
+
+      repeat (num_try) begin
+        csr_rd(.ptr(ral.error_status.accessinval), .value(accessinval_error));
+        if (accessinval_error) begin
+          break;
+        end
+      end
+      if (!accessinval_error) begin
+        `uvm_fatal(`gfn, {$sformatf("%m - ACCESSINVAL_ERROR not set despite of sending a"),
+                          $sformatf("mask = %0d",mask)})
+      end else begin
+        // Clear the error bit to allow the RTL to move forward.
+        csr_wr(.ptr(ral.error_status.accessinval), .value(1));
+        `uvm_info(`gfn, {"Sent ral.error_status.accessinval = 0x1 to clear the error and let",
+                         " the simulation proceed"}, UVM_DEBUG)
+      end
+    end
+  endtask
+
+  // Create TL access(es) to either TXFIFO/RXFIFO to write/read data.
+  // fifo == TxFifo : Write all bits in data_q to the TxFifo
+  //      == RxFifo : Read single 32-bit word from RxFifo
   virtual task access_data_fifo(ref bit [7:0] data_q[$], input spi_host_fifo_e fifo,
                                     bit fifo_avail_chk = 1'b1);
-    bit [TL_DBW-1:0][7:0]   data          = '0;
-    int                     cnt           =  0;
-    bit [TL_DBW-1:0]        mask          = '0;
-    bit                     wr_en         = 1;
-    bit [TL_AW-1:0]         align_addr;
-    // check free space in fifo
-    if (fifo_avail_chk) wait_for_fifos_available(fifo);
-    //TODO add interrupt handling if FIFO overflow
+    typedef enum bit {WRITE = 1'b1, READ = 1'b0} rdwr_e;
+    rdwr_e                  rw                 = (fifo == RxFifo) ? READ : WRITE;
+    bit [TL_AW-1:0]         align_addr         = (fifo == RxFifo) ? SPI_HOST_RXDATA_OFFSET:
+                                                                    SPI_HOST_TXDATA_OFFSET;
+    bit [TL_DBW-1:0][7:0]   data               = '0;
+    bit [TL_DBW-1:0]        mask               = '0;
+    int                     cnt                =  0;
+    `DV_CHECK_NE_FATAL(fifo, AllFifos)
 
-    align_addr = get_aligned_tl_addr(fifo);
-    wr_en      = (fifo != RxFifo);
-    if (wr_en) begin
+    // Check for free space in the fifo
+    // TODO(#18886) add interrupt handling if FIFO overflows
+    if (fifo_avail_chk) wait_for_fifos_available(fifo);
+
+    if (rw == WRITE) begin
+      // Pull bytes from data_q, assembling them into 32-bit words for TL-UL writes.
+      // If data_q.size()%4 != 0, add a runt access with the remaining data (mask-off empty bytes)
       while (data_q.size() > 0) begin
         data[cnt] = data_q.pop_front();
         mask[cnt] = 1'b1;
-        if (cnt == 3) begin
-          send_tl_access(.addr(align_addr), .data(data), .write(wr_en),
-                         .mask(mask), .blocking(1'b1));
+
+        // TX - FIFO doesn't support 3-strobes set. Sending a 3-byte strobes
+        // in write causes an ACCESSINVAL which locks the RTL until is cleared
+        // Currently neither the scoreboard nor the VSEQs handle this scenario well,
+        // hence restricting here
+        if ((cnt == 3) || (cnt == 1 && data_q.size == 1)) begin
+          tl_access_inner(.addr(align_addr), .data(data), .write(WRITE),
+                          .mask(mask), .blocking(1'b1));
           cnt  = 0;
           data = '0;
           mask = '0;
@@ -405,13 +611,17 @@ class spi_host_base_vseq extends cip_base_vseq #(
           cnt++;
         end
       end
+
       // add runts
       if (cnt != 0) begin
-        send_tl_access(.addr(align_addr), .data(data), .write(wr_en), .mask(mask), .blocking(1'b1));
+        tl_access_inner(.addr(align_addr), .data(data), .write(WRITE), .mask(mask),
+                        .blocking(1'b1));
       end
-    end else begin
-      send_tl_access(.addr(align_addr), .data(data), .write(wr_en), .mask(mask), .blocking(1'b1));
+    end else if (rw == READ) begin
+      // Read a single 32-bit word
+      tl_access_inner(.addr(align_addr), .data(data), .write(READ), .mask(mask), .blocking(1'b1));
       data_q = {<<8{data}};
     end
-  endtask
+  endtask : access_data_fifo
+
 endclass : spi_host_base_vseq

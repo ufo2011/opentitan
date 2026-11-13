@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@ package spi_agent_pkg;
   // dep packages
   import uvm_pkg::*;
   import dv_utils_pkg::*;
+  import dv_base_agent_pkg::*;
   import dv_lib_pkg::*;
 
   // macro includes
@@ -14,7 +15,7 @@ package spi_agent_pkg;
 
   // parameter
   parameter uint TPM_START_MAX_WAIT_TIME_NS = 10_000_000; // 10ms
-  parameter uint CSB_WIDTH = 2;
+  parameter uint CSB_WIDTH = 4;
   parameter uint NUM_CSB = CSB_WIDTH ** 2;
   parameter time TIME_SCK_STABLE_TO_CSB_NS = 10ns;
   parameter uint TPM_ADDR_WIDTH      = 24;
@@ -67,7 +68,9 @@ package spi_agent_pkg;
     WriteDual    = 8'b00001100,
     ReadQuad     = 8'b00001111,
     WriteQuad    = 8'b11110000,
-    CmdOnly      = 8'b10000001
+    CmdOnly      = 8'b10000001,
+    AltCmd       = 8'b11111111 // Alternative command - used in spi_host to achieve
+                               // alternative segment combinations
   } spi_cmd_e;
 
   typedef enum bit [1:0] {

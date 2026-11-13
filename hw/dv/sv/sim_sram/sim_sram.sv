@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -71,15 +71,24 @@ module sim_sram #(
       .tl_i(tl_in_i),
       .tl_o(tl_in_o),
 
-      .req_o   (sram_req),
-      .gnt_i   (1'b1),
-      .we_o    (sram_we),
-      .addr_o  (sram_addr),
-      .wdata_o (sram_wdata),
-      .wmask_o (sram_wmask),
-      .rdata_i (sram_rdata),
-      .rvalid_i(sram_rvalid),
-      .rerror_i(2'b00)
+      .en_ifetch_i                (prim_mubi_pkg::MuBi4False),
+      .req_o                      (sram_req),
+      .req_type_o                 (),
+      .gnt_i                      (1'b1),
+      .we_o                       (sram_we),
+      .addr_o                     (sram_addr),
+      .wdata_o                    (sram_wdata),
+      .wmask_o                    (sram_wmask),
+      .intg_error_o               (),
+      .user_rsvd_o                (),
+      .rdata_i                    (sram_rdata),
+      .rvalid_i                   (sram_rvalid),
+      .rerror_i                   (2'b00),
+      .compound_txn_in_progress_o (),
+      .readback_en_i              (prim_mubi_pkg::MuBi4False),
+      .readback_error_o           (),
+      .wr_collision_i             (1'b0),
+      .write_pending_i            (1'b0)
     );
 
     prim_ram_1p #(
@@ -88,12 +97,15 @@ module sim_sram #(
       .DataBitsPerMask(WidthBytes)
     ) u_sram (
       .clk_i,
-      .req_i  (sram_req),
-      .write_i(sram_we),
-      .addr_i (sram_addr),
-      .wdata_i(sram_wdata),
-      .wmask_i(sram_wmask),
-      .rdata_o(sram_rdata)
+      .rst_ni,
+      .cfg_i (prim_ram_1p_pkg::RAM_1P_CFG_REQ_DEFAULT),
+      .cfg_o (),
+      .req_i     (sram_req),
+      .write_i   (sram_we),
+      .addr_i    (sram_addr),
+      .wdata_i   (sram_wdata),
+      .wmask_i   (sram_wmask),
+      .rdata_o   (sram_rdata)
     );
 
     // Valid data from the SRAM appears 1 cycle after the sram_req.

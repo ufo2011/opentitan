@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@
 #include "sw/device/lib/base/macros.h"
 #include "sw/device/lib/base/memory.h"
 #include "sw/device/lib/base/status.h"
+#include "sw/device/lib/runtime/hart.h"
 
 // This is declared as an enum to force the values to be
 // compile-time constants, but the type is otherwise not
@@ -38,16 +39,17 @@ enum {
   kHexLeLow = 'y',
   kHexLeHigh = 'Y',
   kStatusResult = 'r',
+  kFourCC = 'C',
 };
 
 // NOTE: all of the lengths of the strings below are given so that the NUL
 // terminator is left off; that way, `sizeof(kConst)` does not include it.
-static const char kDigitsLow[16] = "0123456789abcdef";
-static const char kDigitsHigh[16] = "0123456789ABCDEF";
+OT_NONSTRING static const char kDigitsLow[16] = "0123456789abcdef";
+OT_NONSTRING static const char kDigitsHigh[16] = "0123456789ABCDEF";
 
-static const char kErrorNul[17] = "%<unexpected nul>";
-static const char kUnknownSpec[15] = "%<unknown spec>";
-static const char kErrorTooWide[12] = "%<bad width>";
+OT_NONSTRING static const char kErrorNul[17] = "%<unexpected nul>";
+OT_NONSTRING static const char kUnknownSpec[15] = "%<unknown spec>";
+OT_NONSTRING static const char kErrorTooWide[12] = "%<bad width>";
 
 static size_t base_dev_null(void *data, const char *buf, size_t len) {
   return len;
@@ -64,21 +66,6 @@ void base_set_stdout(buffer_sink_t out) {
     out.sink = &base_dev_null;
   }
   base_stdout = out;
-}
-
-static size_t base_dev_uart(void *data, const char *buf, size_t len) {
-  const dif_uart_t *uart = (const dif_uart_t *)data;
-  for (size_t i = 0; i < len; ++i) {
-    if (dif_uart_byte_send_polled(uart, (uint8_t)buf[i]) != kDifOk) {
-      return i;
-    }
-  }
-  return len;
-}
-
-void base_uart_stdout(const dif_uart_t *uart) {
-  base_set_stdout(
-      (buffer_sink_t){.data = (void *)uart, .sink = &base_dev_uart});
 }
 
 size_t base_printf(const char *format, ...) {
@@ -277,10 +264,10 @@ static size_t write_digits(buffer_sink_t out, uint32_t value, uint32_t width,
 
 static size_t write_status(buffer_sink_t out, status_t value, bool as_json) {
   // The module id is defined to be 3 chars long.
-  char mod[] = {'"', 0, 0, 0, '"', ','};
+  char mod[] = {0, 0, 0};
   int32_t arg;
   const char *start;
-  bool err = status_extract(value, &start, &arg, &mod[1]);
+  bool err = status_extract(value, &start, &arg, mod);
 
   // strlen of the status code.
   const char *end = start;
@@ -289,19 +276,26 @@ static size_t write_status(buffer_sink_t out, status_t value, bool as_json) {
   size_t len = 0;
 
   len += out.sink(out.data, "{\"", as_json ? 2 : 0);
-  len += out.sink(out.data, start, end - start);
+  len += out.sink(out.data, start, (size_t)(end - start));
   len += out.sink(out.data, "\"", as_json ? 1 : 0);
 
   len += out.sink(out.data, ":", 1);
   if (err) {
     // All error codes include the module identifier.
-    len += out.sink(out.data, "[", 1);
-    len += out.sink(out.data, mod, sizeof(mod));
-    len += write_digits(out, arg, 0, 0, 10, kDigitsLow);
+    len += out.sink(out.data, "[\"", 2);
+    for (size_t i = 0; i < 3; i++) {
+      if (mod[i] == '\\') {
+        len += out.sink(out.data, "\\\\", 2);
+      } else {
+        len += out.sink(out.data, &mod[i], 1);
+      }
+    }
+    len += out.sink(out.data, "\",", 2);
+    len += write_digits(out, (uint32_t)arg, 0, 0, 10, kDigitsLow);
     len += out.sink(out.data, "]", 1);
   } else {
     // Ok codes include only the arg
-    len += write_digits(out, arg, 0, 0, 10, kDigitsLow);
+    len += write_digits(out, (uint32_t)arg, 0, 0, 10, kDigitsLow);
   }
   len += out.sink(out.data, "}", as_json ? 1 : 0);
   return len;
@@ -385,6 +379,20 @@ static void process_specifier(buffer_sink_t out, format_specifier_t spec,
       }
       char value = (char)va_arg(*args, uint32_t);
       *bytes_written += out.sink(out.data, &value, 1);
+      break;
+    }
+    case kFourCC: {
+      uint32_t value = va_arg(*args, uint32_t);
+      for (size_t i = 0; i < sizeof(uint32_t); ++i, value >>= 8) {
+        uint8_t ch = (uint8_t)value;
+        if (ch >= 32 && ch < 127) {
+          *bytes_written += out.sink(out.data, (const char *)&ch, 1);
+        } else {
+          *bytes_written += out.sink(out.data, "\\x", 2);
+          *bytes_written += out.sink(out.data, &kDigitsLow[ch >> 4], 1);
+          *bytes_written += out.sink(out.data, &kDigitsLow[ch & 15], 1);
+        }
+      }
       break;
     }
     case kString: {
@@ -558,7 +566,7 @@ size_t base_vfprintf(buffer_sink_t out, const char *format, va_list args) {
   return bytes_written;
 }
 
-const char kBaseHexdumpDefaultFmtAlphabet[256] =
+OT_NONSTRING const char kBaseHexdumpDefaultFmtAlphabet[256] =
     // clang-format off
   // First 32 characters are not printable.
   "................................"
@@ -607,6 +615,10 @@ size_t base_snhexdump_with(char *out, size_t out_len, base_hexdump_fmt_t fmt,
 
 size_t base_fhexdump_with(buffer_sink_t out, base_hexdump_fmt_t fmt,
                           const char *buf, size_t len) {
+  if (out.sink == NULL) {
+    out.sink = &base_dev_null;
+  }
+
   size_t bytes_written = 0;
   size_t bytes_per_line = fmt.bytes_per_word * fmt.words_per_line;
 
@@ -617,7 +629,7 @@ size_t base_fhexdump_with(buffer_sink_t out, base_hexdump_fmt_t fmt,
     size_t line_bytes_written = 0;
     for (size_t word = 0; word < bytes_per_line; word += fmt.bytes_per_word) {
       if (len < line + word) {
-        char spaces[16] = "                ";
+        OT_NONSTRING char spaces[16] = "                ";
         while (line_bytes_written < chars_per_line) {
           size_t to_print = chars_per_line - line_bytes_written;
           if (to_print > sizeof(spaces)) {

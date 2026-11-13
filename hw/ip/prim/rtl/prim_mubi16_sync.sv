@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -26,7 +26,7 @@ module prim_mubi16_sync
   // This controls whether the mubi module institutes stability checks when
   // AsyncOn is set.  If stability checks are on, a 3rd stage of storage is
   // added after the synchronizers and the outputs only updated if the 3rd
-  // stage and sychronizer agree.  If they do not agree, the ResetValue is
+  // stage and synchronizer agree.  If they do not agree, the ResetValue is
   // output instead.
   parameter bit StabilityCheck = 0,
   // Reset value for the sync flops

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -28,10 +28,17 @@
   lblock = block.name.lower()
   ublock = lblock.upper()
 
+  reg_pkg = f'{lblock}{alias_impl}_reg_pkg'
+  num_regs = f'NumRegs{if_name.title() if if_name else ""}'
+
   u_mod_base = mod_base.upper()
 
   reg2hw_t = gen_rtl.get_iface_tx_type(block, if_name, False)
   hw2reg_t = gen_rtl.get_iface_tx_type(block, if_name, True)
+
+  dynamic_racl_support = block.bus_interfaces.racl_support[if_name]
+  static_racl_support = block.bus_interfaces.static_racl_support[if_name]
+  racl_support = dynamic_racl_support or static_racl_support
 
   win_array_decl = f'  [{num_wins}]' if num_wins > 1 else ''
 
@@ -75,8 +82,8 @@
 
   for r in rb.all_regs:
     if isinstance(r, MultiRegister):
-      r0 = r.reg
-      srs = r.regs
+      r0 = r.pregs[0]
+      srs = r.cregs
     else:
       r0 = r
       srs = [r]
@@ -110,12 +117,27 @@
           else:
             fsig_name = '{}.{}'.format(fsig_pfx, fld_name)
 
-        finst_names[field] = (fsig_name, finst_name)
+        # The inregwen field is internal
+        if (not isinstance(r, MultiRegister) and sr.inregwen is not None
+                and sr.is_homogeneous(inregwen=True)):
+          fsig_name = fsig_pfx
+
+        finst_names[(sr, field)] = (fsig_name, finst_name)
 
 %>
 `include "prim_assert.sv"
 
-module ${mod_name} (
+module ${mod_name}${' (' if not racl_support else ''}
+% if racl_support:
+  # (
+    parameter bit          EnableRacl           = 1'b0,
+    parameter bit          RaclErrorRsp         = 1'b1${"," if dynamic_racl_support else ""}
+  % if dynamic_racl_support:
+    parameter top_racl_pkg::racl_policy_sel_t RaclPolicySelVec[${reg_pkg}::${num_regs}] =
+      '{${reg_pkg}::${num_regs}{0}}
+  % endif
+  ) (
+% endif
   input clk_i,
   input rst_ni,
 % if rb.has_internal_shadowed_reg():
@@ -125,6 +147,14 @@ module ${mod_name} (
   input ${clock.clock},
   input ${clock.reset},
 % endfor
+% if rb.reinit_list:
+
+  // Register reinit inputs
+% for reinit in rb.reinit_list:
+  input  ${reinit.name},
+% endfor
+
+% endif
   input  tlul_pkg::tl_h2d_t tl_i,
   output tlul_pkg::tl_d2h_t tl_o,
 % if num_wins != 0:
@@ -136,10 +166,10 @@ module ${mod_name} (
 % endif
   // To HW
 % if rb.get_n_bits(["q","qe","re"]):
-  output ${lblock}${alias_impl}_reg_pkg::${reg2hw_t} reg2hw, // Write
+  output ${reg_pkg}::${reg2hw_t} reg2hw, // Write
 % endif
 % if rb.get_n_bits(["d","de"]):
-  input  ${lblock}${alias_impl}_reg_pkg::${hw2reg_t} hw2reg, // Read
+  input  ${reg_pkg}::${hw2reg_t} hw2reg, // Read
 % endif
 
 % if rb.has_internal_shadowed_reg():
@@ -147,14 +177,19 @@ module ${mod_name} (
   output logic shadowed_update_err_o,
 
 %endif
-  // Integrity check errors
-  output logic intg_err_o,
+% if racl_support:
+  // RACL interface
+% if dynamic_racl_support:
+  input  top_racl_pkg::racl_policy_vec_t racl_policies_i,
+% endif
+  output top_racl_pkg::racl_error_log_t  racl_error_o,
 
-  // Config
-  input devmode_i // If 1, explicit error return for unmapped register access
+% endif
+  // Integrity check errors
+  output logic intg_err_o
 );
 
-  import ${lblock}${alias_impl}_reg_pkg::* ;
+  import ${reg_pkg}::* ;
 
 % if needs_aw:
   localparam int AW = ${addr_width};
@@ -255,7 +290,7 @@ module ${mod_name} (
 % else:
   always_ff @(posedge ${reg_clk_expr} or negedge ${reg_rst_expr}) begin
     if (!${reg_rst_expr}) begin
-% endif    
+% endif
       err_q <= '0;
     end else if (intg_err || reg_we_err) begin
       err_q <= 1'b1;
@@ -390,7 +425,12 @@ module ${mod_name} (
     .be_o    (reg_be),
     .busy_i  (reg_busy),
     .rdata_i (reg_rdata),
+  % if racl_support:
+    // Translate RACL error to TLUL error if enabled
+    .error_i (reg_error | (RaclErrorRsp & racl_error_o.valid))
+  % else:
     .error_i (reg_error)
+  % endif
   );
 
   // cdc oversampling signals
@@ -404,7 +444,7 @@ module ${mod_name} (
 
   % endif
   assign reg_rdata = reg_rdata_next ;
-  assign reg_error = (devmode_i & addrmiss) | wr_err | intg_err;
+  assign reg_error = addrmiss | wr_err | intg_err;
 
   // Define SW related signals
   // Format: <reg>_<field>_{wd|we|qs}
@@ -426,7 +466,7 @@ ${field_sig_decl(f, sig_name, r.hwext, r.shadowed, r.async_clk)}\
   % for r in regs_flat:
     % if r.async_clk:
 <%
-  base_name = r.async_clk.clock_base_name
+  base_name = r.async_clk[1].clock_base_name
   r_name = r.name.lower()
   comb_name = f"{base_name}_{r_name}"
   src_we_expr = f"{r_name}_we" if r.needs_we() else "'0"
@@ -511,8 +551,8 @@ ${field_sig_decl(f, sig_name, r.hwext, r.shadowed, r.async_clk)}\
   ) u_${r_name}_cdc (
     .clk_src_i    (${reg_clk_expr}),
     .rst_src_ni   (${reg_rst_expr}),
-    .clk_dst_i    (${r.async_clk.clock}),
-    .rst_dst_ni   (${r.async_clk.reset}),
+    .clk_dst_i    (${r.async_clk[1].clock}),
+    .rst_dst_ni   (${r.async_clk[1].reset}),
     .src_regwen_i (${src_regwen_expr}),
     .src_we_i     (${src_we_expr}),
     .src_re_i     (${src_re_expr}),
@@ -539,6 +579,7 @@ ${field_sig_decl(f, sig_name, r.hwext, r.shadowed, r.async_clk)}\
 <%
       r0, srs = r0_srs[r]
       reg_name = r0.name.lower()
+      fld_count = 0
 %>\
     % for sr_idx, sr in enumerate(srs):
 <%
@@ -549,8 +590,8 @@ ${field_sig_decl(f, sig_name, r.hwext, r.shadowed, r.async_clk)}\
                      f'  // R[{sr_name}]: V({sr.hwext})')
         else:
           reg_hdr = (f'  // R[{sr_name}]: V({sr.hwext})')
-        clk_expr = sr.async_clk.clock if sr.async_clk else reg_clk_expr
-        rst_expr = sr.async_clk.reset if sr.async_clk else reg_rst_expr
+        clk_expr = sr.async_clk[1].clock if sr.async_clk else reg_clk_expr
+        rst_expr = sr.async_clk[1].reset if sr.async_clk else reg_rst_expr
 %>\
 ${reg_hdr}
       % if sr.needs_qe():
@@ -559,23 +600,44 @@ ${reg_hdr}
       % if sr.needs_int_qe():
   logic [${len(sr.fields)-1}:0] ${sr_name}_flds_we;
       % endif
-      % if sr.needs_qe() and sr.hwext:
-  assign ${sr_name}_qe = &${sr_name}_flds_we;
-      % elif sr.needs_qe():
+      % if sr.needs_qe():
+<%
+      flds_no_we = 0
+      for f_idx, f in enumerate(sr.fields):
+        flds_no_we |= (not f.swaccess.needs_we()) << f_idx
+      if flds_no_we != 0:
+        flds_we_masked = f"&({sr_name}_flds_we | {len(sr.fields)}'h{flds_no_we:x})"
+        unused_flds_we_masked = f"^({sr_name}_flds_we & {len(sr.fields)}'h{flds_no_we:x})"
+      else:
+        flds_we_masked = f"&{sr_name}_flds_we"
+      f"" if flds_no_we != 0 else ""
+%>\
+        % if sr.hwext and flds_no_we != 2**len(sr.fields)-1:
+          % if flds_no_we != 0:
+  // This ignores QEs that are set to constant 0 due to read-only fields.
+  logic unused_${sr_name}_flds_we;
+  assign unused_${sr_name}_flds_we = ${unused_flds_we_masked};
+          % endif
+  assign ${sr_name}_qe = ${flds_we_masked};
+        % elif flds_no_we != 2**len(sr.fields)-1:
   prim_flop #(
     .Width(1),
     .ResetValue(0)
   ) u_${reg_name}${sr_idx}_qe (
     .clk_i(${clk_expr}),
     .rst_ni(${rst_expr}),
-    .d_i(&${sr_name}_flds_we),
+    .d_i(${flds_we_masked}),
     .q_o(${sr_name}_qe)
   );
+        % else:
+  // In case all fields are read-only the aggregated register QE will be zero as well.
+  assign ${sr_name}_qe = &${sr_name}_flds_we;
+        % endif
       % endif
 <%
   # We usually use the REG_we signal, but use REG_re for RC fields
   # (which get updated on a read, not a write)
-  clk_base_name = f"{sr.async_clk.clock_base_name}_" if sr.async_clk else ""
+  clk_base_name = f"{sr.async_clk[1].clock_base_name}_" if sr.async_clk else ""
   we_suffix = 're' if field.swaccess.swrd() == SwRdAccess.RC else 'we'
   we_signal = f'{clk_base_name}{sr_name}_{we_suffix}'
 
@@ -583,6 +645,15 @@ ${reg_hdr}
     we_expr = f'{we_signal} & {clk_base_name}{sr_name}_regwen'
   elif sr.regwen:
     we_expr = f'{we_signal} & {sr.regwen.lower()}_qs'
+    for reg in regs_flat:
+      if reg.name == sr.regwen and reg.fields[0].mubi:
+        we_expr = f'''{we_signal} &
+          prim_mubi_pkg::mubi{reg.fields[0].bits.width()}_test_true_strict(prim_mubi_pkg::mubi{reg.fields[0].bits.width()}_t\'({sr.regwen.lower()}_qs))'''
+  elif sr.inregwen:
+    # In-register write-enable: gate by the registered value (qs) of the control
+    # field that lives within this same register.
+    inregwen_qs = f'{sr_name}_{sr.inregwen.lower()}_qs'
+    we_expr = f'{we_signal} && {inregwen_qs}'
   else:
     we_expr = we_signal
 
@@ -593,7 +664,7 @@ ${reg_hdr}
   % endif
   ## Only create this helper signal if there actually is a REGWEN gate.
   ## Otherwise the WE signal is connected directly to the register.
-  % if sr.regwen and sr.needs_we():
+  % if (sr.regwen or sr.inregwen) and sr.needs_we():
   // Create REGWEN-gated WE signal
   logic ${we_expr_regwen_gated};
 <%
@@ -607,10 +678,25 @@ ${reg_hdr}
       % for fidx, field in enumerate(sr.fields):
 <%
           fld_name = field.name.lower()
-          fsig_name, finst_name = finst_names[field]
+          fsig_name, finst_name = finst_names[(sr, field)]
+
+          reinit = r.reinit and r.get_n_bits(["q"])
+          if isinstance(r, MultiRegister):
+            sig_idx = fld_count if r.is_homogeneous() else sr_idx
+            fsig_pfx = '{}[{}]'.format(reg_name, sig_idx)
+            reinit = reinit and (r.is_homogeneous() or fidx == 0)
+            fld_count += 1
+          else:
+            fsig_pfx = reg_name
+            reinit = reinit and fidx == 0
 %>\
         % if len(sr.fields) > 1:
   //   F[${fld_name}]: ${field.bits.msb}:${field.bits.lsb}
+        % endif
+        % if reinit:
+  // Reinit
+  assign reg2hw.${fsig_pfx}.reinit = ${r.reinit};
+
         % endif
 ${finst_gen(sr, field, finst_name, fsig_name, fidx)}
       % endfor
@@ -619,24 +705,101 @@ ${finst_gen(sr, field, finst_name, fsig_name, fidx)}
   % endfor
 
   logic [${len(regs_flat)-1}:0] addr_hit;
+% if racl_support:
+  top_racl_pkg::racl_role_vec_t racl_role_vec;
+  top_racl_pkg::racl_role_t racl_role;
+
+  logic [${len(regs_flat)-1}:0] racl_addr_hit_read;
+  logic [${len(regs_flat)-1}:0] racl_addr_hit_write;
+
+  if (EnableRacl) begin : gen_racl_role_logic
+    // Retrieve RACL role from user bits and one-hot encode that for the comparison bitmap
+    assign racl_role = top_racl_pkg::tlul_extract_racl_role_bits(tl_i.a_user.rsvd);
+
+    prim_onehot_enc #(
+      .OneHotWidth( $bits(top_racl_pkg::racl_role_vec_t) )
+    ) u_racl_role_encode (
+      .in_i ( racl_role     ),
+      .en_i ( 1'b1          ),
+      .out_o( racl_role_vec )
+    );
+  % if static_racl_support:
+    // For the static RACL assignment for racl_ctrl only one role (ROT_PRIVATE) is used,
+    // leaving others unread. Intentionally read them to avoid linting errors.
+    logic unused_role_vec;
+    assign unused_role_vec = ^racl_role_vec;
+  % endif
+  end else begin : gen_no_racl_role_logic
+    assign racl_role     = '0;
+    assign racl_role_vec = '0;
+  end
+
+% endif
   always_comb begin
-    addr_hit = '0;
+  % if racl_support:
+    racl_addr_hit_read  = '0;
+    racl_addr_hit_write = '0;
+  % endif
     % for i,r in enumerate(regs_flat):
-    addr_hit[${"{}".format(i).rjust(max_regs_char)}] = (reg_addr == ${ublock}_${r.name.upper()}_OFFSET);
+<% slice = '{}'.format(i).rjust(max_regs_char) %>\
+    addr_hit[${slice}] = (reg_addr == ${ublock}_${r.name.upper()}_OFFSET);
     % endfor
+  % if racl_support:
+
+    if (EnableRacl) begin : gen_racl_hit
+      for (int unsigned slice_idx = 0; slice_idx < ${len(regs_flat)}; slice_idx++) begin
+      % if dynamic_racl_support:
+        racl_addr_hit_read[slice_idx] =
+            addr_hit[slice_idx] & (|(racl_policies_i[RaclPolicySelVec[slice_idx]].read_perm
+                                      & racl_role_vec));
+        racl_addr_hit_write[slice_idx] =
+            addr_hit[slice_idx] & (|(racl_policies_i[RaclPolicySelVec[slice_idx]].write_perm
+                                      & racl_role_vec));
+      % else:
+        // Static RACL protection with ROT_PRIVATE policy
+        racl_addr_hit_read[slice_idx] =
+          addr_hit[slice_idx] & (|(top_racl_pkg::RACL_POLICY_ROT_PRIVATE_RD & racl_role_vec));
+        racl_addr_hit_write[slice_idx] =
+          addr_hit[slice_idx] & (|(top_racl_pkg::RACL_POLICY_ROT_PRIVATE_WR & racl_role_vec));
+      % endif
+      end
+    end else begin : gen_no_racl
+      racl_addr_hit_read  = addr_hit;
+      racl_addr_hit_write = addr_hit;
+    end
+  % endif
   end
 
   assign addrmiss = (reg_re || reg_we) ? ~|addr_hit : 1'b0 ;
+% if racl_support:
+  // A valid address hit, access, but failed the RACL check
+  assign racl_error_o.valid = |addr_hit & ((reg_re & ~|racl_addr_hit_read) |
+                                           (reg_we & ~|racl_addr_hit_write));
+  assign racl_error_o.request_address = top_pkg::TL_AW'(reg_addr);
+  assign racl_error_o.racl_role       = racl_role;
+  assign racl_error_o.overflow        = 1'b0;
+
+  if (EnableRacl) begin : gen_racl_log
+    assign racl_error_o.ctn_uid     = top_racl_pkg::tlul_extract_ctn_uid_bits(tl_i.a_user.rsvd);
+    assign racl_error_o.read_access = tl_i.a_opcode == tlul_pkg::Get;
+  end else begin : gen_no_racl_log
+    assign racl_error_o.ctn_uid     = '0;
+    assign racl_error_o.read_access = 1'b0;
+  end
+% endif
 
   % if regs_flat:
 <%
-    # We want to signal wr_err if reg_be (the byte enable signal) is true for
-    # any bytes that aren't supported by a register. That's true if a
-    # addr_hit[i] and a bit is set in reg_be but not in *_PERMIT[i].
+    # Although partial writes are possible on the bus, the registers have a single write-enable bit.
+    # As such, all fields in the target register must be completely covered by the bytes being
+    # written. If a bit is high in *_PERMIT[i], this means that the corresponding byte contributes
+    # some field in register i.
 
-    wr_err_terms = ['(addr_hit[{idx}] & (|({mod}_PERMIT[{idx}] & ~reg_be)))'
+    wr_addr_hit = 'racl_addr_hit_write' if racl_support else 'addr_hit'
+    wr_err_terms = ['({wr_addr_hit}[{idx}] & (|({mod}_PERMIT[{idx}] & ~reg_be)))'
                     .format(idx=str(i).rjust(max_regs_char),
-                            mod=u_mod_base)
+                            mod=u_mod_base,
+                            wr_addr_hit=wr_addr_hit)
                     for i in range(len(regs_flat))]
     wr_err_expr = (' |\n' + (' ' * 15)).join(wr_err_terms)
 %>\
@@ -664,7 +827,6 @@ ${field_wd_gen(f, r.name.lower() + "_" + f.name.lower(), r.hwext, r.shadowed, r.
 
   // Assign write-enables to checker logic vector.
   always_comb begin
-    reg_we_check = '0;
     % for i, r in enumerate(regs_flat):
 <%
     # The WE checking logic does NOT protect RC fields.
@@ -693,18 +855,19 @@ ${field_wd_gen(f, r.name.lower() + "_" + f.name.lower(), r.hwext, r.shadowed, r.
   always_comb begin
     reg_rdata_next = '0;
     unique case (1'b1)
+<% read_addr_hit = 'racl_addr_hit_read' if racl_support else 'addr_hit' %>\
   % for i, r in enumerate(regs_flat):
     % if r.async_clk:
-      addr_hit[${i}]: begin
+      ${read_addr_hit}[${i}]: begin
         reg_rdata_next = DW'(${r.name.lower()}_qs);
       end
     % elif len(r.fields) == 1:
-      addr_hit[${i}]: begin
+      ${read_addr_hit}[${i}]: begin
 ${rdata_gen(r.fields[0], r.name.lower())}\
       end
 
     % else:
-      addr_hit[${i}]: begin
+      ${read_addr_hit}[${i}]: begin
       % for f in r.fields:
 ${rdata_gen(f, r.name.lower() + "_" + f.name.lower())}\
       % endfor
@@ -757,7 +920,7 @@ ${rdata_gen(f, r.name.lower() + "_" + f.name.lower())}\
 
       for sr in srs:
         for field in sr.fields:
-          _, pfx = finst_names[field]
+          _, pfx = finst_names[(sr, field)]
           shadowed_field_pfxs.append(pfx)
 %>\
   assign shadowed_storage_err_o = |{
@@ -783,7 +946,7 @@ ${rdata_gen(f, r.name.lower() + "_" + f.name.lower())}\
   assign reg_busy = shadow_busy;
   % else:
   logic reg_busy_sel;
-  assign reg_busy = reg_busy_sel | shadow_busy;
+  assign reg_busy = (reg_busy_sel | shadow_busy) & tl_i.a_valid;
   always_comb begin
     reg_busy_sel = '0;
     unique case (1'b1)
@@ -810,10 +973,10 @@ ${rdata_gen(f, r.name.lower() + "_" + f.name.lower())}\
   logic unused_be;
   assign unused_wdata = ^reg_wdata;
   assign unused_be = ^reg_be;
-% else:
-  // devmode_i is not used if there are no registers
-  logic unused_devmode;
-  assign unused_devmode = ^devmode_i;
+% endif
+% if dynamic_racl_support:
+  logic unused_policy_sel;
+  assign unused_policy_sel = ^racl_policies_i;
 % endif
 % if rb.all_regs:
 
@@ -870,19 +1033,28 @@ ${bits.msb}\
 <%def name="finst_gen(reg, field, finst_name, fsig_name, fidx)">\
 <%
 
-    clk_base_name = f"{reg.async_clk.clock_base_name}_" if reg.async_clk else ""
+    clk_base_name = f"{reg.async_clk[1].clock_base_name}_" if reg.async_clk else ""
     reg_name = reg.name.lower()
-    clk_expr = reg.async_clk.clock if reg.async_clk else reg_clk_expr
-    rst_expr = reg.async_clk.reset if reg.async_clk else reg_rst_expr
+    clk_expr = reg.async_clk[1].clock if reg.async_clk else reg_clk_expr
+    rst_expr = reg.async_clk[1].reset if reg.async_clk else reg_rst_expr
     re_expr = f'{clk_base_name}{reg_name}_re' if field.swaccess.allows_read() or reg.shadowed else "1'b0"
+
+    # The inregwen control field is stored inside the reg block even for registers marked as `hwext`
+    is_inregwen_ctrl = (reg.inregwen is not None and
+                         field.name == reg.inregwen)
+    field_is_ext = reg.hwext and not is_inregwen_ctrl
 
     # software inputs to field instance, write enable, read enable, write data
     if field.swaccess.allows_write():
       # We usually use the REG_we signal, but use REG_re for RC fields
       # (which get updated on a read, not a write)
       we_suffix = 're' if field.swaccess.swrd() == SwRdAccess.RC else 'we'
-      # If this is a REGWEN gated field, need to use the gated WE signal.
-      gated_suffix = '_gated' if reg.regwen else ''
+      # If this is a REGWEN gated field, need to use the gated WE signal. For
+      # an inregwen register every field is gated EXCEPT the control bit itself
+      # (which must stay writable so software can engage/release the lock).
+      gated = bool(reg.regwen) or (reg.inregwen is not None and
+                                   not is_inregwen_ctrl)
+      gated_suffix = '_gated' if gated else ''
       we_expr = f'{clk_base_name}{reg_name}{gated_suffix}_{we_suffix}'
 
       # when async, pick from the cdc handled data
@@ -920,13 +1092,18 @@ ${bits.msb}\
     else:
       q_expr = ''
 
+    if field.mubi:
+      mubi_expr = "1'b1"
+    else:
+      mubi_expr = "1'b0"
+
     # when async, the outputs are aggregated first by the cdc module
     async_suffix = '_int' if reg.async_clk else ''
     qs_expr = f'{clk_base_name}{finst_name}_qs{async_suffix}' if field.swaccess.allows_read() else ''
     ds_expr = f'{clk_base_name}{finst_name}_ds{async_suffix}' if reg.async_clk and reg.is_hw_writable() else ''
 
 %>\
-  % if reg.hwext:       ## if hwext, instantiate prim_subreg_ext
+  % if field_is_ext:    ## if hwext (and not an inregwen control bit), instantiate prim_subreg_ext
 <%
     subreg_block = "prim_subreg_ext"
 %>\
@@ -963,6 +1140,18 @@ ${bits.msb}\
       % if reg.async_clk and reg.shadowed:
   logic async_${finst_name}_err_update;
   logic async_${finst_name}_err_storage;
+  logic deglitched_${finst_name}_err_storage;
+
+  // flop storage error to filter combinational glitches before sending it across CDC
+  prim_flop #(
+    .Width(1),
+    .ResetValue('0)
+  ) u_${finst_name}_err_storage_deglitch (
+    .clk_i (${reg.async_clk[1].clock}),
+    .rst_ni(${reg.async_clk[1].reset}),
+    .d_i   (async_${finst_name}_err_storage),
+    .q_o   (deglitched_${finst_name}_err_storage)
+  );
 
   // storage error is persistent and can be sampled at any time
   prim_flop_2sync #(
@@ -971,14 +1160,14 @@ ${bits.msb}\
   ) u_${finst_name}_err_storage_sync (
     .clk_i,
     .rst_ni,
-    .d_i(async_${finst_name}_err_storage),
+    .d_i(deglitched_${finst_name}_err_storage),
     .q_o(${finst_name}_storage_err)
   );
 
   // update error is transient and must be immediately captured
   prim_pulse_sync u_${finst_name}_err_update_sync (
-    .clk_src_i(${reg.async_clk.clock}),
-    .rst_src_ni(${reg.async_clk.reset}),
+    .clk_src_i(${reg.async_clk[1].clock}),
+    .rst_src_ni(${reg.async_clk[1].reset}),
     .src_pulse_i(async_${finst_name}_err_update),
     .clk_dst_i(clk_i),
     .rst_dst_ni(rst_ni),
@@ -988,18 +1177,26 @@ ${bits.msb}\
   ${subreg_block} #(
     .DW      (${field.bits.width()}),
     .SwAccess(prim_subreg_pkg::SwAccess${field.swaccess.value[1].name.upper()}),
-    .RESVAL  (${resval_expr})
+    .RESVAL  (${resval_expr}),
+    .Mubi    (${mubi_expr})
   ) u_${finst_name} (
       % if reg.sync_clk:
     // sync clock and reset required for this register
-    .clk_i   (${reg.sync_clk.clock}),
-    .rst_ni  (${reg.sync_clk.reset}),
+    .clk_i   (${reg.sync_clk[1].clock}),
+    .rst_ni  (${reg.sync_clk[1].reset}),
       % else:
     .clk_i   (${clk_expr}),
     .rst_ni  (${rst_expr}),
       % endif
       % if reg.shadowed and not reg.hwext:
     .rst_shadowed_ni (rst_shadowed_ni),
+      % endif
+      % if not reg.shadowed:
+        % if reg.reinit is None:
+    .reinit_i(1'b0),
+        % else:
+    .reinit_i(${reg.reinit}),
+        % endif
       % endif
 
     // from register interface
@@ -1044,11 +1241,13 @@ ${bits.msb}\
   % endif
 </%def>\
 <%def name="reg_enable_gen(reg, idx)">\
+<% wr_addr_hit = 'racl_addr_hit_write' if racl_support else 'addr_hit'%>\
+<% re_addr_hit = 'racl_addr_hit_read'  if racl_support else 'addr_hit'%>\
   % if reg.needs_re():
-  assign ${reg.name.lower()}_re = addr_hit[${idx}] & reg_re & !reg_error;
+  assign ${reg.name.lower()}_re = ${re_addr_hit}[${idx}] & reg_re & !reg_error;
   % endif
   % if reg.needs_we():
-  assign ${reg.name.lower()}_we = addr_hit[${idx}] & reg_we & !reg_error;
+  assign ${reg.name.lower()}_we = ${wr_addr_hit}[${idx}] & reg_we & !reg_error;
   % endif
 </%def>\
 <%def name="field_wd_gen(field, sig_name, hwext, shadowed, async_clk, reg_name, idx)">\

@@ -129,22 +129,31 @@ class core_ibex_rf_intg_test extends core_ibex_base_test;
   endfunction
 
   virtual task send_stimulus();
-    bit port_idx;
+    int    rnd_delay;
+    bit    port_idx;
     string port_name;
+    int unsigned lockstep_delay;
 
     vseq.start(env.vseqr);
 
     // Pick port to corrupt.
     port_idx = $urandom_range(1);
-    port_name = port_idx ? "rf_rdata_b_ecc" : "rf_rdata_a_ecc";
+    port_name = port_idx ? "rf_rdata_b" : "rf_rdata_a";
+
+    lockstep_delay = read_data("gen_lockstep.u_ibex_lockstep.LockstepOffset");
+
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(rnd_delay, rnd_delay > 1000; rnd_delay < 10_000;)
+    clk_vif.wait_n_clks(rnd_delay);
 
     forever begin
-      logic rf_ren, rf_rd_wb_match;
+      logic rf_ren, rf_rd_wb_match, rf_write_wb;
       int unsigned bit_idx;
       uvm_hdl_data_t data, mask;
       logic exp_alert, alert_major_internal;
 
       clk_vif.wait_n_clks(1);
+
+      rf_write_wb = dut_vif.signal_probe_rf_write_wb(dv_utils_pkg::SignalProbeSample);
 
       // Check if port is being read.
       if (port_idx) begin
@@ -156,7 +165,7 @@ class core_ibex_rf_intg_test extends core_ibex_base_test;
       end
 
       // Only corrupt port if it is read.
-      if (!(rf_ren == 1'b1 && rf_rd_wb_match == 1'b0)) continue;
+      if (!(rf_ren == 1'b1 && (rf_rd_wb_match == 1'b0 || rf_write_wb == 1'b0))) continue;
 
       data = read_data(port_name);
       `uvm_info(`gfn, $sformatf("Corrupting %s; original value: 'h%0x", port_name, data), UVM_LOW)
@@ -176,8 +185,8 @@ class core_ibex_rf_intg_test extends core_ibex_base_test;
       // Determine whether an alert is expected: if the instruction is valid.
       exp_alert = read_data("u_ibex_core.instr_valid_id");
 
-      // Schedule a simulation step so the DUT can react.
-      #1step;
+      // Wait LockstepOffset cycles before reading the error.
+      clk_vif.wait_n_clks(lockstep_delay);
 
       // Check if the major alert matches our expectation.
       alert_major_internal = read_data("alert_major_internal_o");
@@ -197,6 +206,223 @@ class core_ibex_rf_intg_test extends core_ibex_base_test;
     $finish();
   endtask
 
+endclass
+
+class core_ibex_rf_addr_intg_test extends core_ibex_base_test;
+  `uvm_component_utils(core_ibex_rf_addr_intg_test)
+  `uvm_component_new
+
+  uvm_report_server rs;
+
+  virtual task send_stimulus();
+    int          rnd_delay;
+    int unsigned bit_idx;
+    logic [31:0] orig_val, glitch_val;
+    logic [1:0]  ecc_err;
+    string       glitch_path, ecc_alert_path, lockstep_delay_path;
+    string       trgt_core_path[];
+    string       ctrl_signals[];
+    string       err_signals[];
+    int unsigned ctrl_signal_idx;
+    int unsigned trgt_core_idx;
+    string       top_path = "core_ibex_tb_top.dut.u_ibex_top";
+    // Main core signals.
+    string       ibex_rf_path = {top_path, ".gen_regfile_ff.register_file_i"};
+    // Shadow core signals.
+    string       lockstep_path = {top_path, ".gen_lockstep.u_ibex_lockstep"};
+    string       shdw_ecc_path =  {lockstep_path, ".u_shadow_core.gen_regfile_ecc"};
+    string       shdw_rf_path = {lockstep_path, ".gen_shadow_regfile_ff.register_file_shadow_i"};
+    // The lockstep delay.
+    int unsigned lockstep_delay;
+
+    trgt_core_path = {
+      ibex_rf_path,
+      shdw_rf_path
+    };
+
+    ctrl_signals = {
+      "raddr_a_i",
+      "raddr_b_i"
+    };
+
+    err_signals = {
+      "rf_ecc_err_a",
+      "rf_ecc_err_b"
+    };
+
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(trgt_core_idx, trgt_core_idx < trgt_core_path.size();)
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(ctrl_signal_idx, ctrl_signal_idx < ctrl_signals.size();)
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(rnd_delay, rnd_delay > 1000; rnd_delay < 10_000;)
+
+    glitch_path = $sformatf("%s.%s", trgt_core_path[trgt_core_idx], ctrl_signals[ctrl_signal_idx]);
+
+    // Read the lockstep delay.
+    lockstep_delay_path = $sformatf("%s.%s", lockstep_path, "LockstepOffset");
+    `DV_CHECK_FATAL(uvm_hdl_read(lockstep_delay_path, lockstep_delay));
+
+    vseq.start(env.vseqr);
+    clk_vif.wait_n_clks(rnd_delay);
+
+    `uvm_info(`gfn, $sformatf("Reading value of %s", glitch_path), UVM_LOW)
+    `DV_CHECK_FATAL(uvm_hdl_read(glitch_path, orig_val));
+    `uvm_info(`gfn, $sformatf("Read %x", orig_val), UVM_LOW)
+
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(bit_idx, bit_idx < 5;)
+
+    glitch_val = orig_val;
+    glitch_val[bit_idx] = ~glitch_val[bit_idx];
+
+    // Disable TB assertion for alerts.
+    `DV_ASSERT_CTRL_REQ("tb_no_alerts_triggered", 1'b0)
+
+    `uvm_info(`gfn, $sformatf("Forcing %s to value 'h%0x", glitch_path, glitch_val), UVM_LOW)
+    `DV_CHECK_FATAL(uvm_hdl_force(glitch_path, glitch_val));
+
+    // Determine how long it takes until the error gets noticed.
+    if (trgt_core_idx == 0) begin
+      // When we are faulting the main core RF, it takes lockstep_delay until we detect the fault.
+      // This is because the shadow core ECC checker is responsible for detecting the fault.
+      clk_vif.wait_n_clks(lockstep_delay);
+    end else begin
+      // When we are faulting the shadow core RF, the fault is immediately detected.
+      #1step;
+    end
+
+    // Check that the alert matches our expectation.
+    ecc_alert_path = $sformatf("%s.%s", shdw_ecc_path, err_signals[ctrl_signal_idx]);
+    `DV_CHECK_FATAL(uvm_hdl_read(ecc_alert_path, ecc_err))
+    `DV_CHECK_FATAL(|ecc_err, "ECC alert did not fire!")
+
+    // Release glitch.
+    `DV_CHECK_FATAL(uvm_hdl_release(glitch_path))
+    `uvm_info(`gfn, $sformatf("Releasing force of %s", glitch_path), UVM_LOW)
+
+    // Re-enable TB assertion for alerts.
+    `DV_ASSERT_CTRL_REQ("tb_no_alerts_triggered", 1'b1)
+
+    // Complete the test at this point because cosimulation does not model faults so will cause
+    // a mis-match and a test failure.
+    rs = uvm_report_server::get_server();
+    rs.report_summarize();
+    $finish();
+  endtask
+endclass
+
+class core_ibex_ram_intg_test extends core_ibex_base_test;
+  `uvm_component_utils(core_ibex_ram_intg_test)
+  `uvm_component_new
+
+  uvm_report_server rs;
+
+  virtual task send_stimulus();
+    int          rnd_delay;
+    int unsigned bit_idx;
+    logic [31:0] orig_val, glitch_val;
+    logic        alert_major_internal;
+    string       glitch_path, alert_major_internal_path;
+    string       glitch_paths[];
+    string       signals[];
+    string       scr_signals[];
+    int unsigned scr_signals_idx;
+    string       adv_signals[];
+    int unsigned adv_signals_idx;
+    string       ram_path;
+    int unsigned bank_idx, ram_idx, glitch_idx;
+    string       top_path = "core_ibex_tb_top.dut.u_ibex_top";
+    string       bank_paths[];
+
+    // Hard coded paths for the data and tag bank.
+    bank_paths = {
+      "gen_rams.gen_rams_inner[0].gen_scramble_rams.tag_bank",
+      "gen_rams.gen_rams_inner[1].gen_scramble_rams.tag_bank",
+      "gen_rams.gen_rams_inner[0].gen_scramble_rams.data_bank",
+      "gen_rams.gen_rams_inner[1].gen_scramble_rams.data_bank"
+    };
+
+    // All banks contain a single prim_ram_1p_adv instance.
+    ram_path = "u_prim_ram_1p_adv";
+
+    scr_signals = {
+      "write_en_d",
+      "write_en_q",
+      "addr_collision_d",
+      "addr_collision_q",
+      "write_scr_pending_d",
+      "write_pending_q",
+      "rvalid_q",
+      "read_en_buf"
+    };
+
+    adv_signals = {
+      "req_q",
+      "req_d",
+      "write_q",
+      "write_d",
+      "rvalid_q",
+      "rvalid_d",
+      "rvalid_sram_q",
+      "rvalid_sram_d"
+    };
+
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(scr_signals_idx, scr_signals_idx < scr_signals.size();)
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(adv_signals_idx, adv_signals_idx < adv_signals.size();)
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(bank_idx, bank_idx < bank_paths.size();)
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(rnd_delay, rnd_delay > 1000; rnd_delay < 10_000;)
+
+    signals = {
+      scr_signals[scr_signals_idx],
+      adv_signals[adv_signals_idx]
+    };
+
+    // Assemble paths and do the final muxing of the target glitch path below.
+    glitch_paths = {
+      $sformatf("%s.%s.%s", top_path, bank_paths[bank_idx], signals[0]),
+      $sformatf("%s.%s.%s.%s", top_path, bank_paths[bank_idx], ram_path, signals[1])
+    };
+
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(glitch_idx, glitch_idx < glitch_paths.size();)
+
+    glitch_path = glitch_paths[glitch_idx];
+
+    vseq.start(env.vseqr);
+    clk_vif.wait_n_clks(rnd_delay);
+
+    `uvm_info(`gfn, $sformatf("Reading value of %s", glitch_path), UVM_LOW)
+    `DV_CHECK_FATAL(uvm_hdl_read(glitch_path, orig_val));
+    `uvm_info(`gfn, $sformatf("Read %x", orig_val), UVM_LOW)
+
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(bit_idx, bit_idx < 4;)
+
+    glitch_val = orig_val;
+    glitch_val ^= 1 << bit_idx;
+
+    // Disable TB assertion for alerts.
+    `DV_ASSERT_CTRL_REQ("tb_no_alerts_triggered", 1'b0)
+
+    `uvm_info(`gfn, $sformatf("Forcing %s to value 'h%0x", glitch_path, glitch_val), UVM_LOW)
+    `DV_CHECK_FATAL(uvm_hdl_force(glitch_path, glitch_val));
+
+    // Leave glitch applied for one clock cycle.
+    clk_vif.wait_n_clks(1);
+
+    // Check that the alert matches our expectation.
+    alert_major_internal_path = $sformatf("%s.alert_major_internal_o", top_path);
+    `DV_CHECK_FATAL(uvm_hdl_read(alert_major_internal_path, alert_major_internal))
+    `DV_CHECK_FATAL(alert_major_internal, "Major alert did not fire!")
+
+    // Release glitch.
+    `DV_CHECK_FATAL(uvm_hdl_release(glitch_path))
+    `uvm_info(`gfn, $sformatf("Releasing force of %s", glitch_path), UVM_LOW)
+
+    // Re-enable TB assertion for alerts.
+    `DV_ASSERT_CTRL_REQ("tb_no_alerts_triggered", 1'b1)
+
+    // Complete the test at this point because cosimulation does not model faults so will cause
+    // a mis-match and a test failure.
+    rs = uvm_report_server::get_server();
+    rs.report_summarize();
+    $finish();
+  endtask
 endclass
 
 // Test that corrupts the instruction cache and checks that an appropriate alert occurs.
@@ -560,17 +786,17 @@ class core_ibex_debug_intr_basic_test extends core_ibex_base_test;
   `uvm_component_utils(core_ibex_debug_intr_basic_test)
   `uvm_component_new
 
-  bit [ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0] core_init_mstatus;
-  bit [ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0] core_init_mie;
+  bit [ibex_mem_intf_pkg::DATA_WIDTH-1:0] core_init_mstatus;
+  bit [ibex_mem_intf_pkg::DATA_WIDTH-1:0] core_init_mie;
   priv_lvl_e                                    init_operating_mode;
   priv_lvl_e                                    operating_mode;
   bit [$clog2(irq_agent_pkg::DATA_WIDTH)-1:0]   irq_id;
   irq_seq_item                                  irq_txn;
   bit [irq_agent_pkg::DATA_WIDTH-1:0]           irq;
-  bit [ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0] mstatus;
-  bit [ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0] mcause;
-  bit [ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0] mip;
-  bit [ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0] mie;
+  bit [ibex_mem_intf_pkg::DATA_WIDTH-1:0] mstatus;
+  bit [ibex_mem_intf_pkg::DATA_WIDTH-1:0] mcause;
+  bit [ibex_mem_intf_pkg::DATA_WIDTH-1:0] mip;
+  bit [ibex_mem_intf_pkg::DATA_WIDTH-1:0] mie;
   bit                                           in_nested_trap;
 
   virtual task send_stimulus();
@@ -771,14 +997,14 @@ class core_ibex_debug_intr_basic_test extends core_ibex_base_test;
     return have_irq;
   endfunction
 
-  virtual task check_mcause(bit irq_or_exc, bit[ibex_mem_intf_agent_pkg::DATA_WIDTH-2:0] cause);
-    bit[ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0] mcause;
+  virtual task check_mcause(bit irq_or_exc, bit[ibex_mem_intf_pkg::DATA_WIDTH-2:0] cause);
+    bit[ibex_mem_intf_pkg::DATA_WIDTH-1:0] mcause;
     wait_for_csr_write(CSR_MCAUSE, 10000);
     mcause = signature_data;
     `uvm_info(`gfn, $sformatf("mcause: 0x%0x", mcause), UVM_LOW)
-    `DV_CHECK_EQ_FATAL(mcause[ibex_mem_intf_agent_pkg::DATA_WIDTH-1], irq_or_exc,
+    `DV_CHECK_EQ_FATAL(mcause[ibex_mem_intf_pkg::DATA_WIDTH-1], irq_or_exc,
                         $sformatf("mcause.interrupt is not set to 0x%0x", irq_or_exc))
-    `DV_CHECK_EQ_FATAL(mcause[ibex_mem_intf_agent_pkg::DATA_WIDTH-2:0], cause,
+    `DV_CHECK_EQ_FATAL(mcause[ibex_mem_intf_pkg::DATA_WIDTH-2:0], cause,
                        "mcause.exception_code is encoding the wrong exception type")
   endtask
 
@@ -923,14 +1149,16 @@ class core_ibex_directed_test extends core_ibex_debug_intr_basic_test;
 
   // Illegal instruction checker
   virtual task check_illegal_insn(string exception_msg);
-    check_next_core_status(HANDLING_EXCEPTION, "Core did not jump to vectored exception handler", 10000);
-    check_next_core_status(ILLEGAL_INSTR_EXCEPTION, exception_msg, 10000);
-    check_mcause(1'b0, ExcCauseIllegalInsn);
-    // Ibex will wait to change the privilege mode until it is allowed to FLUSH. This happens because
-    // we are blocking the current instruction until the instruction from WB stage is ready.
+    // Ibex will wait to change the privilege mode until it is allowed to FLUSH. This happens
+    // because it is blocking the current instruction until the instruction from WB stage is ready.
     wait (dut_vif.dut_cb.ctrl_fsm_cs == FLUSH);
     clk_vif.wait_clks(2);
     check_priv_mode(PRIV_LVL_M);
+    check_next_core_status(HANDLING_EXCEPTION,
+                           "Core did not jump to vectored exception handler",
+                           10000);
+    check_next_core_status(ILLEGAL_INSTR_EXCEPTION, exception_msg, 10000);
+    check_mcause(1'b0, ExcCauseIllegalInsn);
     wait_ret("mret", 15000);
   endtask
 
@@ -966,7 +1194,7 @@ class core_ibex_directed_test extends core_ibex_debug_intr_basic_test;
   // currently in the ID stage against the global seen_instr[$] queue.
   // If we've seen the same type of instruction before, return 0, otherwise add it to the
   // seen_instr[$] queue and return 1.
-  virtual function bit decode_instr(bit [ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0] instr);
+  virtual function bit decode_instr(bit [ibex_mem_intf_pkg::DATA_WIDTH-1:0] instr);
     ibex_pkg::opcode_e                            opcode;
     bit [2:0]                                     funct3;
     bit [6:0]                                     funct7;
@@ -1475,8 +1703,8 @@ class core_ibex_debug_ebreak_test extends core_ibex_directed_test;
   `uvm_component_utils(core_ibex_debug_ebreak_test)
   `uvm_component_new
 
-  bit[ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0] dpc;
-  bit[ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0] dcsr;
+  bit[ibex_mem_intf_pkg::DATA_WIDTH-1:0] dpc;
+  bit[ibex_mem_intf_pkg::DATA_WIDTH-1:0] dcsr;
 
   virtual task check_stimulus();
     forever begin
@@ -1665,7 +1893,7 @@ class core_ibex_mem_error_test extends core_ibex_directed_test;
     //
     // We don't terminate immediately as sometimes the test hits an illegal instruction exception
     // but finds its way back to generated code and terminates as usual. Sometimes it doesn't. The
-    // treshold allows for normal test termination in cases where that's possible.
+    // threshold allows for normal test termination in cases where that's possible.
     if (!cfg.enable_mem_intg_err) begin
       return;
     end
@@ -1690,7 +1918,7 @@ class core_ibex_umode_tw_test extends core_ibex_directed_test;
   `uvm_component_new
 
   virtual task check_stimulus();
-    bit [ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0] mcause;
+    bit [ibex_mem_intf_pkg::DATA_WIDTH-1:0] mcause;
     forever begin
       wait (dut_vif.dut_cb.wfi === 1'b1);
       check_illegal_insn("Core did not treat U-mode WFI as illegal");
@@ -1795,5 +2023,74 @@ class core_ibex_assorted_traps_interrupts_debug_test extends core_ibex_directed_
        end
      join_any
    endtask
+
+endclass
+
+class core_ibex_mcounteren_lock_test extends core_ibex_base_test;
+  `uvm_component_utils(core_ibex_mcounteren_lock_test)
+  `uvm_component_new
+
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    // Relaxes co-simulation tracking so mismatches during lock don't abort
+    cosim_cfg.relax_cosim_check = 1'b1;
+  endfunction
+
+  virtual task send_stimulus();
+    // Fork the binary execution in the background
+    fork
+      vseq.start(env.vseqr);
+    join_none
+
+    // Wait for a write to MCYCLE to indicate locking the mcounteren CSRs
+    wait_for_live_csr_write(CSR_MCYCLE);
+    dut_vif.dut_cb.mcounteren_writable <= ibex_pkg::IbexMuBiOff;
+    `uvm_info(`gfn, "Write to MCYCLE: locking mcounteren!", UVM_LOW)
+
+    // Wait for a write to MCYCLEH to indicate unlocking the mcounteren CSRs
+    wait_for_live_csr_write(CSR_MCYCLEH);
+    dut_vif.dut_cb.mcounteren_writable <= ibex_pkg::IbexMuBiOn;
+    `uvm_info(`gfn, "Write to MCYCLEH: unlocking mcounteren!", UVM_LOW)
+  endtask
+
+  // Snoop the CSR interface to catch writes to the specified CSR addresses
+  task wait_for_live_csr_write(bit [11:0] addr);
+    forever begin
+      @(csr_vif.csr_cb);
+      if (csr_vif.csr_cb.csr_access === 1'b1 &&
+          csr_vif.csr_cb.csr_addr   === addr &&
+          csr_vif.csr_cb.csr_op     != CSR_OP_READ) begin
+        break;
+      end
+    end
+  endtask
+
+endclass
+
+// Sends debug requests (+enable_debug_seq=1) or interrupts (+enable_irq_single_seq=1) at random
+// times while a directed test runs, and drops each interrupt after a short time. The program's
+// handlers only return, and the program checks its own results.
+class core_ibex_directed_stress_test extends core_ibex_base_test;
+
+  `uvm_component_utils(core_ibex_directed_stress_test)
+  `uvm_component_new
+
+  virtual task send_stimulus();
+    fork
+      vseq.start(env.vseqr);
+      begin
+        clk_vif.wait_clks(stimulus_delay);
+        if (cfg.enable_debug_seq) vseq.start_debug_stress_seq();
+      end
+      begin
+        clk_vif.wait_clks(stimulus_delay);
+        while (cfg.enable_irq_single_seq && !test_done) begin
+          vseq.start_irq_raise_single_seq(.no_nmi(1'b1));
+          clk_vif.wait_clks($urandom_range(5, 50));
+          vseq.start_irq_drop_seq();
+        end
+      end
+    join_none
+  endtask
 
 endclass

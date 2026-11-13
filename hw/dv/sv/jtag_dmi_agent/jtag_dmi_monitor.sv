@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 // Unlike the name suggests, this monitor does not actually monitor the DMI interface
 // directly, but indirectly by snooping the reads and writes to the DTM DMI register.
 // TODO: In future, it may be better to rename this to jtag_dmi_csr_monitor.
-class jtag_dmi_monitor #(type ITEM_T = jtag_dmi_item) extends dv_base_monitor#(
+class jtag_dmi_monitor #(type ITEM_T = jtag_dmi_item) extends dv_reactive_monitor #(
     .ITEM_T (ITEM_T),
     .CFG_T  (jtag_agent_cfg));
   `uvm_component_param_utils(jtag_dmi_monitor #(ITEM_T))
@@ -21,12 +21,27 @@ class jtag_dmi_monitor #(type ITEM_T = jtag_dmi_item) extends dv_base_monitor#(
   // Outgoing filtered JTAG DTM transactions that do not touch the DMI register.
   uvm_analysis_port #(jtag_item) non_dmi_jtag_dtm_analysis_port;
 
-  `uvm_component_new
+  // Does the JTAG FSM currently have an instruction register equal to the DMI address?
+  bit dmi_selected = 1'b0;
+
+  // A uvm_reg representing a DMI register. This isn't really being monitored in the design (so
+  // doesn't have to be related to any model), but makes it convenient to access register field
+  // values from monitored traffic.
+  local jtag_dtm_reg_dmi m_dmi_reg;
+
+  // The IR of the DMI register that is being monitored. Set this with set_dmi_address().
+  local uvm_reg_addr_t   m_dmi_address = '1;
+
+  function new (string name, uvm_component parent);
+    super.new(name, parent);
+    m_dmi_reg = jtag_dtm_reg_dmi::type_id::create("m_dmi_reg");
+  endfunction
 
   function void build_phase(uvm_phase phase);
     super.build_phase(phase);
     jtag_item_fifo = new("jtag_item_fifo", this);
     non_dmi_jtag_dtm_analysis_port = new("non_dmi_jtag_dtm_analysis_port", this);
+    m_dmi_reg.build();
   endfunction
 
   task run_phase(uvm_phase phase);
@@ -36,54 +51,66 @@ class jtag_dmi_monitor #(type ITEM_T = jtag_dmi_item) extends dv_base_monitor#(
     join
   endtask
 
-  virtual protected task collect_trans(uvm_phase phase);
+  // Set the address of the DMI register that is being monitored.
+  function void set_dmi_address(uvm_reg_addr_t addr);
+    if (&addr) `uvm_fatal(get_full_name(), "The DMI address can't possibly be '1.")
+    m_dmi_address = addr;
+  endfunction
+
+  virtual protected task collect_trans();
     jtag_item jtag_item;
-    bit dmi_selected;
+
+    if (&m_dmi_address) begin
+      `uvm_fatal(get_full_name(), "Cannot collect transactions as we don't know the DMI address.")
+    end
 
     forever begin
-      bit busy;
+      bit is_ir_update, is_dr_update;
+
       jtag_item_fifo.get(jtag_item);
-      // jtag_item can either be an IR update or a DR update. Check packet for validity.
-      if ((jtag_item.ir_len > 0) ~^ (jtag_item.dr_len > 0)) begin
+
+      is_ir_update = jtag_item.ir_len > 0;
+      is_dr_update = jtag_item.dr_len > 0;
+
+      // A JTAG item can either be an IR update or a DR update. Check packet for validity.
+      if (is_ir_update ~^ is_dr_update) begin
         `uvm_error(`gfn, $sformatf("Bad packet: %0s. ir_len & dr_len are both zero, or non-zero.",
                                    jtag_item.sprint(uvm_default_line_printer)))
         continue;
       end
-      if (jtag_item.ir_len) begin
-        dmi_selected = is_dmi_selected(jtag_item);
-        if (!dmi_selected) non_dmi_jtag_dtm_analysis_port.write(jtag_item);
-        continue;
+
+      // If this is an IR update, update our dmi_selected flag to reflect the new IR.
+      if (is_ir_update) begin
+        dmi_selected = (jtag_item.ir == m_dmi_address);
       end
+
+      // If we're not currently operating on the DMI register, pass the item to our non-DMI analysis
+      // port.
       if (!dmi_selected) begin
         non_dmi_jtag_dtm_analysis_port.write(jtag_item);
         continue;
       end
 
-      // Item has both, the new DMI request, as well as the response for the previous request.
-      // Capture the response first, then the request.
-      busy = capture_response(jtag_item);
+      // At this point, we know we're operating on the DMI register. Handle any DR update.
+      if (is_dr_update) begin
 
-      // A new DMI request is accepted only if the previous DMI transaction completed.
-      if (!busy) capture_request(jtag_item);
+        // Item has both the response for the previous request and a new DMI request. Capture the
+        // response first.
+        bit busy = capture_response(jtag_item);
+
+        // If the TAP was not busy, any previous DMI transaction has completed so the TAP will also
+        // have seen the request.
+        if (!busy) capture_request(jtag_item);
+      end
     end
   endtask
-
-  // Checks if the DMI IR is chosen.
-  virtual function bit is_dmi_selected(jtag_item item);
-    // A non-zero IR length indicates an IR update transacrtion.
-    if (!item.ir_len) return 0;
-    // If IR value matches DTM DMI address, return 1, else 0.
-    if (item.ir == cfg.jtag_dtm_ral.dmi.get_address()) return 1;
-    return 0;
-  endfunction
 
   // Capture a new DMI request, if the previous DMI transaction is not in progress.
   //
   // Returns true if the response was captured, or if there was no previous request, false if the
   // response returned was busy.
   virtual function bit capture_response(jtag_item jtag_item);
-    jtag_dmi_op_rsp_e rsp_op = jtag_dmi_op_rsp_e'(
-        get_field_val(cfg.jtag_dtm_ral.dmi.op, jtag_item.dout));
+    jtag_dmi_op_rsp_e rsp_op = jtag_dmi_op_rsp_e'(get_field_val(m_dmi_reg.op, jtag_item.dout));
 
     if (dmi_req_q.size() != 0) begin
       if (rsp_op == DmiOpInProgress) begin
@@ -92,8 +119,7 @@ class jtag_dmi_monitor #(type ITEM_T = jtag_dmi_item) extends dv_base_monitor#(
         ITEM_T dmi_item = dmi_req_q.pop_front();
         dmi_item.rsp_op = rsp_op;
         if (dmi_item.req_op == DmiOpRead) begin
-          uvm_reg_data_t data = get_field_val(cfg.jtag_dtm_ral.dmi.data,
-                                              jtag_item.dout);
+          uvm_reg_data_t data = get_field_val(m_dmi_reg.data, jtag_item.dout);
           dmi_item.rdata = data;
         end
         `uvm_info(`gfn, $sformatf("Writing DMI item to analysis_port: %0s",
@@ -110,16 +136,14 @@ class jtag_dmi_monitor #(type ITEM_T = jtag_dmi_item) extends dv_base_monitor#(
 
   // Capture a new DMI request.
   virtual function void capture_request(jtag_item jtag_item);
-    jtag_dmi_op_req_e req_op = jtag_dmi_op_req_e'(
-        get_field_val(cfg.jtag_dtm_ral.dmi.op, jtag_item.dr));
+    jtag_dmi_op_req_e req_op = jtag_dmi_op_req_e'(get_field_val(m_dmi_reg.op, jtag_item.dr));
 
     if (req_op inside {DmiOpRead, DmiOpWrite}) begin
       ITEM_T dmi_item = ITEM_T::type_id::create("dmi_item");
       dmi_item.req_op = req_op;
-      dmi_item.addr = uvm_reg_addr_t'(
-          get_field_val(cfg.jtag_dtm_ral.dmi.address, jtag_item.dr));
+      dmi_item.addr = uvm_reg_addr_t'(get_field_val(m_dmi_reg.address, jtag_item.dr));
       if (req_op == DmiOpWrite) begin
-        dmi_item.wdata = get_field_val(cfg.jtag_dtm_ral.dmi.data, jtag_item.dr);
+        dmi_item.wdata = get_field_val(m_dmi_reg.data, jtag_item.dr);
       end
       `uvm_info(`gfn, $sformatf("Writing DMI req to req_analysis_port: %0s",
                                 dmi_item.sprint(uvm_default_line_printer)), UVM_HIGH)
@@ -143,7 +167,10 @@ class jtag_dmi_monitor #(type ITEM_T = jtag_dmi_item) extends dv_base_monitor#(
 
   virtual protected task monitor_reset();
     forever @cfg.in_reset begin
-      if (cfg.in_reset) dmi_req_q.delete();
+      if (cfg.in_reset) begin
+        dmi_req_q.delete();
+        dmi_selected = 1'b0;
+      end
     end
   endtask
 

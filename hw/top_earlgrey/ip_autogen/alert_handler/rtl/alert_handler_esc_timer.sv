@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -6,7 +6,7 @@
 // phases. There are two mechanisms that can trigger the escalation protocol:
 //
 // 1) via accum_trigger_i, which will be asserted once the accumulator value
-//    exceeds a programmable amount of alert occurences.
+//    exceeds a programmable amount of alert occurrences.
 //
 // 2) via an interrupt timeout, if this is enabled. If this functionality is
 //    enabled, the internal escalation counter is reused to check whether the
@@ -18,7 +18,7 @@
 
 `include "prim_assert.sv"
 
-module alert_handler_esc_timer import alert_pkg::*; (
+module alert_handler_esc_timer import alert_handler_pkg::*; (
   input                        clk_i,
   input                        rst_ni,
   input                        en_i,              // enables timeout/escalation
@@ -57,7 +57,12 @@ module alert_handler_esc_timer import alert_pkg::*; (
     .Width(EscCntDw),
     // The alert handler behaves differently than other comportable IP. I.e., instead of sending out
     // an alert signal, this condition is handled internally in the alert handler.
-    .EnableAlertTriggerSVA(0)
+    .EnableAlertTriggerSVA(0),
+    // Pass a parameter to disable coverage for some assertions that are unreachable because
+    // decr_en_i is tied to zero.
+    .PossibleActions(prim_count_pkg::Clr |
+                     prim_count_pkg::Set |
+                     prim_count_pkg::Incr)
   ) u_prim_count (
     .clk_i,
     .rst_ni,
@@ -67,8 +72,9 @@ module alert_handler_esc_timer import alert_pkg::*; (
     .incr_en_i(cnt_en),
     .decr_en_i(1'b0),
     .step_i(EscCntDw'(1)),
+    .commit_i(1'b1),
     .cnt_o(esc_cnt_o),
-    .cnt_next_o(),
+    .cnt_after_commit_o(),
     .err_o(cnt_error)
   );
 
@@ -407,5 +413,20 @@ module alert_handler_esc_timer import alert_pkg::*; (
       state_q == FsmErrorSt
       |->
       esc_sig_req_o == '1)
+
+`ifdef INC_ASSERT
+  // Check that our internal FSM matches the state index that we're exposing with esc_state_o. The
+  // StateEncodings parameter does the mapping to match. (Practically speaking, this is just adding
+  // "St" to each name so e.g. Idle gets mapped to IdleSt).
+  parameter logic [StateWidth-1:0] StateEncodings [8] = '{IdleSt,
+                                                          TimeoutSt,
+                                                          FsmErrorSt,
+                                                          TerminalSt,
+                                                          Phase0St,
+                                                          Phase1St,
+                                                          Phase2St,
+                                                          Phase3St};
+  `ASSERT(EscStateOut_A, state_q == StateEncodings[esc_state_o])
+`endif
 
 endmodule : alert_handler_esc_timer

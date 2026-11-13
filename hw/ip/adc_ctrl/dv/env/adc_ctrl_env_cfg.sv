@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,18 +24,20 @@ class adc_ctrl_env_cfg extends cip_base_env_cfg #(
   bit lp_mode;
 
   // Interrupt control bits
-  bit [ADC_CTRL_NUM_FILTERS:0] adc_intr_ctl = 0;
+  bit [ADC_CTRL_NUM_FILTERS+1:0] adc_intr_ctl = 0;
 
   // Wakeup control bits
-  bit [ADC_CTRL_NUM_FILTERS-1:0] adc_wakeup_ctl = 0;
+  bit [ADC_CTRL_NUM_FILTERS:0] adc_wakeup_ctl = 0;
 
+  // For longtest, adjust large time value to avoid test timeout
+  bit                           fast_mode = 0;
 
   // Power up / wake up time
   rand int pwrup_time;
   rand int wakeup_time;
 
-  // Filter values filter_cfg[channel][filter]
-  rand adc_ctrl_filter_cfg_t filter_cfg[][];
+  // Filter values
+  rand adc_ctrl_filter_cfg filter_cfg[ADC_CTRL_CHANNELS][ADC_CTRL_NUM_FILTERS];
 
   // Debouncing sample counts for normal and low power modes
   rand int np_sample_cnt;
@@ -50,11 +52,16 @@ class adc_ctrl_env_cfg extends cip_base_env_cfg #(
     `uvm_field_int(lp_sample_cnt, UVM_DEFAULT)
   `uvm_object_utils_end
 
-  `uvm_object_new
+  function new(string name="");
+    super.new(name);
+    foreach (filter_cfg[channel, filter]) begin
+      filter_cfg[channel][filter] = new;
+    end
+  endfunction
 
-  virtual function void initialize(bit [31:0] csr_base_addr = '1);
+  virtual function void initialize(bit inherit_ral_models = 1'b0);
     list_of_alerts = adc_ctrl_env_pkg::LIST_OF_ALERTS;
-    super.initialize(csr_base_addr);
+    super.initialize(inherit_ral_models);
     // Create ADC push pull agent configs
     for (int idx = 0; idx < ADC_CTRL_CHANNELS; idx++) begin
       string name = $sformatf("m_adc_push_pull_cfg_%0d", idx);
@@ -75,28 +82,12 @@ class adc_ctrl_env_cfg extends cip_base_env_cfg #(
     end
 
     // set num_interrupts & num_alerts
-    begin
-      uvm_reg rg = ral.get_reg_by_name("intr_state");
-      if (rg != null) begin
-        num_interrupts = ral.intr_state.get_n_used_bits();
-      end
-    end
+    num_interrupts = ral.intr_state.get_n_used_bits();
 
     // only support 1 outstanding TL item
     m_tl_agent_cfg.max_outstanding_req = 1;
 
   endfunction
-
-  // Constraints
-  // Set the size of the filter_cfg array
-  constraint filter_cfg_size_c {
-    // Size of first dimension
-    filter_cfg.size == ADC_CTRL_CHANNELS;
-
-    // Size of second dimension
-    foreach (filter_cfg[channel]) {filter_cfg[channel].size == ADC_CTRL_NUM_FILTERS;}
-
-  }
 
   // Valid values
   constraint valid_c {
@@ -119,10 +110,11 @@ class adc_ctrl_env_cfg extends cip_base_env_cfg #(
 
     // Default filter configuration
     // This is the one assumed for normal use
-    foreach (filter_cfg[channel]) {
-      foreach (filter_cfg[channel][filter]) {
-        soft filter_cfg[channel][filter] == FILTER_CFG_DEFAULTS[filter];
-      }
+    foreach (filter_cfg[channel, filter]) {
+      soft filter_cfg[channel][filter].min_v == FILTER_CFG_DEFAULTS[filter].min_v;
+      soft filter_cfg[channel][filter].max_v == FILTER_CFG_DEFAULTS[filter].max_v;
+      soft filter_cfg[channel][filter].match_outside == FILTER_CFG_DEFAULTS[filter].match_outside;
+      soft filter_cfg[channel][filter].enabled == FILTER_CFG_DEFAULTS[filter].enabled;
     }
   }
 
@@ -139,19 +131,16 @@ class adc_ctrl_env_cfg extends cip_base_env_cfg #(
   // do_print, do_copy etc for types unsupported by the macros
 
   virtual function void do_print(uvm_printer printer);
-    // These shoud come first
+    // These should come first
     super.do_print(printer);
 
     // Implement filter_cfg - 2d array of structs
-    printer.print_array_header("filter_cfg", filter_cfg.size);
-    for (int channel = $low(filter_cfg); channel <= $high(filter_cfg); channel++) begin
-      printer.print_array_header($sformatf("filter_cfg[%0d]", channel), filter_cfg[channel].size());
-      for (
-          int filter = $low(filter_cfg[channel]); filter <= $high(filter_cfg[channel]); filter++
-      ) begin
-        printer.print_generic($sformatf("filter_cfg[%0d][%0d]", channel, filter),
-                              "adc_ctrl_filter_cfg_t", $bits(filter_cfg[channel][filter]),
-                              $sformatf("%p", filter_cfg[channel][filter]));
+    printer.print_array_header("filter_cfg", ADC_CTRL_CHANNELS);
+    for (int channel = 0; channel < ADC_CTRL_CHANNELS; channel++) begin
+      printer.print_array_header($sformatf("filter_cfg[%0d]", channel), ADC_CTRL_NUM_FILTERS);
+      for (int filter = 0; filter < ADC_CTRL_NUM_FILTERS; filter++) begin
+        printer.print_object($sformatf("filter_cfg[%0d][%0d]", channel, filter),
+                             filter_cfg[channel][filter]);
       end
       printer.print_array_footer();
     end

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -137,12 +137,20 @@ class kmac_base_vseq extends cip_base_vseq #(
     (!kmac_en) -> (xof_en == 1'b0);
   }
 
-  // KMAC HWIP only uses CSHAKE mode for KMAC hashing
+  // The keyed MAC is only available if the full KMAC is enabled.
+  constraint kmac_en_c {
+    kmac_en -> cfg.enable_full_kmac;
+  }
+
+  // KMAC HWIP only uses CSHAKE mode for KMAC hashing. Without the keyed MAC, cSHAKE is just
+  // another hash mode and can be selected freely.
   constraint hash_mode_c {
-    if (kmac_en) {
-      hash_mode == sha3_pkg::CShake;
-    } else {
-      hash_mode != sha3_pkg::CShake;
+    if (cfg.enable_full_kmac) {
+      if (kmac_en) {
+        hash_mode == sha3_pkg::CShake;
+      } else {
+        hash_mode != sha3_pkg::CShake;
+      }
     }
   }
 
@@ -284,11 +292,6 @@ class kmac_base_vseq extends cip_base_vseq #(
     if (do_kmac_init) kmac_init();
   endtask
 
-  virtual task dut_shutdown();
-    // check for pending kmac operations and wait for them to complete
-    // TODO
-  endtask
-
   virtual task pre_start();
     super.pre_start();
     `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(static_entropy_mode,
@@ -339,7 +342,6 @@ class kmac_base_vseq extends cip_base_vseq #(
     ral.cfg_shadowed.entropy_fast_process.set(entropy_fast_process);
     ral.cfg_shadowed.entropy_ready.set(entropy_ready);
     ral.cfg_shadowed.msg_mask.set(msg_mask);
-    ral.cfg_shadowed.err_processed.set(1'b0);
     ral.cfg_shadowed.en_unsupported_modestrength.set(en_unsupported_modestrength);
     ral.cfg_shadowed.sideload.set(reg_en_sideload);
 
@@ -401,9 +403,9 @@ class kmac_base_vseq extends cip_base_vseq #(
       cfg.clk_rst_vif.wait_clks($urandom_range(10, 50));
       // After entropy related errors, cannot set `err_processed` and `entropy_ready` together.
       // Otherwise design will ignore the `entropy_ready` field.
-      csr_wr(.ptr(ral.cfg_shadowed.err_processed), .value(1));
+      csr_wr(.ptr(ral.cmd.err_processed), .value(1));
     end else if (kmac_err_type == kmac_pkg::ErrKeyNotValid) begin
-      csr_wr(.ptr(ral.cfg_shadowed.err_processed), .value(1));
+      csr_wr(.ptr(ral.cmd.err_processed), .value(1));
     end
     `uvm_info(`gfn, "Finished checking error", UVM_HIGH)
   endtask
@@ -520,9 +522,6 @@ class kmac_base_vseq extends cip_base_vseq #(
     // stream into chunks of 32-bits (size of the PREFIX csr)
     prefix_bytes = {encoded_fname, encoded_custom_str};
     for (int i = 0; i < (fname_len + custom_str_len) / 4 + 2 ; i++) begin
-      // TODO - Xcelium currently does not support `with` operator,
-      //        workaround needs to be used.
-      //prefix_arr[i] = {<< byte {prefix_bytes with [i*4 +: 4]}};
       bit [7:0] prefix_word_arr[] = new[4];
       for (int j = i*4; (j < i*4 + 4) && (j < prefix_bytes.size()); j++) begin
         prefix_word_arr[j % 4] = prefix_bytes[j];
@@ -576,18 +575,23 @@ class kmac_base_vseq extends cip_base_vseq #(
   endtask
 
   virtual task provide_sw_entropy();
-    for (int i = 0; i < kmac_reg_pkg::NumSeedsEntropyLfsr; i++) begin
-      csr_wr(.ptr(ral.entropy_seed[i]), .value($urandom()));
+    for (int i = 0; i < kmac_reg_pkg::NumSeedsEntropy; i++) begin
+      csr_wr(.ptr(ral.entropy_seed), .value($urandom()));
     end
   endtask
 
   // Call this task to initiate a KMAC_APP hashing operation
-  virtual task send_kmac_app_req(kmac_app_e mode);
-    kmac_app_host_seq kmac_app_seq;
-    `uvm_create_on(kmac_app_seq, p_sequencer.kmac_app_sequencer_h[mode]);
-    `DV_CHECK_RANDOMIZE_FATAL(kmac_app_seq)
-    kmac_app_seq.msg_size_bytes = msg.size();
-    `uvm_send(kmac_app_seq)
+  task send_kmac_app_req(kmac_app_e mode);
+    kmac_app_host_seq kmac_app_seq = kmac_app_host_seq::type_id::create("kmac_app_seq");
+
+    if (!kmac_app_seq.randomize()) begin
+      `uvm_fatal(get_full_name(), "Failed to randomize kmac_app_seq")
+    end
+
+    kmac_app_seq.msg_size_bytes           = msg.size();
+    kmac_app_seq.m_using_masked_interface = cfg.m_kmac_app_agent_cfg[mode].has_masking;
+
+    kmac_app_seq.start(p_sequencer.kmac_app_sequencer_h[mode]);
   endtask
 
   // This task writes a generic byte array into the msg_fifo
@@ -688,8 +692,6 @@ class kmac_base_vseq extends cip_base_vseq #(
       `uvm_info(`gfn, $sformatf("data_mask = 0x%0x", data_mask), UVM_HIGH)
 
       // Write to the msgfifo
-      //
-      // TODO: randomize non/blocking?
       tl_access(.addr(ral.get_addr_from_offset(fifo_addr)),
                 .write(1),
                 .data(data_word),
@@ -976,4 +978,8 @@ class kmac_base_vseq extends cip_base_vseq #(
     cfg.clk_rst_vif.wait_clks($urandom_range(100, 2000));
   endtask
 
+  // overriding timeout on outstanding accesses for the kmac_stress_test_all_with_rand_reset test
+  virtual function int wait_cycles_with_no_outstanding_accesses();
+    return 100_000;
+  endfunction
 endclass : kmac_base_vseq

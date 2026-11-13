@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,16 +7,20 @@ class kmac_lc_escalation_vseq extends kmac_app_vseq;
   `uvm_object_utils(kmac_lc_escalation_vseq)
   `uvm_object_new
 
-  virtual function void disable_asserts();
-    $assertoff(0,
-      "tb.dut.gen_entropy.u_prim_sync_reqack_data.u_prim_sync_reqack.SyncReqAckAckNeedsReq");
-    $assertoff(0, "tb.edn_if[0].ReqHighUntilAck_A");
-    $assertoff(0, "tb.edn_if[0].AckAssertedOnlyWhenReqAsserted_A");
+  function void control_asserts(bit enable);
+    if (cfg.disable_reqack_assertions_vif != null) cfg.disable_reqack_assertions_vif.drive(!enable);
+    if (enable) begin
+      $asserton(0, "tb.edn_if[0].ReqHighUntilAck_A");
+      $asserton(0, "tb.edn_if[0].AckAssertedOnlyWhenReqAsserted_A");
+    end else begin
+      $assertoff(0, "tb.edn_if[0].ReqHighUntilAck_A");
+      $assertoff(0, "tb.edn_if[0].AckAssertedOnlyWhenReqAsserted_A");
+    end
   endfunction
 
   virtual task pre_start();
     super.pre_start();
-    if (cfg.enable_masking) disable_asserts();
+    if (cfg.enable_masking) control_asserts(0);
   endtask
 
   virtual task body();
@@ -60,7 +64,7 @@ class kmac_lc_escalation_vseq extends kmac_app_vseq;
       // Check if kmac will accept any SW request.
       kmac_sw_lock_check();
 
-      // TODO: Add checking for kmac app request.
+      // Checking for kmac app request.
       kmac_app_lock_check();
     end
   endtask
@@ -68,13 +72,14 @@ class kmac_lc_escalation_vseq extends kmac_app_vseq;
   virtual task post_start();
     expect_fatal_alerts = 1;
     cfg.kmac_vif.drive_lc_escalate(lc_ctrl_pkg::Off);
+    if (cfg.enable_masking) control_asserts(1);
     super.post_start();
   endtask
 
   virtual task check_lc_escalate_status();
     csr_rd_check(.ptr(ral.status.alert_fatal_fault), .compare_value(1'b1));
     csr_rd_check(.ptr(ral.status.sha3_idle), .compare_value(1'b0));
-    // TODO(#10804): confirm with designer if we need an error code here.
+    // ICEBOX(#10804): confirm with designer if we need an error code here.
     // csr_rd_check(.ptr(ral.err_code), .compare_value(?));
   endtask
 

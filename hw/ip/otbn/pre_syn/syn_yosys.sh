@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -66,18 +66,20 @@ OT_DEP_SOURCES=(
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_sync_reqack.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_packer_fifo.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_lfsr.sv
-    "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_flop_2sync.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_cdc_rand_delay.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_reg_we_check.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_onehot_check.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_mubi4_sender.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_fifo_sync_cnt.sv
-    "$LR_SYNTH_SRC_DIR"/../prim_generic/rtl/prim_generic_flop.sv
-    "$LR_SYNTH_SRC_DIR"/../prim_xilinx/rtl/prim_xilinx_flop.sv
-    "$LR_SYNTH_SRC_DIR"/../prim_xilinx/rtl/prim_xilinx_flop_en.sv
-    "$LR_SYNTH_SRC_DIR"/../prim_xilinx/rtl/prim_xilinx_buf.sv
-    "$LR_SYNTH_SRC_DIR"/../prim_xilinx/rtl/prim_xilinx_xor2.sv
-    "$LR_SYNTH_SRC_DIR"/../prim_xilinx/rtl/prim_xilinx_and2.sv
+    "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_sec_anchor_buf.sv
+    "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_sec_anchor_flop.sv
+    "$LR_SYNTH_SRC_DIR"/../prim_generic/rtl/prim_flop_2sync.sv
+    "$LR_SYNTH_SRC_DIR"/../prim_xilinx/rtl/prim_flop.sv
+    "$LR_SYNTH_SRC_DIR"/../prim_xilinx/rtl/prim_flop_en.sv
+    "$LR_SYNTH_SRC_DIR"/../prim_xilinx/rtl/prim_and2.sv
+    "$LR_SYNTH_SRC_DIR"/../prim_xilinx/rtl/prim_buf.sv
+    "$LR_SYNTH_SRC_DIR"/../prim_xilinx/rtl/prim_xor2.sv
+    "$LR_SYNTH_SRC_DIR"/../prim_xilinx/rtl/prim_xnor2.sv
     "$LR_SYNTH_SRC_DIR"/../tlul/rtl/tlul_adapter_sram.sv
     "$LR_SYNTH_SRC_DIR"/../tlul/rtl/tlul_sram_byte.sv
     "$LR_SYNTH_SRC_DIR"/../tlul/rtl/tlul_socket_1n.sv
@@ -97,7 +99,7 @@ OT_DEP_SOURCES=(
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_xoshiro256pp.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_ram_1p_scr.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_ram_1p_adv.sv
-    "$LR_SYNTH_SRC_DIR"/../prim_generic/rtl/prim_generic_ram_1p.sv
+    "$LR_SYNTH_SRC_DIR"/../prim_generic/rtl/prim_ram_1p.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_subst_perm.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/prim_prince.sv
 )
@@ -106,10 +108,12 @@ OT_DEP_SOURCES=(
 OT_DEP_PACKAGES=(
     "$LR_SYNTH_SRC_DIR"/../../top_earlgrey/rtl/*_pkg.sv
     "$LR_SYNTH_SRC_DIR"/../edn/rtl/*_pkg.sv
+    "$LR_SYNTH_SRC_DIR"/../csrng/rtl/*_pkg.sv
     "$LR_SYNTH_SRC_DIR"/../entropy_src/rtl/*_pkg.sv
     "$LR_SYNTH_SRC_DIR"/../lc_ctrl/rtl/*_pkg.sv
     "$LR_SYNTH_SRC_DIR"/../tlul/rtl/*_pkg.sv
     "$LR_SYNTH_SRC_DIR"/../prim/rtl/*_pkg.sv
+    "$LR_SYNTH_SRC_DIR"/../prim_generic/rtl/*_pkg.sv
     "$LR_SYNTH_SRC_DIR"/../keymgr/rtl/*_pkg.sv
     "$LR_SYNTH_SRC_DIR"/../otp_ctrl/rtl/*_pkg.sv
 )
@@ -129,17 +133,6 @@ for file in "${OT_DEP_SOURCES[@]}"; do
         -I"$LR_SYNTH_SRC_DIR"/../prim/rtl \
         $file \
         > $LR_SYNTH_OUT_DIR/generated/${module}.v
-
-    # Make sure auto-generated primitives are resolved to generic or Xilinx-specific primitives
-    # where available.
-    sed -i 's/prim_flop/prim_xilinx_flop/g'              $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_xilinx_flop_2sync/prim_flop_2sync/g'  $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_sec_anchor_flop/prim_xilinx_flop/g'   $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_buf/prim_xilinx_buf/g'                $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_sec_anchor_buf/prim_xilinx_buf/g'     $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_xor2/prim_xilinx_xor2/g'              $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_and2/prim_xilinx_and2/g'              $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_ram_1p/prim_generic_ram_1p/g'         $LR_SYNTH_OUT_DIR/generated/${module}.v
 
     # Remove calls to $value$plusargs(). Yosys doesn't seem to support this.
     sed -i '/$value$plusargs(.*/d' $LR_SYNTH_OUT_DIR/generated/${module}.v
@@ -165,17 +158,6 @@ for file in "$LR_SYNTH_SRC_DIR"/rtl/*.sv; do
         -I"$LR_SYNTH_SRC_DIR"/../prim/rtl \
         $file \
         > $LR_SYNTH_OUT_DIR/generated/${module}.v
-
-    # Make sure auto-generated primitives are resolved to generic or Xilinx-specific primitives
-    # where available.
-    sed -i 's/prim_flop/prim_xilinx_flop/g'              $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_xilinx_flop_2sync/prim_flop_2sync/g'  $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_sec_anchor_flop/prim_xilinx_flop/g'   $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_buf/prim_xilinx_buf/g'                $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_sec_anchor_buf/prim_xilinx_buf/g'     $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_xor2/prim_xilinx_xor2/g'              $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_and2/prim_xilinx_and2/g'              $LR_SYNTH_OUT_DIR/generated/${module}.v
-    sed -i 's/prim_ram_1p/prim_generic_ram_1p/g'         $LR_SYNTH_OUT_DIR/generated/${module}.v
 
     # Rename prim_sparse_fsm_flop instances. For some reason, sv2v decides to append a suffix.
     sed -i 's/prim_sparse_fsm_flop_.*/prim_sparse_fsm_flop \#(/g' \

@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,7 @@ _Window = Tuple[int, int]
 
 # This needs to be kept in sync with the parameter of the same name in
 # otbn_pkg.sv
-_DmemScratchSizeBytes = 1024
+_DmemScratchSizeBytes = 16384
 
 
 def extract_windows(reg_byte_width: int, regs: object) -> Dict[str, _Window]:
@@ -67,7 +67,7 @@ class OtbnMemoryLayout:
         self.dmem_size_bytes = dmem_window[1] + _DmemScratchSizeBytes
 
 
-_LAYOUT = None  # type: Optional[OtbnMemoryLayout]
+_LAYOUT: Optional[OtbnMemoryLayout] = None
 
 
 def get_memory_layout() -> OtbnMemoryLayout:

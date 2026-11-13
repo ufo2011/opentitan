@@ -1,11 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-// This requesnt randomly assert reset or wakeup 10 times
-// each time sequence waits for 'ready for power down' log from c test
-// then execute reset / wakeup or both.
-// After that it waits for dut reboot before it goes to the next round
+// This randomly requests reset or wakeup 10 times. Each time sequence waits
+// for 'ready for power down' log from c test and then executes reset, wakeup,
+// or both. After that it waits for dut reboot before it goes to the next round.
 class chip_sw_repeat_reset_wkup_vseq extends chip_sw_base_vseq;
   `uvm_object_utils(chip_sw_repeat_reset_wkup_vseq)
   typedef enum {TEST_WKUP, TEST_RST, TEST_BOTH} wk_or_rst_e;
@@ -41,7 +40,7 @@ class chip_sw_repeat_reset_wkup_vseq extends chip_sw_base_vseq;
                                 i, input_type.name(), add_cycle, reset_delay), UVM_MEDIUM)
 
       if (input_type == TEST_WKUP) begin
-        // wakup is sync with slow clock.
+        // wakeup is sync with slow clock.
         // We can't align edge with fsm state (main_clk)
         execute_wakeup();
       end else if (input_type == TEST_RST) begin
@@ -55,7 +54,7 @@ class chip_sw_repeat_reset_wkup_vseq extends chip_sw_base_vseq;
         join
       end
 
-      // after reset / wakep, waitfor reboot
+      // after reset / wakeup, wait for reboot
       // before test goes to the next round
       `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInBootRom)
       `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInTest)

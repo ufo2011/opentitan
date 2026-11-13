@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,31 +9,26 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use serde_annotate::{serialize, Annotate, Base};
+use serde_annotate::{Base, serialize};
 
-use structopt::StructOpt;
+use clap::{Args, Subcommand};
 
-use opentitanlib::app::command::CommandDispatch;
 use opentitanlib::app::TransportWrapper;
+use opentitanlib::app::command::CommandDispatch;
 use opentitanlib::otp::alert_handler::AlertRegs;
 use opentitanlib::otp::lc_state::LcStateVal;
 use opentitanlib::otp::otp_img::{OtpImg, OtpImgItem, OtpImgPartition, OtpImgValue};
 
 /// Generate CRC magic value for alert_handler configuration.
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub struct AlertDigest {
-    #[structopt(help = "OTP memory map file containing alert_handler config in HJSON format")]
+    /// OTP memory map file containing alert_handler config in HJSON format.
     alert_cfg: PathBuf,
-    #[structopt(
-        long,
-        help = "Output file to write the new OTP overlay to instead of printing"
-    )]
+    /// Output file to write the new OTP overlay to instead of printing.
+    #[arg(long)]
     output: Option<PathBuf>,
-    #[structopt(
-        long,
-        default_value = "OWNER_SW_CFG",
-        help = "Override switch to specify a custom partition"
-    )]
+    /// Override switch to specify a custom partition.
+    #[arg(long, default_value = "OWNER_SW_CFG")]
     partition: String,
 }
 
@@ -42,7 +37,7 @@ impl CommandDispatch for AlertDigest {
         &self,
         _context: &dyn Any,
         _transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         // From kErrorOk in ROM.
         const ERROR_OK: u32 = 0x739;
 
@@ -88,7 +83,7 @@ impl CommandDispatch for AlertDigest {
         };
 
         if let Some(output) = &self.output {
-            let mut file = File::create(&output)?;
+            let mut file = File::create(output)?;
             file.write_all(
                 serialize(&img_out)?
                     .to_json()
@@ -103,7 +98,7 @@ impl CommandDispatch for AlertDigest {
     }
 }
 
-#[derive(Debug, StructOpt, CommandDispatch)]
+#[derive(Debug, Subcommand, CommandDispatch)]
 /// OTP related commands.
 pub enum Otp {
     AlertDigest(AlertDigest),

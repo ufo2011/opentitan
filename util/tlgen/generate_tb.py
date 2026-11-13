@@ -1,21 +1,23 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
+
+"""Code to generate crossbar testbench."""
 
 import logging as log
 from pathlib import Path
 
-from mako import exceptions
-from mako.template import Template
-from pkg_resources import resource_filename
+from mako import exceptions  # type: ignore
+from mako.template import Template  # type: ignore
+import importlib.resources
 
 from .xbar import Xbar
 
 
 def generate_tb(xbar: Xbar,
                 dv_path: Path,
-                library_name: str = "ip") -> str:  # xbar: Xbar -> str
-    # list all the generate files for TB
+                library_name: str = "ip") -> None:
+    """Generate the testbench RTL."""
     tb_files = [
         "xbar_env_pkg__params.sv", "tb__xbar_connect.sv", "xbar.sim.core",
         "xbar.bind.core", "xbar.bind.sv", "xbar.sim_cfg.hjson",
@@ -23,7 +25,7 @@ def generate_tb(xbar: Xbar,
     ]
 
     for fname in tb_files:
-        tpl = Template(filename=resource_filename('tlgen', fname + '.tpl'))
+        tpl = Template(filename=str(importlib.resources.files('tlgen') / (fname + '.tpl')))
 
         # some files need to be renamed
         if fname == "xbar.sim.core":

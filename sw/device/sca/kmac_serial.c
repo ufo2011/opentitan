@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,11 +9,11 @@
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 #include "sw/device/lib/testing/test_framework/ottf_test_config.h"
 #include "sw/device/sca/lib/prng.h"
-#include "sw/device/sca/lib/sca.h"
 #include "sw/device/sca/lib/simple_serial.h"
+#include "sw/device/tests/penetrationtests/firmware/lib/pentest_lib.h"
 
+#include "hw/top/kmac_regs.h"
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "kmac_regs.h"
 
 /**
  * OpenTitan program for side-channel analysis of the absorb step of a KMAC128
@@ -47,18 +47,16 @@ enum {
    */
   kDigestLength = 8,
   /**
-   * The offset of the second share within the output state register.
-   */
-  kDifKmacStateShareOffset = 0x100,
-  /**
    * Number of cycles (at `kClockFreqCpuHz`) that Ibex should sleep to minimize
    * noise during SHA3 operations. Caution: This number should be chosen to
    * provide enough time. Otherwise, Ibex might wake up while SHA3 is still busy
-   * and disturb the capture. Currently, we use a start trigger delay of 40
-   * clock cycles and the scope captures 200 clock cycles at kClockFreqCpuHz
-   * (2000 samples).
+   * and disturb the capture. Currently, we use a start trigger delay of 320
+   * clock cycles and the scope captures 160 clock cycles at kClockFreqCpuHz
+   * (3200 samples). On the scope side, an offset of 395 clock cycles (7900
+   * samples) is used to ignore 1) the start trigger delay for the PROCESS
+   * command, and 2) the absorb phase for the fixed prefix.
    */
-  kIbexSha3SleepCycles = 800,
+  kIbexSha3SleepCycles = 1180,
   /**
    * Max number of traces per batch.
    */
@@ -223,12 +221,15 @@ static dif_result_t kmac_msg_start(dif_kmac_mode_kmac_t mode, size_t l,
   // Uniform sharing is achieved by XORing a random number into both shares.
   mmio_region_write32(kmac.base_addr, KMAC_KEY_LEN_REG_OFFSET, key_len);
   for (int i = 0; i < ARRAYSIZE(k->share0); ++i) {
-    const uint32_t a = next_lfsr();
+    // Run LFSR for 32 steps to ensure that all state bits are updated.
+    const uint32_t a = pentest_next_lfsr(32, kPentestLfsrMasking);
     mmio_region_write32(kmac.base_addr,
-                        KMAC_KEY_SHARE0_0_REG_OFFSET + i * sizeof(uint32_t),
+                        KMAC_KEY_SHARE0_0_REG_OFFSET +
+                            (ptrdiff_t)i * (ptrdiff_t)sizeof(uint32_t),
                         k->share0[i] ^ a);
     mmio_region_write32(kmac.base_addr,
-                        KMAC_KEY_SHARE1_0_REG_OFFSET + i * sizeof(uint32_t),
+                        KMAC_KEY_SHARE1_0_REG_OFFSET +
+                            (ptrdiff_t)i * (ptrdiff_t)sizeof(uint32_t),
                         k->share1[i] ^ a);
   }
 
@@ -400,8 +401,9 @@ static dif_result_t kmac_get_digest(uint32_t *out, size_t len) {
       return kDifError;
     }
 
-    uint32_t offset =
-        KMAC_STATE_REG_OFFSET + kmac_operation_state.offset * sizeof(uint32_t);
+    ptrdiff_t offset =
+        KMAC_STATE_REG_OFFSET +
+        (ptrdiff_t)kmac_operation_state.offset * (ptrdiff_t)sizeof(uint32_t);
     for (size_t i = 0; i < n; ++i) {
       // Read both shares from state register and combine using XOR.
       uint32_t share0 = mmio_region_read32(kmac.base_addr, offset);
@@ -427,10 +429,13 @@ static void kmac_init(void) {
 
   dif_kmac_config_t config = (dif_kmac_config_t){
       .entropy_mode = kDifKmacEntropyModeSoftware,
-      .entropy_seed = {0xaa25b4bf, 0x48ce8fff, 0x5a78282a, 0x48465647,
-                       0x70410fef},
-      .entropy_fast_process = false,
-      .msg_mask = true,
+      .entropy_fast_process = kDifToggleDisabled,
+      .entropy_seed = {0xb153e3fe, 0x09596819, 0x3e85a6e8, 0xb6dcdaba,
+                       0x50dc409c, 0x11e1ebd1},
+      .message_big_endian = kDifToggleDisabled,
+      .output_big_endian = kDifToggleDisabled,
+      .sideload = kDifToggleDisabled,
+      .msg_mask = kDifToggleEnabled,
   };
   SS_CHECK_DIF_OK(dif_kmac_configure(&kmac, config));
 
@@ -475,7 +480,7 @@ static void sha3_serial_absorb(const uint8_t *msg, size_t msg_len) {
   // configured to start operation 40 cycles after receiving the START and PROC
   // commands. This allows Ibex to go to sleep in order to not disturb the
   // capture.
-  sca_call_and_sleep(kmac_msg_proc, kIbexSha3SleepCycles);
+  pentest_call_and_sleep(kmac_msg_proc, kIbexSha3SleepCycles, false, false);
 }
 
 /**
@@ -492,9 +497,9 @@ static void sha3_serial_single_absorb(const uint8_t *msg, size_t msg_len) {
   SS_CHECK(msg_len == kMessageLength);
 
   // Ungate the capture trigger signal and then start the operation.
-  sca_set_trigger_high();
+  pentest_set_trigger_high();
   sha3_serial_absorb(msg, msg_len);
-  sca_set_trigger_low();
+  pentest_set_trigger_low();
 
   // Check KMAC has finsihed processing the message.
   kmac_msg_done();
@@ -539,9 +544,9 @@ static void sha3_serial_batch(const uint8_t *data, size_t data_len) {
     kmac_reset();
     memcpy(kmac_key.share0, batch_keys[i], kKeyLength);
 
-    sca_set_trigger_high();
+    pentest_set_trigger_high();
     sha3_serial_absorb(batch_messages[i], kMessageLength);
-    sca_set_trigger_low();
+    pentest_set_trigger_low();
 
     kmac_msg_done();
     SS_CHECK_DIF_OK(kmac_get_digest(out, kDigestLength));
@@ -566,7 +571,7 @@ static void sha3_serial_batch(const uint8_t *data, size_t data_len) {
  */
 static void sha3_serial_seed_lfsr(const uint8_t *seed, size_t seed_len) {
   SS_CHECK(seed_len == sizeof(uint32_t));
-  seed_lfsr(read_32(seed));
+  pentest_seed_lfsr(read_32(seed), kPentestLfsrMasking);
 }
 
 /**
@@ -576,16 +581,17 @@ static void sha3_serial_seed_lfsr(const uint8_t *seed, size_t seed_len) {
  * UART.
  */
 bool test_main(void) {
-  sca_init(kScaTriggerSourceKmac, kScaPeripheralIoDiv4 | kScaPeripheralKmac);
+  pentest_init(kPentestTriggerSourceKmac,
+               kPentestPeripheralIoDiv4 | kPentestPeripheralKmac);
 
   LOG_INFO("Running kmac_serial");
 
   LOG_INFO("Initializing simple serial interface to capture board.");
-  simple_serial_init(sca_get_uart());
+  simple_serial_init(pentest_get_uart());
   simple_serial_register_handler('k', sha3_serial_set_key);
   simple_serial_register_handler('p', sha3_serial_single_absorb);
   simple_serial_register_handler('b', sha3_serial_batch);
-  simple_serial_register_handler('t', sha3_serial_fixed_key_set);
+  simple_serial_register_handler('f', sha3_serial_fixed_key_set);
   simple_serial_register_handler('l', sha3_serial_seed_lfsr);
 
   LOG_INFO("Initializing the KMAC peripheral.");

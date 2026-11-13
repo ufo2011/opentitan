@@ -1,10 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Breakout / remapping wrapper for register file.
 
-module alert_handler_reg_wrap import alert_pkg::*; (
+module alert_handler_reg_wrap import alert_handler_pkg::*; (
   input                                   clk_i,
   input                                   rst_ni,
   input                                   rst_shadowed_ni,
@@ -43,8 +43,7 @@ module alert_handler_reg_wrap import alert_pkg::*; (
     .hw2reg,
     .shadowed_storage_err_o(reg2hw_wrap.shadowed_err_storage),
     .shadowed_update_err_o(reg2hw_wrap.shadowed_err_update),
-    .intg_err_o(fatal_integ_alert_o),
-    .devmode_i(1'b1)
+    .intg_err_o(fatal_integ_alert_o)
   );
 
   ////////////////

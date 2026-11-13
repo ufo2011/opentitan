@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 { name: "peri",
@@ -11,6 +11,7 @@
   nodes: [
     { name:  "main",
       type:  "host",
+      addr_space: "hart",
       clock: "clk_peri_i",
       reset: "rst_peri_ni",
       xbar:  "true",
@@ -59,19 +60,13 @@
       reset:     "rst_peri_ni",
       pipeline:  false
     },
-    { name:      "pattgen",
+    { name:      "gpio0",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
       pipeline:  false
     },
-    { name:      "pwm_aon",
-      type:      "device",
-      clock:     "clk_peri_i",
-      reset:     "rst_peri_ni",
-      pipeline:  false
-    },
-    { name:      "gpio",
+    { name:      "gpio1",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
@@ -89,25 +84,25 @@
       reset:     "rst_peri_ni",
       pipeline:  false
     },
-    { name:      "pwrmgr_aon",
+    { name:      "pwrmgr",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
       pipeline:  false
     },
-    { name:      "rstmgr_aon",
+    { name:      "rstmgr",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
       pipeline:  false
     },
-    { name:      "clkmgr_aon",
+    { name:      "clkmgr",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
       pipeline:  false
     },
-    { name:      "pinmux_aon",
+    { name:      "pinmux",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
@@ -119,13 +114,7 @@
       reset:     "rst_peri_ni",
       pipeline:  false
     },
-    { name:      "otp_ctrl.prim",
-      type:      "device",
-      clock:     "clk_peri_i",
-      reset:     "rst_peri_ni",
-      pipeline:  false
-    },
-    { name:      "lc_ctrl",
+    { name:      "lc_ctrl.regs",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
@@ -143,31 +132,31 @@
       reset:     "rst_peri_ni",
       pipeline:  false,
     },
-    { name:      "sram_ctrl_ret_aon.regs",
+    { name:      "sram_ctrl_ret.regs",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
       pipeline:  false
     },
-    { name:      "sram_ctrl_ret_aon.ram",
+    { name:      "sram_ctrl_ret.ram",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
       pipeline:  false
     },
-    { name:      "aon_timer_aon",
+    { name:      "aon_timer",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
       pipeline:  false,
     },
-    { name:      "sysrst_ctrl_aon",
+    { name:      "sysrst_ctrl",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
       pipeline:  false,
     }
-    { name:      "adc_ctrl_aon",
+    { name:      "adc_ctrl",
       type:      "device",
       clock:     "clk_peri_i",
       reset:     "rst_peri_ni",
@@ -182,12 +171,12 @@
   ],
   connections: {
     main:  [
-      "uart0", "uart1", "uart2", "uart3", "i2c0", "i2c1", "i2c2", "pattgen",
-      "gpio", "spi_device", "rv_timer",
-      "pwrmgr_aon", "rstmgr_aon", "clkmgr_aon", "pinmux_aon",
-      "otp_ctrl.core", "otp_ctrl.prim", "lc_ctrl", "sensor_ctrl",
-      "alert_handler", "ast", "sram_ctrl_ret_aon.ram", "sram_ctrl_ret_aon.regs",
-      "aon_timer_aon", "adc_ctrl_aon", "sysrst_ctrl_aon", "pwm_aon"
+      "uart0", "uart1", "uart2", "uart3", "i2c0", "i2c1", "i2c2",
+      "gpio0", "gpio1", "spi_device", "rv_timer",
+      "pwrmgr", "rstmgr", "clkmgr", "pinmux",
+      "otp_ctrl.core", "lc_ctrl.regs", "sensor_ctrl",
+      "alert_handler", "ast", "sram_ctrl_ret.ram", "sram_ctrl_ret.regs",
+      "aon_timer", "adc_ctrl", "sysrst_ctrl"
     ],
   },
 }

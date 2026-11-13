@@ -1,4 +1,4 @@
-/* Copyright lowRISC contributors. */
+/* Copyright lowRISC contributors (OpenTitan project). */
 /* Licensed under the Apache License, Version 2.0, see LICENSE for details. */
 /* SPDX-License-Identifier: Apache-2.0 */
 
@@ -32,13 +32,14 @@ X25519:
   /* Prepare constant for field operations.
      w19 <= 19  */
   bn.addi  w19, w31, 19
+  bn.addi  w30, w31, 38
 
   /* Load modulus from DMEM.
        MOD <= dmem[modulus25519] = 2^255 - 19 = p */
   li      x2, 2
   la      x3, modulus25519
   bn.lid  x2, 0(x3)
-  bn.wsrw 0x0, w2
+  bn.wsrw MOD, w2
 
   /* Decode scalar. From RFC 7748, section 5:
 
@@ -100,7 +101,8 @@ X25519:
  *
  * @param[in]  w8: k, 255-bit scalar value
  * @param[in]  w9: u, Montgomery u-coordinate of point A (k < p)
- * @param[in]  w19: constant, w19 = 19
+ * @param[in]  w19: constant, 19
+ * @param[in]  w30: constant, 38
  * @param[in]  w31, all-zero
  * @param[in]  MOD: p, modulus = 2^255 - 19
  * @param[out] w22: result, Montgomery u-coordinate of point kA
@@ -258,8 +260,9 @@ scalar_mult:
  * Flags: Flags have no meaning beyond the scope of this subroutine.
  *
  * @param[in] w9: x_1, Montgomery u-coordinate of point A (k < p)
- * @param[in] w19: constant, w19 = 19
+ * @param[in] w19: constant, 19
  * @param[in] w24: constant a24 = 121665
+ * @param[in] w30: constant, 38
  * @param[in] w31: all-zero
  * @param[in] MOD: p, modulus = 2^255 - 19
  * @param[in,out] w10:  x_2
@@ -304,7 +307,7 @@ ladderstep:
   bn.mov   w22, w24
   jal      x1, fe_mul
   /* w22 <= w3 + w22 = AA + (a24 * E) */
-  bn.add   w22, w3, w22
+  bn.addm  w22, w3, w22
   /* z_2 = w12 <= w22 * w23 = (AA + a24 * E) * E */
   jal      x1, fe_mul
   bn.mov   w12, w22

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,6 @@
   upstream:
   {
     url: https://github.com/pulp-platform/riscv-dbg
-    rev: 122510063a02e0d012f0497ffdbafca53d4e716b
+    rev: 2bc55e1e43a472b629a84ef3090a2aa13e13d351
   }
 }

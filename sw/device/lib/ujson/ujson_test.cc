@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -141,6 +141,8 @@ TEST(UJson, ParseInteger) {
   INT(uint8_t, "256", 0);
   // This value overflows int64 and becomes its own negative.
   INT(int64_t, "9223372036854775808", -9223372036854775808);
+  // Quoted number.
+  INT(uint32_t, "\"123\"", 123);
 }
 #undef INT
 #undef SIMPLE_INT
@@ -159,6 +161,23 @@ TEST(UJson, ParseIntegerError) {
   ss.Reset("q");
   s = ujson_parse_integer(&uj, (void *)&t, sizeof(t));
   EXPECT_EQ(status_err(s), kNotFound);
+
+  // A number that can NOT be represented in a 64-bit unsigned integer.
+  // number = UINT64_MAX + 1.
+  ss.Reset("18446744073709551616");
+  s = ujson_parse_integer(&uj, (void *)&t, sizeof(t));
+  EXPECT_EQ(status_err(s), kOutOfRange);
+
+  // A number that can NOT be represented in a 64-bit unsigned integer.
+  // number / 10 > UINT64_MAX / 10.
+  ss.Reset("18446744073709551620");
+  s = ujson_parse_integer(&uj, (void *)&t, sizeof(t));
+  EXPECT_EQ(status_err(s), kOutOfRange);
+
+  // Negative number that can NOT be represented in a 64-bit signed integer.
+  ss.Reset("-9223372036854775809");
+  s = ujson_parse_integer(&uj, (void *)&t, sizeof(t));
+  EXPECT_EQ(status_err(s), kOutOfRange);
 }
 
 TEST(UJson, SerializeString) {
@@ -234,7 +253,7 @@ TEST(UJson, DeerializeStatus) {
 
   // Parse an Ok value with an argument.
   EXPECT_TRUE(status_ok(ujson_deserialize_status_t(&uj, &val)));
-  status_extract(val, &code, &arg, mod_id);
+  OT_DISCARD(status_extract(val, &code, &arg, mod_id));
   EXPECT_EQ(status_err(val), kOk);
   EXPECT_EQ(arg, 1234);
 
@@ -242,7 +261,7 @@ TEST(UJson, DeerializeStatus) {
   // The module_id should get truncated to 3 characters.
   ss.Reset(R"json({"InvalidArgument": ["foobar", 77]})json");
   EXPECT_TRUE(status_ok(ujson_deserialize_status_t(&uj, &val)));
-  status_extract(val, &code, &arg, mod_id);
+  OT_DISCARD(status_extract(val, &code, &arg, mod_id));
   EXPECT_EQ(status_err(val), kInvalidArgument);
   EXPECT_EQ(std::string(mod_id), "FOO");
   EXPECT_EQ(arg, 77);

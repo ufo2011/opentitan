@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,14 +7,14 @@ use crate::util::parse_int::ParseInt;
 use std::fmt;
 use std::path::Path;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 
 use serde::de::{self, Unexpected};
 use serde::{Deserialize, Serialize};
 
 use serde_annotate::Annotate;
 
-#[derive(Annotate, Serialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum OtpImgValue {
     Word(u64),
@@ -92,19 +92,19 @@ impl<'de> Deserialize<'de> for OtpImgValue {
     }
 }
 
-#[derive(Annotate, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Annotate, Deserialize, Debug, PartialEq, Eq)]
 pub struct OtpImgItem {
     pub name: String,
     pub value: OtpImgValue,
 }
 
-#[derive(Annotate, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Annotate, Deserialize, Debug, PartialEq, Eq)]
 pub struct OtpImgPartition {
     pub name: String,
     pub items: Option<Vec<OtpImgItem>>,
 }
 
-#[derive(Annotate, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Annotate, Deserialize, Debug, PartialEq, Eq)]
 pub struct OtpImg {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
@@ -124,7 +124,7 @@ pub trait OtpRead {
 
 impl OtpRead for OtpImg {
     fn read32_offset(&self, name: &str, offset: usize) -> Result<u32> {
-        if offset % 4 != 0 {
+        if !offset.is_multiple_of(4) {
             bail!("offset not word aligned");
         }
         Ok(
@@ -176,10 +176,9 @@ impl std::str::FromStr for OtpImg {
 mod tests {
     use super::*;
     use std::str::FromStr;
+    use std::sync::LazyLock;
 
     use serde_annotate::serialize;
-
-    use lazy_static::lazy_static;
 
     const TEST_OTP_JSON: &str = r#"
         {
@@ -190,10 +189,6 @@ mod tests {
                         {
                             name:  "CREATOR_SW_CFG_DIGEST",
                             value: 0,
-                        },
-                        {
-                            name: "CREATOR_SW_CFG_SIGVERIFY_RSA_MOD_EXP_IBEX_EN",
-                            value: "0x739",
                         },
                         {
                             name: "CREATOR_SW_CFG_SIGVERIFY_RSA_KEY_EN",
@@ -216,36 +211,30 @@ mod tests {
             ]
         }"#;
 
-    lazy_static! {
-        static ref TEST_OTP: OtpImg = OtpImg {
-            seed: None,
-            partitions: vec![OtpImgPartition {
-                name: "CREATOR_SW_CFG".to_owned(),
-                items: Some(vec![
-                    OtpImgItem {
-                        name: "CREATOR_SW_CFG_DIGEST".to_owned(),
-                        value: OtpImgValue::Word(0x0),
-                    },
-                    OtpImgItem {
-                        name: "CREATOR_SW_CFG_SIGVERIFY_RSA_MOD_EXP_IBEX_EN".to_owned(),
-                        value: OtpImgValue::Word(0x739),
-                    },
-                    OtpImgItem {
-                        name: "CREATOR_SW_CFG_SIGVERIFY_RSA_KEY_EN".to_owned(),
-                        value: OtpImgValue::Word(0x4b4b4b4b4b4ba5a5),
-                    },
-                    OtpImgItem {
-                        name: "CREATOR_RANDOM".to_owned(),
-                        value: OtpImgValue::Random,
-                    },
-                    OtpImgItem {
-                        name: "CREATOR_SEQ".to_owned(),
-                        value: OtpImgValue::Sequence(vec![0xab, 0xcd, 0xef]),
-                    },
-                ]),
-            },],
-        };
-    }
+    static TEST_OTP: LazyLock<OtpImg> = LazyLock::new(|| OtpImg {
+        seed: None,
+        partitions: vec![OtpImgPartition {
+            name: "CREATOR_SW_CFG".to_owned(),
+            items: Some(vec![
+                OtpImgItem {
+                    name: "CREATOR_SW_CFG_DIGEST".to_owned(),
+                    value: OtpImgValue::Word(0x0),
+                },
+                OtpImgItem {
+                    name: "CREATOR_SW_CFG_SIGVERIFY_RSA_KEY_EN".to_owned(),
+                    value: OtpImgValue::Word(0x4b4b4b4b4b4ba5a5),
+                },
+                OtpImgItem {
+                    name: "CREATOR_RANDOM".to_owned(),
+                    value: OtpImgValue::Random,
+                },
+                OtpImgItem {
+                    name: "CREATOR_SEQ".to_owned(),
+                    value: OtpImgValue::Sequence(vec![0xab, 0xcd, 0xef]),
+                },
+            ]),
+        }],
+    });
 
     #[test]
     fn test_deser() {
@@ -264,10 +253,6 @@ mod tests {
         {
           name: \"CREATOR_SW_CFG_DIGEST\",
           value: 0
-        },
-        {
-          name: \"CREATOR_SW_CFG_SIGVERIFY_RSA_MOD_EXP_IBEX_EN\",
-          value: 1849
         },
         {
           name: \"CREATOR_SW_CFG_SIGVERIFY_RSA_KEY_EN\",
@@ -296,11 +281,6 @@ mod tests {
     fn test_otp_read() {
         let otp = OtpImg::from_str(TEST_OTP_JSON).unwrap();
         assert_eq!(otp.read32("CREATOR_SW_CFG_DIGEST").unwrap(), 0x0);
-        assert_eq!(
-            otp.read32("CREATOR_SW_CFG_SIGVERIFY_RSA_MOD_EXP_IBEX_EN")
-                .unwrap(),
-            0x739
-        );
         assert_eq!(
             otp.read32("CREATOR_SW_CFG_SIGVERIFY_RSA_KEY_EN").unwrap(),
             0x4b4ba5a5

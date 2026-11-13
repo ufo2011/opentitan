@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Luke Valenty (TinyFPGA project, https://github.com/tinyfpga/TinyFPGA-Bootloader).
@@ -43,7 +43,9 @@ module usb_fs_rx (
   output logic rx_data_put_o,
   output logic [7:0] rx_data_o,
 
-  // Most recent packet passes PID and CRC checks
+  // Most recent packet passes PID check
+  output logic valid_pid_o,
+  // Most recent packet passes PID, length and CRC checks
   output logic valid_packet_o,
 
   // line status for the status detection (actual rx bits after clock recovery)
@@ -51,10 +53,13 @@ module usb_fs_rx (
   output logic rx_j_det_o,
 
   // Error detection
-  output logic crc_error_o,
+  output logic crc5_error_o,
+  output logic crc16_error_o,
   output logic pid_error_o,
   output logic bitstuff_error_o
 );
+
+  import usb_consts_pkg::*;
 
   logic [6:0] bitstuff_history_q, bitstuff_history_d;
   logic       bitstuff_error;
@@ -65,8 +70,8 @@ module usb_fs_rx (
   //////////////////////
   // Adjust inputs when D+/D- are flipped on the USB side
   logic usb_dp_flipped, usb_dn_flipped, usb_d_flipped;
-  assign usb_dp_flipped = usb_dp_i ^ cfg_pinflip_i;
-  assign usb_dn_flipped = usb_dn_i ^ cfg_pinflip_i;
+  assign usb_dp_flipped = cfg_pinflip_i ? usb_dn_i : usb_dp_i;
+  assign usb_dn_flipped = cfg_pinflip_i ? usb_dp_i : usb_dn_i;
   assign usb_d_flipped = usb_d_i ^ cfg_pinflip_i;
 
   ///////////////////////////////////////
@@ -91,7 +96,7 @@ module usb_fs_rx (
   // Both D+ and D- may temporarily be less than VIH (min) during differential
   // signal transitions. This period can be up to 14 ns (TFST) for full-speed
   // transitions and up to 210 ns (TLST) for low-speed transitions. Logic in the
-  // receiver must ensure that that this is not interpreted as an SE0.
+  // receiver must ensure that this is not interpreted as an SE0.
   // Since the 48MHz sample clock is 20.833ns period we will either miss this or
   // sample it only once, so it will be covered by line_state=DT and the next
   // sample will not be SE0 unless this was a real SE0 transition
@@ -267,7 +272,7 @@ module usb_fs_rx (
 
   logic [11:0] line_history_q, line_history_d;
   logic packet_valid_q, packet_valid_d;
-  logic see_sop, see_eop, packet_start, packet_end;
+  logic see_sop, see_eop, see_preamble, packet_start, packet_end;
   logic in_packet_d, in_packet_q;
 
   // A bit of a misnomer: packet_start pulses when the PID begins, not SOP.
@@ -276,9 +281,9 @@ module usb_fs_rx (
 
   // EOP detection is configurable for 1/2 bit periods of SE0.
   // The standard (Table 7-7) mandates min = 82 ns = 1 bit period.
-  // We also trigger an EOP on seeing a bitstuff error.
+  // We also trigger an EOP on seeing a bitstuff error or a PRE PID.
   assign see_eop = (cfg_eop_single_bit_i && line_history_q[1:0] == 2'b00)
-    || (line_history_q[3:0] == 4'b0000) || bitstuff_error_q;
+    || (line_history_q[3:0] == 4'b0000) || bitstuff_error_q || see_preamble;
 
   // SOP is the transition from idle (J) to K
   assign see_sop = (line_history_q[3:0] == 4'b1001) & ~tx_en_i & ~in_packet_q;
@@ -446,7 +451,7 @@ module usb_fs_rx (
   // save and check pid //
   ////////////////////////
 
-  // shift in the entire 8-bit pid with an additional 9th bit used as a sentinal.
+  // shift in the entire 8-bit pid with an additional 9th bit used as a sentinel.
 
   logic [8:0] full_pid_q, full_pid_d;
   logic pid_valid, pid_complete;
@@ -510,21 +515,26 @@ module usb_fs_rx (
   ////////////////////////////
   // output control signals //
   ////////////////////////////
+  logic valid_token_len, valid_data_len, valid_handshake_len;
+
   logic pkt_is_token, pkt_is_data, pkt_is_handshake;
   assign pkt_is_token     = full_pid_q[2:1] == 2'b01;
   assign pkt_is_data      = full_pid_q[2:1] == 2'b11;
   assign pkt_is_handshake = full_pid_q[2:1] == 2'b10;
 
+  assign see_preamble = packet_valid_q & pid_valid & pid_complete &&
+                        (usb_pid_e'(full_pid_q[4:1]) == UsbPidPre);
+
+  assign valid_pid_o = pid_valid;
 
   assign valid_packet_o = pid_valid && !bitstuff_error_q &&
-    ((pkt_is_handshake) ||
-    (pkt_is_data && crc16_valid) ||
-    (pkt_is_token && crc5_valid)
-  );
+    ((pkt_is_handshake && valid_handshake_len) ||
+     (pkt_is_data && valid_data_len && crc16_valid) ||
+     (pkt_is_token && valid_token_len && crc5_valid));
 
   // Detect CRC errors
-  assign crc_error_o = ((pkt_is_data && !crc16_valid) ||
-    (pkt_is_token && !crc5_valid)) && packet_end;
+  assign crc5_error_o  = pkt_is_token & packet_end & !crc5_valid;
+  assign crc16_error_o = pkt_is_data & packet_end & !crc16_valid;
 
   // Detect PID errors
   assign pid_error_o = !pid_valid && packet_end;
@@ -575,7 +585,6 @@ module usb_fs_rx (
   /////////////////////////////////
   // deserialize and output data //
   /////////////////////////////////
-  //assign rx_data_put = dvalid && pid_complete && pkt_is_data;
   logic [8:0] rx_data_buffer_q, rx_data_buffer_d;
   logic rx_data_buffer_full;
 
@@ -595,6 +604,29 @@ module usb_fs_rx (
     end
   end
 
+  // Counting packet length in bits; we need to know whether the length is byte-aligned,
+  // and whether it's equal to 16 (token packet) or at least 16 (data packet; CRC16 required).
+  logic       rx_data_len16_q, rx_data_len16_d;
+  logic [3:0] rx_data_len_q,   rx_data_len_d;
+
+  // Valid packet length indications.
+  assign valid_token_len     = rx_data_len16_q & ~|rx_data_len_q;
+  assign valid_data_len      = rx_data_len16_q & ~|rx_data_len_q[2:0];  // Must be byte-aligned.
+  assign valid_handshake_len = ~|{rx_data_len16_q, rx_data_len_q};
+
+  always_comb begin
+    rx_data_len16_d  = rx_data_len16_q;
+    rx_data_len_d    = rx_data_len_q;
+
+    if (packet_start) begin
+      rx_data_len16_d  = 1'b0;
+      rx_data_len_d    = 4'h0;
+    end
+    if (dvalid && pid_complete) begin
+      rx_data_len16_d  = rx_data_len16_q | &rx_data_len_q;
+      rx_data_len_d    = rx_data_len_q + 4'h1;
+    end
+  end
 
   ///////////////
   // Registers //
@@ -609,6 +641,8 @@ module usb_fs_rx (
       endp_q              <= 0;
       frame_num_q         <= 0;
       rx_data_buffer_q    <= 0;
+      rx_data_len16_q     <= 0;
+      rx_data_len_q       <= 0;
     end else begin
       if (link_reset_i) begin
         full_pid_q          <= 0;
@@ -619,6 +653,8 @@ module usb_fs_rx (
         endp_q              <= 0;
         frame_num_q         <= 0;
         rx_data_buffer_q    <= 0;
+        rx_data_len16_q     <= 0;
+        rx_data_len_q       <= 0;
       end else begin
         full_pid_q          <= full_pid_d;
         crc16_q             <= crc16_d;
@@ -628,6 +664,8 @@ module usb_fs_rx (
         endp_q              <= endp_d;
         frame_num_q         <= frame_num_d;
         rx_data_buffer_q    <= rx_data_buffer_d;
+        rx_data_len16_q     <= rx_data_len16_d;
+        rx_data_len_q       <= rx_data_len_d;
       end
     end
   end

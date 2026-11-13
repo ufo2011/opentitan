@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,15 +6,15 @@
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_csrng.h"
 #include "sw/device/lib/dif/dif_entropy_src.h"
-#include "sw/device/lib/dif/dif_flash_ctrl.h"
 #include "sw/device/lib/dif/dif_kmac.h"
 #include "sw/device/lib/dif/dif_lc_ctrl.h"
 #include "sw/device/lib/dif/dif_otp_ctrl.h"
 #include "sw/device/lib/dif/dif_rstmgr.h"
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/csrng_testutils.h"
+#include "sw/device/lib/testing/entropy_src_testutils.h"
 #include "sw/device/lib/testing/entropy_testutils.h"
-#include "sw/device/lib/testing/flash_ctrl_testutils.h"
+#include "sw/device/lib/testing/nvm_testutils.h"
 #include "sw/device/lib/testing/otp_ctrl_testutils.h"
 #include "sw/device/lib/testing/rand_testutils.h"
 #include "sw/device/lib/testing/rstmgr_testutils.h"
@@ -43,15 +43,14 @@ enum {
   kExitTokenSizeInWords = kExitTokenSizeInBytes / sizeof(uint32_t),
 };
 
-// Store CSRNG output in flash to compare results across life cycle stages.
-OT_SECTION(".non_volatile_scratch")
-uint32_t nv_csrng_output[kEntropyFifoBufferSize];
+// Store CSRNG output in NVM to compare results across life cycle stages.
+OT_SET_BSS_SECTION(".non_volatile_scratch",
+                   uint32_t nv_csrng_output[kEntropyFifoBufferSize];)
 
 static dif_lc_ctrl_t lc_ctrl;
 static dif_otp_ctrl_t otp_ctrl;
 static dif_csrng_t csrng;
 static dif_entropy_src_t entropy_src;
-static dif_flash_ctrl_state_t flash_ctrl_state;
 static dif_kmac_t kmac;
 static dif_rstmgr_t rstmgr;
 
@@ -91,8 +90,8 @@ static void kmac_init(void) {
   // Configure KMAC hardware using software entropy.
   dif_kmac_config_t config = (dif_kmac_config_t){
       .entropy_mode = kDifKmacEntropyModeSoftware,
-      .entropy_seed = {0xaa25b4bf, 0x48ce8fff, 0x5a78282a, 0x48465647,
-                       0x70410fef},
+      .entropy_seed = {0xb153e3fe, 0x09596819, 0x3e85a6e8, 0xb6dcdaba,
+                       0x50dc409c, 0x11e1ebd1},
       .entropy_fast_process = kDifToggleEnabled,
   };
   CHECK_DIF_OK(dif_kmac_configure(&kmac, config));
@@ -105,17 +104,13 @@ static void peripherals_init(void) {
   CHECK_DIF_OK(dif_csrng_init(
       mmio_region_from_addr(TOP_EARLGREY_CSRNG_BASE_ADDR), &csrng));
   CHECK_DIF_OK(dif_lc_ctrl_init(
-      mmio_region_from_addr(TOP_EARLGREY_LC_CTRL_BASE_ADDR), &lc_ctrl));
+      mmio_region_from_addr(TOP_EARLGREY_LC_CTRL_REGS_BASE_ADDR), &lc_ctrl));
   CHECK_DIF_OK(dif_entropy_src_init(
       mmio_region_from_addr(TOP_EARLGREY_ENTROPY_SRC_BASE_ADDR), &entropy_src));
   CHECK_DIF_OK(dif_otp_ctrl_init(
       mmio_region_from_addr(TOP_EARLGREY_OTP_CTRL_CORE_BASE_ADDR), &otp_ctrl));
   CHECK_DIF_OK(dif_rstmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR), &rstmgr));
-
-  CHECK_DIF_OK(dif_flash_ctrl_init_state(
-      &flash_ctrl_state,
-      mmio_region_from_addr(TOP_EARLGREY_FLASH_CTRL_CORE_BASE_ADDR)));
+      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_BASE_ADDR), &rstmgr));
 
   kmac_init();
 }
@@ -142,7 +137,8 @@ static void exit_token_cshake_hash(uint64_t *otp_token_l,
 
   uint32_t token_hash[kExitTokenSizeInWords];
   CHECK_DIF_OK(dif_kmac_squeeze(&kmac, &op_state, token_hash,
-                                kExitTokenSizeInWords, /*processed=*/NULL));
+                                kExitTokenSizeInWords, /*processed=*/NULL,
+                                /*capacity=*/NULL));
   CHECK_DIF_OK(dif_kmac_end(&kmac, &op_state));
 
   *otp_token_l = 0;
@@ -170,16 +166,16 @@ static void lock_otp_secret0_partition(void) {
                                           kDifOtpCtrlPartitionSecret0,
                                           /*address=*/0x10,
                                           /*value=*/otp_token_l));
-  otp_ctrl_testutils_wait_for_dai(&otp_ctrl);
+  CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(&otp_ctrl));
   CHECK_DIF_OK(dif_otp_ctrl_dai_program64(&otp_ctrl,
                                           kDifOtpCtrlPartitionSecret0,
                                           /*address=*/0x18,
                                           /*value=*/opt_token_h));
-  otp_ctrl_testutils_wait_for_dai(&otp_ctrl);
+  CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(&otp_ctrl));
 
   CHECK_DIF_OK(dif_otp_ctrl_dai_digest(&otp_ctrl, kDifOtpCtrlPartitionSecret0,
                                        /*digest=*/0));
-  otp_ctrl_testutils_wait_for_dai(&otp_ctrl);
+  CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(&otp_ctrl));
 }
 
 /**
@@ -200,7 +196,7 @@ static dif_lc_ctrl_state_t lc_next_state(void) {
       break;
     default:
       CHECK(false, "Unexpected case index: %d", index);
-      break;
+      return kDifLcCtrlStateInvalid;
   }
   return next_state;
 }
@@ -241,7 +237,7 @@ static void fw_override_conditioner_write(
   uint32_t total = 0;
   do {
     uint32_t count;
-    dif_result_t op_result = dif_entropy_src_observe_fifo_write(
+    dif_result_t op_result = dif_entropy_src_fw_ov_data_write(
         entropy_src, kInputMsg + total, ARRAYSIZE(kInputMsg) - total, &count);
     total += count;
     if (op_result == kDifIpFifoFull) {
@@ -262,12 +258,13 @@ static void fw_override_conditioner_write(
  * size of the `output` buffer.
  */
 static void csrng_static_generate_run(uint32_t *output, size_t output_len) {
-  entropy_testutils_stop_all();
+  CHECK_STATUS_OK(entropy_testutils_stop_all());
   // TODO: May need to flush the output buffers before enabling enabling
   // firmware override connected to csrng.
-  entropy_testutils_fw_override_enable(&entropy_src, kEntropyFifoBufferSize,
-                                       /*firmware_override_enable=*/false,
-                                       /*bypass_conditioner=*/false);
+  CHECK_STATUS_OK(entropy_src_testutils_fw_override_enable(
+      &entropy_src, kEntropyFifoBufferSize,
+      /*firmware_override_enable=*/false,
+      /*bypass_conditioner=*/false));
   CHECK_DIF_OK(dif_csrng_configure(&csrng));
   fw_override_conditioner_write(&entropy_src);
 
@@ -275,7 +272,8 @@ static void csrng_static_generate_run(uint32_t *output, size_t output_len) {
   CHECK_DIF_OK(dif_csrng_instantiate(&csrng, kDifCsrngEntropySrcToggleEnable,
                                      &kEmptySeedMaterial));
 
-  csrng_testutils_cmd_generate_run(&csrng, output, output_len);
+  CHECK_STATUS_OK(
+      csrng_testutils_cmd_generate_run(&csrng, NULL, output, output_len));
   uint32_t prev_word = 0;
   for (size_t i = 0; i < output_len; ++i) {
     CHECK(prev_word != output[i],
@@ -286,13 +284,8 @@ static void csrng_static_generate_run(uint32_t *output, size_t output_len) {
 
 bool test_main(void) {
   peripherals_init();
-  flash_ctrl_testutils_default_region_access(&flash_ctrl_state,
-                                             /*rd_en=*/true,
-                                             /*prog_en=*/true,
-                                             /*erase_en=*/true,
-                                             /*scramble_en=*/false,
-                                             /*ecc_en=*/false,
-                                             /*he_en=*/false);
+  CHECK_STATUS_OK(nvm_testutils_default_region_setup(kNvmPagePermsReadWrite,
+                                                     kNvmPageCfgRaw));
 
   dif_rstmgr_reset_info_bitfield_t rst_info = rstmgr_testutils_reason_get();
   rstmgr_testutils_reason_clear();
@@ -303,17 +296,12 @@ bool test_main(void) {
 
   if (rst_info == kDifRstmgrResetInfoPor &&
       lc_state == kDifLcCtrlStateTestUnlocked0) {
-    enum {
-      kPartitionId = 0,
-    };
-    uint32_t address =
-        (uint32_t)(nv_csrng_output)-TOP_EARLGREY_FLASH_CTRL_MEM_BASE_ADDR;
+    uint32_t address = (uint32_t)(nv_csrng_output)-NVM_DATA_BASE_ADDR;
     uint32_t expected[kEntropyFifoBufferSize];
     csrng_static_generate_run(expected, ARRAYSIZE(expected));
-    CHECK(flash_ctrl_testutils_write(&flash_ctrl_state, address,
-                                     /*partition_id=*/0, expected,
-                                     kDifFlashCtrlPartitionTypeData,
-                                     ARRAYSIZE(expected)));
+    CHECK_STATUS_OK(nvm_testutils_data_write(address, expected,
+                                             ARRAYSIZE(expected),
+                                             /*erase_before_write=*/true));
     CHECK_ARRAYS_EQ(nv_csrng_output, expected, ARRAYSIZE(expected));
 
     lock_otp_secret0_partition();

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 r"""OTP memory image class, used to create preload images for the OTP
@@ -8,19 +8,17 @@ memory for simulations and FPGA emulation.
 
 import copy
 import logging as log
-import random
-from typing import Tuple
+from pathlib import Path
+from typing import List, Tuple
 
-from lib.common import (check_bool, check_int, ecc_encode, permute_bits,
-                        random_or_hexvalue)
+from mako.template import Template
+from mubi.prim_mubi import mubi_value_as_int
+from topgen.secure_prng import SecurePrngFactory
+
+from lib import common
 from lib.LcStEnc import LcStEnc
 from lib.OtpMemMap import OtpMemMap
 from lib.Present import Present
-from mubi.prim_mubi import mubi_value_as_int
-
-# Seed diversification constant for OtpMemImg (this enables to use
-# the same seed for different classes)
-OTP_IMG_SEED_DIVERSIFIER = 1941661965323525198146
 
 
 def _present_64bit_encrypt(plain, key):
@@ -61,7 +59,10 @@ def _present_64bit_digest(data_blocks, iv, const):
     # that uses the Davies-Meyer scheme to turn the PRESENT cipher into
     # a one-way compression function. Digest finalization consists of
     # a final digest round with a 128bit constant.
-    # See also: https://docs.opentitan.org/hw/ip/otp_ctrl/doc/index.html#scrambling-datapath
+    #
+    # See also: the Scrambling Datapath section of
+    #
+    #     ../../../hw/ip_templates/otp_ctrl/doc/theory_of_operation.md
     state = iv
     last_b64 = None
     for b64 in data_blocks:
@@ -117,10 +118,10 @@ def _to_memfile_with_ecc(data, annotation, config,
 
         # ECC encode
         word_bin = format(word, bin_format_str)
-        word_bin = ecc_encode(config, word_bin)
+        word_bin = common.ecc_encode(config, word_bin)
         # Pad to word boundary and permute data if needed
         word_bin = ('0' * bit_padding) + word_bin
-        word_bin = permute_bits(word_bin, data_perm)
+        word_bin = common.permute_bits(word_bin, data_perm)
         word_hex = format(int(word_bin, 2), hex_format_str)
 
         # Build a MEM line containing this word's address in the memory map and
@@ -129,7 +130,7 @@ def _to_memfile_with_ecc(data, annotation, config,
         # count ECC bits. In a comment, we also include any annotations
         # associated with the word.
         line = '@{:06x} {} // {}'.format(i_word, word_hex,
-                                         ', '.join(word_annotations))
+                                         ', '.join(sorted(word_annotations)))
         mem_lines.append(line)
 
     log.info('Done.')
@@ -145,16 +146,65 @@ def _check_unused_keys(dict_to_check, msg_postfix=""):
         raise RuntimeError('Aborting due to unused keys in config dict')
 
 
+def _int_to_hex_array(val: int, size: int, alignment: int) -> List[str]:
+    '''Converts `val` long value into list of hex strings.
+
+    Args:
+        val: Input value.
+        size: Target output size in number of bytes.
+        alignment: Number of bytes to be bundled into a single hex value.
+    Returns:
+        A list of string hex values using little-endian encoding.
+    '''
+    fmt_str = '{:0' + str(size * 2) + 'x}'
+    val_hex = fmt_str.format(val)
+
+    bytes_hex = []
+    for i in range(0, len(val_hex), 2):
+        bytes_hex.append(val_hex[i:i + 2])
+
+    if len(bytes_hex) % alignment != 0:
+        raise ValueError(len(bytes_hex))
+
+    word_list = []
+    for i in range(0, len(bytes_hex), alignment):
+        word_list.append("".join(bytes_hex[i:i + alignment]))
+
+    word_list.reverse()
+    return [f"0x{y}" for y in word_list]
+
+
 class OtpMemImg(OtpMemMap):
 
+    # Life cycle states in which the device is allowed to be personalized, i.e.
+    # in which the SECRET2 partition may be locked.
+    PERSONALIZED_LC_STATES = ['DEV', 'PROD', 'PROD_END', 'RMA', 'SCRAP']
+
     def __init__(self, lc_state_config, otp_mmap_config, img_config,
-                 data_perm):
+                 data_perm, top_secret_cfg: dict):
         # Initialize memory map
         super().__init__(otp_mmap_config)
 
+        # Determine the OTP memory map configuration from the top secret configuration
+        for module in top_secret_cfg["module"]:
+            if module.get("template_type") == "otp_ctrl":
+                otp_mmap_cfg = module["otp_mmap"]
+                break
+        else:
+            log.error("OTP memory map configuration not found in top secret configuration")
+            exit(1)
+
+        # Splice the secret config into the memory map config
+        self.config["scrambling"] = otp_mmap_cfg["scrambling"]
+
         # Initialize the LC state and OTP memory map objects first, since
         # validation and image generation depends on them
-        self.lc_state = LcStEnc(lc_state_config)
+        lc_ctrl_seed = common.check_int(top_secret_cfg["seed"]["lc_ctrl_seed"]["value"])
+        self.lc_state = LcStEnc(lc_state_config, lc_ctrl_seed)
+
+        # Life cycle state of the image, as a string.
+        # Default value of `RAW` applied (similar in merge_part_data()).
+        self.lc_state_name = 'RAW'
 
         # Validate memory image configuration
         log.info('')
@@ -172,15 +222,12 @@ class OtpMemImg(OtpMemMap):
         if otp_width != secded_width:
             raise RuntimeError('OTP width and SECDED data width must be equal')
 
-        if 'seed' not in img_config:
-            raise RuntimeError('Missing seed in configuration.')
-
-        img_config['seed'] = check_int(img_config['seed'])
-        log.info('Seed: {0:x}'.format(img_config['seed']))
-        log.info('')
+        img_config["seed"] = common.check_int(top_secret_cfg["seed"]["otp_img_seed"]["value"])
+        log.info(f'Seed: {img_config["seed"]:x}')
+        log.info("")
 
         # Re-initialize with seed to make results reproducible.
-        random.seed(OTP_IMG_SEED_DIVERSIFIER + img_config['seed'])
+        SecurePrngFactory.create("otpmemimg", img_config["seed"])
 
         if 'partitions' not in img_config:
             raise RuntimeError('Missing partitions key in configuration.')
@@ -202,6 +249,25 @@ class OtpMemImg(OtpMemMap):
 
         self.validate_data_perm(data_perm)
 
+    def validate_secrets_valid(self):
+        '''Check that a locked SECRET2 partition is legal in this life cycle state
+
+        Locking SECRET2 computes its digest, and a non-zero SECRET2 digest
+        marks the device as personalized. This must only be called once all
+        image configurations have been merged.
+        '''
+        part = self.get_part('SECRET2')
+        if part is None or not part.get('lock', False):
+            return
+
+        if self.lc_state_name not in self.PERSONALIZED_LC_STATES:
+            raise RuntimeError(
+                'The SECRET2 partition must not be locked in life cycle state '
+                '{}, because a personalized device is only valid in the {} '
+                'states. Use an unlocked SECRET2 partition for this image.'
+                .format(self.lc_state_name,
+                        ', '.join(self.PERSONALIZED_LC_STATES)))
+
     def merge_part_data(self, part):
         '''This validates and merges the partition data into the memory map dict'''
 
@@ -217,8 +283,13 @@ class OtpMemImg(OtpMemMap):
                 part['name']))
 
         # Only partitions with a hardware digest can be locked.
-        part.setdefault('lock', 'false')
-        part['lock'] = check_bool(part['lock'])
+        #
+        # A configuration that does not mention 'lock' leaves the partition
+        # as it was. This lets the base image configuration own the decision
+        # of whether e.g. SECRET2 is locked.
+        # A configuration config that does specify lock still wins
+        part.setdefault('lock', mmap_part.get('lock', False))
+        part['lock'] = common.check_bool(part['lock'])
         if part['lock'] and not \
            mmap_part['hw_digest']:
             raise RuntimeError(
@@ -232,7 +303,7 @@ class OtpMemImg(OtpMemMap):
             part.setdefault('state', 'RAW')
             part.setdefault('count', 0)
 
-            part['count'] = check_int(part['count'])
+            part['count'] = common.check_int(part['count'])
             if len(part['items']) > 0:
                 raise RuntimeError(
                     'Life cycle items cannot directly be overridden')
@@ -243,6 +314,10 @@ class OtpMemImg(OtpMemMap):
                 raise RuntimeError(
                     'Life cycle transition counter can only be zero in the RAW state'
                 )
+
+            # Remember the state so that we can validate the rest of the image
+            # against it once all configurations have been merged.
+            self.lc_state_name = str(part['state'])
 
             # Augment life cycle partition with correct life cycle encoding
             state = self.lc_state.encode('lc_state', str(part['state']))
@@ -262,7 +337,9 @@ class OtpMemImg(OtpMemMap):
         else:
             # Key accounting
             part_check = part.copy()
-            if len(part['items']) == 0:
+            # A partition that only locks itself and leaves the item values to
+            # a later overlay is a deliberate pattern, so don't warn about it.
+            if len(part['items']) == 0 and not part['lock']:
                 log.warning("Partition does not contain any items.")
 
         # Key accounting
@@ -281,20 +358,24 @@ class OtpMemImg(OtpMemMap):
 
         item_size = mmap_item['size']
         item_width = item_size * 8
+        mubi_str = ""
+        mubi_val_str = ""
 
         # if needed, resolve the mubi value first
         if mmap_item['ismubi']:
             mubi_str = "mubi "
             mubi_val_str = " kMultiBitBool{}".format(item_width)
             item.setdefault("value", "false")
-            item["value"] = check_bool(item["value"])
+            item["value"] = common.check_bool(item["value"])
             mubi_val_str += "True" if item["value"] else "False"
             item["value"] = mubi_value_as_int(item["value"], item_width)
+        elif item["name"] == "SOC_DBG_STATE":
+            item.setdefault("value", "0x0")
+            item["value"] = self.lc_state.encode("soc_dbg_state", item["value"])
         else:
-            mubi_str = ""
-            mubi_val_str = ""
             item.setdefault('value', '0x0')
-            random_or_hexvalue(item, 'value', item_width)
+            prng = SecurePrngFactory.get("otpmemimg")
+            common.random_or_hexvalue(prng, item, 'value', item_width)
 
         mmap_item['value'] = item['value']
 
@@ -401,16 +482,19 @@ class OtpMemImg(OtpMemMap):
                     data_blocks[k] = _present_64bit_encrypt(
                         data_blocks[k], key['value'])
 
-        # Check if digest calculation is needed
+        # Check if digest calculation is needed.
+        # The digest is stored after the data. It is the last block of a
+        # partition when the partition is not zeroizable and the penultimate
+        # if it is.
+        digest_idx = len(data_blocks) - 2 if part['zeroizable'] else len(data_blocks) - 1
         if part['hw_digest']:
             # Make sure that this HW-governed digest has not been
             # overridden manually
-            if data_blocks[-1] != 0:
+            if data_blocks[digest_idx] != 0:
                 raise RuntimeError(
                     'Digest of partition {} cannot be overridden manually'.
                     format(part_name))
 
-            # Digest is stored in last block of a partition
             if part.setdefault('lock', False):
                 log.info('> Lock partition by computing digest')
                 # Digest constants at index 0 are used to compute the
@@ -418,8 +502,8 @@ class OtpMemImg(OtpMemMap):
                 iv = self.config['scrambling']['digests'][0]['iv_value']
                 const = self.config['scrambling']['digests'][0]['cnst_value']
 
-                data_blocks[-1] = _present_64bit_digest(
-                    data_blocks[0:-1], iv, const)
+                data_blocks[digest_idx] = _present_64bit_digest(
+                    data_blocks[0:digest_idx], iv, const)
             else:
                 log.info(
                     '> Partition is not locked, hence no digest is computed')
@@ -441,7 +525,6 @@ class OtpMemImg(OtpMemMap):
 
     def validate_data_perm(self, data_perm):
         '''Validate data permutation option'''
-
         # Byte aligned total width after adding ECC bits
         secded_cfg = self.lc_state.config['secded']
         raw_bitlen = secded_cfg['data_width'] + secded_cfg['ecc_width']
@@ -451,23 +534,7 @@ class OtpMemImg(OtpMemMap):
         self.data_perm = list(
             range(total_bitlen)) if not data_perm else data_perm
 
-        # Check for bijectivity
-        if len(self.data_perm) != total_bitlen:
-            raise RuntimeError(
-                'Data permutation "{}" is not bijective, since'
-                'it does not have the same length as the data.'.format(
-                    data_perm))
-        for k in self.data_perm:
-            if k >= total_bitlen:
-                raise RuntimeError(
-                    'Data permutation "{}" is not bijective,'
-                    'since the index {} is out of bounds.'.format(
-                        data_perm, k))
-
-        if len(set(self.data_perm)) != total_bitlen:
-            raise RuntimeError(
-                'Data permutation "{}" is not bijective,'
-                'since it contains duplicated indices.'.format(data_perm))
+        common.validate_data_perm_option(total_bitlen, self.data_perm)
 
     def streamout_memfile(self) -> Tuple[str, int]:
         '''Streamout of memory image in MEM file format
@@ -499,3 +566,60 @@ class OtpMemImg(OtpMemMap):
 
         return _to_memfile_with_ecc(data, annotation, self.lc_state.config,
                                     self.data_perm)
+
+    def generate_c_file(self, fileheader: str, templatefile: Path) -> str:
+        '''Generates C file with provided `header` and `templatefile`.
+
+        Args:
+            fileheader: Header to be appended to autogenerated file.
+            templatefile: Mako template used to generate header file.
+        Returns:
+            Generated file in string format.
+        '''
+        data = {}
+        for part in self.config['partitions']:
+            if part.get('skip_sw_header'):
+                continue
+            items = []
+            for item in part["items"]:
+                if 'value' not in item.keys():
+                    continue
+
+                # Secret partitions connected to the keymgr haven 8-byte alignment, other partitions
+                # have a 4-byte alignment
+                alignment = 8 if common.check_bool(part["secret"]) else 4
+
+                # TODO: Handle aggregation of fields to match write boundary.
+                if item['size'] < alignment:
+                    continue
+                assert (item['size'] %
+                        alignment) == 0, "invalid field alignment"
+
+                # TODO: this is a bug in how reggen generates parameter defines
+                item_offset_name = item["name"] + "_OFFSET"
+                if item_offset_name == "ROT_CREATOR_AUTH_CODESIGN_BLOCK_SHA2_256_HASH_OFFSET":
+                    item_offset_name = "ROTCREATORAUTHCODESIGNBLOCKSHA2_256HASHOFFSET"
+
+                items.append({
+                    'name':
+                    item['name'],
+                    'offset_name':
+                    item_offset_name,
+                    'values':
+                    _int_to_hex_array(item['value'], item['size'], alignment),
+                    'ismubi':
+                    item['ismubi'],
+                    'num_items':
+                    item['size'] / alignment,
+                })
+            if len(items):
+                data[part['name']] = {
+                    'alignment': alignment,
+                    'items': items,
+                }
+
+        with open(templatefile, 'r') as tplfile:
+            tpl = Template(tplfile.read())
+            result = tpl.render(fileheader=fileheader, data=data)
+
+        return result

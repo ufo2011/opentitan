@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,60 @@ _SEL_MANUF_STATE_CREATOR = (1 << 8)
 _SEL_MANUF_STATE_OWNER = (1 << 9)
 _SEL_LIFE_CYCLE_STATE = (1 << 10)
 
+def product_expr(name, mask, value):
+    """Create a Product Expression JSON object.
+
+    Args:
+        name: The name of the product expression (unused).
+        mask: The mask for the product expression.
+        value: The value for the product expression.
+    Returns:
+        A dictionary representing the product expression.
+    """
+    return {
+        "mask": mask,
+        "value": value,
+    }
+
+def integrator_specific_firmware_binding(name, strike_mask, product_exprs):
+    """Create an Integrator Specific Firmware Block (ISFB) JSON object.
+
+    Args:
+        name: The name of the ISFB (unused).
+        strike_mask: The strike mask for the ISFB.
+        product_exprs: A list of product expressions for the ISFB.
+
+    Returns:
+        A JSON string representing the ISFB.
+    """
+    isfb = {}
+
+    if strike_mask:
+        isfb["strike_mask"] = strike_mask
+
+    if product_exprs:
+        if len(product_exprs) > 16:
+            fail("Too many product expressions ({}), maximum is 16.".format(len(product_exprs)))
+
+        isfb["product_expr"] = product_exprs
+
+    return json.encode(isfb)
+
+def isfb_erase_allowed_policy(name, erase_allowed):
+    """Create an ISFB Erase Allowed Policy JSON object.
+
+    Args:
+        name: The name of the policy (unused).
+        erase_allowed: A boolean indicating if erasing is allowed.
+
+    Returns:
+        A JSON string representing the policy.
+    """
+    return json.encode({"erase_allowed": erase_allowed})
+
 def _manifest_impl(ctx):
     mf = {}
+    mf_version = {}
 
     # All the easy parameters are simple assignments
     if ctx.attr.signature:
@@ -37,6 +89,13 @@ def _manifest_impl(ctx):
         mf["code_end"] = ctx.attr.code_end
     if ctx.attr.entry_point:
         mf["entry_point"] = ctx.attr.entry_point
+
+    if ctx.attr.manifest_version_major:
+        mf_version["major"] = ctx.attr.manifest_version_major
+    if ctx.attr.manifest_version_minor:
+        mf_version["minor"] = ctx.attr.manifest_version_minor
+    if mf_version:
+        mf["manifest_version"] = mf_version
 
     # Address Translation is a bool, but encoded as an int so we can have
     # a special value mean "unset" and so we can set to non-standard values
@@ -98,12 +157,83 @@ def _manifest_impl(ctx):
 
     mf["usage_constraints"] = uc
 
+    # Since the ROM / ROM_EXT definitions hardcode a single extension per slot,
+    # the order of these extensions must follow the `MANIFEST_EXTENSIONS` table
+    # defined in `/sw/device/silicon_creator/lib/manifest.h`.
+    extensions = [e or None for e in ctx.attr.extensions] if ctx.attr.extensions else [
+        "spx_key",
+        "spx_signature",
+        "secver_write",
+        "isfb",
+        "isfb_erase",
+        "owner_transfer_blob",
+        "mldsa87_key",
+        "mldsa87_signature",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ]
+
+    manifest_dependent_files = []
+    if ctx.file.owner_transfer_block:
+        manifest_dependent_files.append(ctx.file.owner_transfer_block)
+        if ctx.file.owner_transfer_detached_signature:
+            manifest_dependent_files.append(ctx.file.owner_transfer_detached_signature)
+
+    mf["extensions"] = extensions
+    mf["extension_params"] = []
+
+    if ctx.file.owner_transfer_block:
+        params = {
+            "owner_block": ctx.file.owner_transfer_block.path,
+        }
+        if ctx.file.owner_transfer_detached_signature:
+            params["detached_signature"] = ctx.file.owner_transfer_detached_signature.path
+        mf["extension_params"].append({
+            "owner_transfer_blob": params,
+        })
+
+    if ctx.attr.integrator_specific_firmware_binding:
+        mf["extension_params"].append(
+            {
+                "integrator_specific_firmware_binding": json.decode(ctx.attr.integrator_specific_firmware_binding),
+            },
+        )
+
+    secver_write = ctx.attr.secver_write
+    if secver_write == "none":
+        # nothing to do
+        pass
+    elif secver_write in ("false", "true"):
+        mf["extension_params"].append(
+            {
+                "secver_write": {
+                    "secver_write": json.decode(secver_write),
+                },
+            },
+        )
+    else:
+        fail("Unknown value for secver_write:", secver_write)
+
+    if ctx.attr.isfb_erase_allowed_policy:
+        mf["extension_params"].append(
+            {
+                "isfb_erase_policy": json.decode(ctx.attr.isfb_erase_allowed_policy),
+            },
+        )
+
     file = ctx.actions.declare_file("{}.json".format(ctx.attr.name))
     ctx.actions.write(file, json.encode_indent(mf))
-    return DefaultInfo(
-        files = depset([file]),
-        data_runfiles = ctx.runfiles(files = [file]),
-    )
+    return [
+        DefaultInfo(
+            files = depset([file]),
+            data_runfiles = ctx.runfiles(files = [file] + manifest_dependent_files),
+        ),
+    ]
 
 _manifest = rule(
     implementation = _manifest_impl,
@@ -119,6 +249,8 @@ _manifest = rule(
         "life_cycle_state": attr.string(doc = "Usage constraint for life cycle status as a 0x-prefixed hex-encoded string"),
         "address_translation": attr.string(doc = "Whether this image uses address translation as a 0x-prefixed hex-encoded string"),
         "identifier": attr.string(doc = "Manifest identifier as a 0x-prefixed hex-encoded string"),
+        "manifest_version_major": attr.string(doc = "Manifest major version as a 0x-prefixed hex-encoded string"),
+        "manifest_version_minor": attr.string(doc = "Manifest minor version as a 0x-prefixed hex-encoded string"),
         "length": attr.string(doc = "Length of this image as a 0x-prefixed hex-encoded string"),
         "version_major": attr.string(doc = "Image major version as a 0x-prefixed hex-encoded string"),
         "version_minor": attr.string(doc = "Image minor version as a 0x-prefixed hex-encoded string"),
@@ -129,6 +261,12 @@ _manifest = rule(
         "code_start": attr.string(doc = "Start offset of the executable region in the image as a 0x-prefixed hex-encoded string"),
         "code_end": attr.string(doc = "End offset of the executable region in the image as a 0x-prefixed hex-encoded string"),
         "entry_point": attr.string(doc = "Offset of the first instruction in the image as a 0x-prefixed hex-encoded string"),
+        "extensions": attr.string_list(doc = "Names of the manifest extensions as an array of strings"),
+        "integrator_specific_firmware_binding": attr.string(doc = "Create an Integrator Specific Firmware Block (ISFB) JSON object"),
+        "isfb_erase_allowed_policy": attr.string(doc = "Create an ISFB Erase Allowed Policy JSON object"),
+        "secver_write": attr.string(default = "none", values = ["none", "false", "true"], doc = "Add the secver_write extension with the specified value"),
+        "owner_transfer_block": attr.label(allow_single_file = True, doc = "The owner block file to include for transfer"),
+        "owner_transfer_detached_signature": attr.label(allow_single_file = True, doc = "The detached signature of the owner block"),
     },
 )
 

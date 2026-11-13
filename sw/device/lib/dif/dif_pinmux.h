@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,8 @@
 
 /**
  * @file
- * @brief <a href="/hw/ip/pinmux/doc/">Pin Multiplexer</a> Device Interface
- * Functions
+ * @brief <a href="/hw/top_earlgrey/ip_autogen/pinmux/doc/">Pin Multiplexer</a>
+ * Device Interface Functions
  */
 
 /**
@@ -145,6 +145,7 @@ typedef enum dif_pinmux_pad_attr_flags {
   kDifPinmuxPadAttrKeeper = 1 << 4,
   kDifPinmuxPadAttrSchmittTrigger = 1 << 5,
   kDifPinmuxPadAttrOpenDrain = 1 << 6,
+  kDifPinmuxPadAttrInputDisable = 1 << 7,
 } dif_pinmux_pad_attr_flags_t;
 
 /**
@@ -336,6 +337,52 @@ dif_result_t dif_pinmux_output_select(const dif_pinmux_t *pinmux,
                                       dif_pinmux_index_t outsel);
 
 /**
+ * Sets a connection between a peripheral input and a MIO pad input.
+ *
+ * A peripheral input can be connected to any available MIO pad input.
+ *
+ * @param pinmux A Pin Multiplexer handle.
+ * @param pad A pad.
+ * @param periph_io A peripheral I/O.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_pinmux_mio_select_input(const dif_pinmux_t *pinmux,
+                                         dt_periph_io_t periph_io,
+                                         dt_pad_t pad);
+
+/**
+ * Sets a connection between a MIO pad output and peripheral output.
+ *
+ * A MIO pad output can be connected to any available peripheral output.
+ *
+ * @param pinmux A Pin Multiplexer handle.
+ * @param pad A pad.
+ * @param periph_io A peripheral I/O.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_pinmux_mio_select_output(const dif_pinmux_t *pinmux,
+                                          dt_pad_t pad,
+                                          dt_periph_io_t periph_io);
+
+/** Convert a `dt_pad_t` into a pair (`dif_pinmux_index_t`,
+ * `dif_pinmux_pad_kind_t`) that can be used for pad control functions
+ * (`dif_pinmux_pad_*` functions).
+ *
+ * This function is there to handle legacy calls to various pad functions.
+ *
+ * @param pad A pad.
+ * @param index_out[out] The index of this pad.
+ * @param type_out[out] The type of pad.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_pinmux_pad_from_dt_pad(dt_pad_t pad,
+                                        dif_pinmux_index_t *index_out,
+                                        dif_pinmux_pad_kind_t *type_out);
+
+/**
  * Writes attributes for a pad.
  *
  * This function completely overwrites the existing configuration of a pad, and
@@ -344,8 +391,13 @@ dif_result_t dif_pinmux_output_select(const dif_pinmux_t *pinmux,
  * Not all pads implement all attributes and some combinations cannot be
  * enabled together. This function returns a `kDifBadArg` error in case of
  * invalid `attrs_in`.
- * Conflicting attributes will be discarded by the hardware, and can be
- * identified by comparing `attrs_in` to `attrs_out`.
+ * Not all target platforms support all attribute values and the underlying
+ * hardware registers implement Write-Any Read-Legal (WARL) semantics. For
+ * example, the maximum supported slew rate and drive strength may vary between
+ * platforms. If the specified attribute values are valid but not supported by
+ * the hardware, this function returns `kDifError` and the caller needs to
+ * decide on how to resolve the situation. Unsupported or conflicting attribute
+ * values can be identified by comparing `attrs_in` to `attrs_out`.
  *
  * IMPORTANT:
  * See `dif_pinmux_pad_attr` for information on which attributes are compulsory
@@ -367,6 +419,18 @@ dif_result_t dif_pinmux_pad_write_attrs(const dif_pinmux_t *pinmux,
                                         dif_pinmux_pad_attr_t *attrs_out);
 
 /**
+ * Write attributes for a pad.
+ *
+ * See `dif_pinmux_pad_write_attrs` except that the pad is represented by
+ * a `dt_pad_t` instead of a pair (index,type).
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_pinmux_pad_write_attrs_dt(const dif_pinmux_t *pinmux,
+                                           dt_pad_t pad,
+                                           dif_pinmux_pad_attr_t attrs_in,
+                                           dif_pinmux_pad_attr_t *attrs_out);
+
+/**
  * Get attributes for a pad.
  *
  * @param pinmux A Pin Multiplexer handle.
@@ -380,6 +444,16 @@ dif_result_t dif_pinmux_pad_get_attrs(const dif_pinmux_t *pinmux,
                                       dif_pinmux_index_t pad,
                                       dif_pinmux_pad_kind_t type,
                                       dif_pinmux_pad_attr_t *attrs);
+
+/**
+ * Get attributes for a pad.
+ *
+ * See `dif_pinmux_pad_get_attrs` except that the pad is represented by
+ * a `dt_pad_t` instead of a pair (index,type).
+ */
+dif_result_t dif_pinmux_pad_get_attrs_dt(const dif_pinmux_t *pinmux,
+                                         dt_pad_t pad,
+                                         dif_pinmux_pad_attr_t *attrs);
 
 /**
  * Enables deep sleep mode of a particular pad.

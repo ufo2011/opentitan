@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,21 +9,21 @@
 // the originally written data is returned. This sequence runs forever, i.e.
 // it needs to be forked off as a separate thread. It can be stopped gracefully
 // by invoking the seq_stop() method.
-class tl_device_seq #(type REQ = tl_seq_item) extends dv_base_seq #(
+class tl_device_seq #(type REQ = tl_seq_item, int unsigned AddrWidth = 32) extends dv_base_seq #(
     .REQ        (REQ),
     .CFG_T      (tl_agent_cfg),
     .SEQUENCER_T(tl_sequencer));
 
   // if enabled, rsp will be aborted if it's not accepted after given valid length
-  rand bit                 rsp_abort_after_d_valid_len;
+  rand bit                                         rsp_abort_after_d_valid_len;
   // chance to abort rsp
-  int                      rsp_abort_pct = 0;
+  int                                              rsp_abort_pct = 0;
 
-  int                      min_rsp_delay = 0;
-  int                      max_rsp_delay = 10;
-  mem_model_pkg::mem_model mem;
-  REQ                      req_q[$];
-  bit                      out_of_order_rsp = 0;
+  int                                              min_rsp_delay = 0;
+  int                                              max_rsp_delay = 10;
+  mem_model_pkg::mem_model#(.AddrWidth(AddrWidth)) mem;
+  REQ                                              req_q[$];
+  bit                                              out_of_order_rsp = 0;
 
   // Stops running this sequence.
   protected bit stop;
@@ -31,7 +31,7 @@ class tl_device_seq #(type REQ = tl_seq_item) extends dv_base_seq #(
   // chance to set d_error
   int                      d_error_pct = 0;
 
-  `uvm_object_param_utils(tl_device_seq #(REQ))
+  `uvm_object_param_utils(tl_device_seq #(REQ, AddrWidth))
   `uvm_object_new
 
   constraint en_req_abort_after_d_valid_len_c {
@@ -53,6 +53,11 @@ class tl_device_seq #(type REQ = tl_seq_item) extends dv_base_seq #(
         disable fork;
       end
     join
+
+    // Clear the stop flag. It must be set (because collect_request_thread and send_response_thread
+    // don't stop otherwise). Clear it to allow a virtual sequence to start the same sequence object
+    // again if it wishes.
+    stop = 0;
   endtask
 
   // A blocking task that retrieves a request from the TLM fifo, unless the seq is stopped.
@@ -104,17 +109,22 @@ class tl_device_seq #(type REQ = tl_seq_item) extends dv_base_seq #(
       REQ req, rsp;
       wait(req_q.size > 0);
       if (out_of_order_rsp) req_q.shuffle();
-      req = req_q[0];  // 'peek' pop_front.
+
+      // peek at the front of the queue, but don't pop it: we want to see it again if the
+      // rsp_completed flag doesn't get set.
+      req = req_q[0];
       `downcast(rsp, req.clone())
+
       randomize_rsp(rsp);
       post_randomize_rsp(rsp);
       update_mem(rsp);
       start_item(rsp);
       finish_item(rsp);
       get_response(rsp);
+
       // Remove from req_q if response is completed.
       if (rsp.rsp_completed) begin
-        req_q = req_q[1:$];
+        void'(req_q.pop_front());
         `uvm_info(`gfn, $sformatf("Sent rsp[%0d] : %0s, req: %0s",
                                   rsp_cnt, rsp.convert2string(), req.convert2string()), UVM_HIGH)
         rsp_cnt++;

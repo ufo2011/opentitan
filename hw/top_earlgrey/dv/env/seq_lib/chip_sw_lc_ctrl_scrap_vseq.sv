@@ -1,7 +1,7 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
-class chip_sw_lc_ctrl_scrap_vseq extends chip_sw_base_vseq;
+class chip_sw_lc_ctrl_scrap_vseq extends chip_sw_lc_base_vseq;
   `uvm_object_utils(chip_sw_lc_ctrl_scrap_vseq)
   `uvm_object_new
 
@@ -37,7 +37,7 @@ class chip_sw_lc_ctrl_scrap_vseq extends chip_sw_base_vseq;
 
       // source state is randomized by default,
       // but if a plusarg is supplied, assign the given value
-      `DV_GET_ENUM_PLUSARG(lc_ctrl_state_pkg::dec_lc_state_e, src_state, src_dec_state)
+      `DV_GET_ENUM_PLUSARG(lc_ctrl_state_pkg::dec_lc_state_e, src_state, "src_dec_state")
       `uvm_info(`gfn, $sformatf("Source state is %0s", src_state.name), UVM_MEDIUM)
     end
   endfunction : pre_randomize
@@ -49,42 +49,47 @@ class chip_sw_lc_ctrl_scrap_vseq extends chip_sw_base_vseq;
     `DV_CHECK_FATAL(src_state != DecLcStScrap)
   endfunction : post_randomize
 
-  virtual task pre_start();
-    cfg.chip_vif.tap_straps_if.drive(JtagTapLc);
-    super.pre_start();
-  endtask : pre_start
-
   virtual function void backdoor_override_otp();
     // Override the LC partition to TestLocked1 state.
-    cfg.mem_bkdr_util_h[Otp].otp_write_lc_partition_state(
+    otp_write_lc_partition_state(
+        cfg.mem_bkdr_util_h[Otp],
         lc_ctrl_dv_utils_pkg::encode_lc_state(src_state));
   endfunction : backdoor_override_otp
 
-  virtual task dut_init(string reset_kind = "HARD");
-    super.dut_init(reset_kind);
-    backdoor_override_otp();
-  endtask : dut_init
-
   protected task sync_with_sw();
-    `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusBooted)
-    `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInTest)
+    if (is_cpu_enabled_lc_state(lc_ctrl_dv_utils_pkg::encode_lc_state(src_state))) begin
+      `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusBooted)
+      `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInTest)
+    end
   endtask : sync_with_sw
 
   protected task perform_transition_to_scrap();
+    // if JTAG - wait until booter is done
+    //           need to ensure the booter finished copying values
+    //           from OTP to AST before performing external clock
+    //           transition
+    // if SW   - wait until in test
+    //
+    // Either way, sync with SW here
+    sync_with_sw();
+
     // perform transition through JTAG if we're not using SW transition
     // or if SW transition isn't allowed (RAW/TEST_LOCKED*)
     if (!perform_transition_via_sw) begin : jtag_transition
+      // Change to the external clock and
       // acquire the LC controller access to registers
-      wait_lc_ready(.allow_err(1));
+      switch_to_external_clock();
 
       // perform a LC state transition
       jtag_lc_state_transition(src_state, DecLcStScrap);
     end : jtag_transition
 
-    // else, we're performing the transition though SW
+    // else, we're performing the transition through SW
     else begin : sw_transition
-      // sync with SW, and let perform the transition
-      sync_with_sw();
+      // syncing with SW already done above,
+      // and SW has to execute the transition,
+      // so go on and wait for the transition to end
+      #0;
     end : sw_transition
 
     // wait for transition to end
@@ -96,16 +101,11 @@ class chip_sw_lc_ctrl_scrap_vseq extends chip_sw_base_vseq;
     apply_reset();
   endtask : perform_transition_to_scrap
 
-  task cpu_init();
-    super.cpu_init();
-
-    // tell SW whether the transition is done by JTAG or SW
-    sw_symbol_backdoor_overwrite("kPerformTransitionBySW", {perform_transition_via_sw});
-  endtask : cpu_init
-
   virtual task body();
     bit [BUS_DW-1:0] state;
     super.body();
+    // tell SW whether the transition is done by JTAG or SW
+    sw_symbol_backdoor_overwrite("kPerformTransitionBySW", {perform_transition_via_sw});
 
     // perform the transition to SCRAP state
     perform_transition_to_scrap();
@@ -116,7 +116,7 @@ class chip_sw_lc_ctrl_scrap_vseq extends chip_sw_base_vseq;
 
     // read the LC state from the LC controller and
     // check LC state is indeed in SCRAP
-    jtag_riscv_agent_pkg::jtag_read_csr(ral.lc_ctrl.lc_state.get_offset(),
+    jtag_riscv_agent_pkg::jtag_read_csr(ral.lc_ctrl_regs.lc_state.get_offset(),
                                         p_sequencer.jtag_sequencer_h, state);
     `DV_CHECK_EQ(state, {DecLcStateNumRep{DecLcStScrap}})
   endtask : body

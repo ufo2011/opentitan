@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,7 +33,7 @@ class spi_host_event_vseq extends spi_host_tx_rx_vseq;
     program_spi_host_regs();
     check_event(ral.status.ready, 1, 1);
 
-    while (segms_words <=  spi_host_ctrl_reg.tx_watermark)  begin
+    while (segms_words < spi_host_ctrl_reg.tx_watermark) begin
       gen_trans();
     end
     check_event(ral.status.txwm, 0, 0);
@@ -58,7 +58,7 @@ class spi_host_event_vseq extends spi_host_tx_rx_vseq;
     fork
       begin : isolation_fork
         fork
-          start_reactive_seq();
+          start_agent_reactive_seqs();
         join_none
 
         begin
@@ -95,7 +95,6 @@ class spi_host_event_vseq extends spi_host_tx_rx_vseq;
 
   virtual task gen_trans();
     generate_transaction();
-    segment = new();
     while (transaction.segments.size() > 0) begin
       segment = transaction.segments.pop_back();
       if (segment.command_reg.direction != RxOnly) begin

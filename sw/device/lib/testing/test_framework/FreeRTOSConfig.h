@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,7 +26,11 @@
 #define configCHECK_FOR_STACK_OVERFLOW 1
 #define configMINIMAL_STACK_SIZE 256  // in words
 #define configSTACK_DEPTH_TYPE uint16_t
+#ifndef OT_COVERAGE_INSTRUMENTED
 #define configTOTAL_HEAP_SIZE ((size_t)0x8000u)
+#else  // OT_COVERAGE_INSTRUMENTED
+#define configTOTAL_HEAP_SIZE ((size_t)0x800u)
+#endif
 #define configUSE_MALLOC_FAILED_HOOK 1
 
 // Other

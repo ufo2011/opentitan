@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -111,7 +111,9 @@ module spi_readcmd
   input rst_ni,
 
   input clk_out_i, // Output clock (inverted SPI_CLK)
+  input rst_out_ni, // Reset safely timed for output clock
 
+  input sys_clk_i,
   input sys_rst_ni, // System reset for buffer tracking pointers
 
   // From Command Parser
@@ -143,6 +145,9 @@ module spi_readcmd
 
   // Double buffering in bytes
   input [SramBufferAw-1:0] readbuf_threshold_i,
+
+  // Clear read buffer address tracker.
+  input sys_readbuf_clr_i,
 
   // The command mode is 4B mode. Every read command receives 4B address
   input addr_4b_en_i,
@@ -191,14 +196,10 @@ module spi_readcmd
     cmd_info_i.opcode,          // Does not need to check opcode. (fixed slot)
     cmd_info_i.payload_dir,     // Always output mode
     cmd_info_i.payload_swap_en, // Used in passthrough mode only
+    cmd_info_i.read_pipeline_mode,
     cmd_info_i.upload,
     cmd_info_i.busy
     };
-
-  `ASSERT(ValidCmdConfig_A,
-          main_st == MainAddress |-> (cmd_info_i.addr_mode != AddrDisabled)
-          && cmd_info_i.payload_dir == PayloadOut
-          && cmd_info_i.valid)
 
   /////////////////
   // Definitions //
@@ -259,6 +260,11 @@ module spi_readcmd
     MainError
   } main_st_e;
   main_st_e main_st, main_st_d;
+
+  `ASSERT(ValidCmdConfig_A,
+          main_st == MainAddress |-> (cmd_info_i.addr_mode != AddrDisabled &&
+                                      cmd_info_i.payload_dir == PayloadOut &&
+                                      cmd_info_i.valid))
 
   /////////////
   // Signals //
@@ -376,7 +382,6 @@ module spi_readcmd
     addr_d = addr_q; // default value. In 3B mode, upper most byte is 0
     addr_latch_en = 1'b0;
 
-    // TODO: Handle the case of IO command
     if (addr_ready_in_word) begin
       // Return word based address, but should not latch
       addr_d = {addr_q[23:0], s2p_byte_i[5:0], 2'b00};
@@ -417,7 +422,7 @@ module spi_readcmd
     .q_negedge_pulse_o (              )
   );
 
-  assign cmdinfo_addr_mode = get_addr_mode(cmd_info_i, addr_4b_en_i);
+  assign cmdinfo_addr_mode = get_addr_mode(cmd_info_i.addr_mode, addr_4b_en_i);
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -438,7 +443,6 @@ module spi_readcmd
       // already counts one beat.
       addr_cnt_d = (cmdinfo_addr_mode == Addr4B) ? 5'd 31 : 5'd 23;
 
-      // TODO: Dual IO/ Quad IO case
     end else if (addr_cnt_q == '0) begin
       addr_cnt_d = addr_cnt_q;
     end else if (addr_shift_en) begin
@@ -527,8 +531,8 @@ module spi_readcmd
 
   // outclk latch
   // can't put async fifo. DC constraint should have half clk datapath
-  always_ff @(posedge clk_out_i or negedge rst_ni) begin
-    if (!rst_ni) begin
+  always_ff @(posedge clk_out_i or negedge rst_out_ni) begin
+    if (!rst_out_ni) begin
       p2s_valid_o <= 1'b 0;
       p2s_byte_o  <= '0 ;
     end else begin
@@ -559,7 +563,6 @@ module spi_readcmd
   end
 
   // readbuf_flip
-  // TODO: implement. Below is temporary.
   assign readbuf_flip = (main_st == MainOutput && addr_q[9:0] == '1);
 
   //- END:   Double Buffering -------------------------------------------------
@@ -613,7 +616,6 @@ module spi_readcmd
       MainAddress: begin
         addr_shift_en = 1'b 1;
 
-        // TODO: DualIO/ QuadIO case
         if (addr_ready_in_word) begin
           sram_req = 1'b 1;
         end
@@ -645,8 +647,6 @@ module spi_readcmd
             2'b 1?: begin
               // Regardless of Dummy
               main_st_d = MainMByte;
-
-              // TODO: Set MByte latency (3 or 1)
             end
 
             default: begin
@@ -698,7 +698,6 @@ module spi_readcmd
 
           // sent all words
           bitcnt_update = 1'b 1;
-          // TODO: FIFO pop here?
           fifo_pop = 1'b 1;
         end
       end
@@ -739,7 +738,7 @@ module spi_readcmd
 
     .sram_read_req_i   (sram_req),
     .addr_latched_i    (addr_latched),
-    .current_address_i (addr_d), // TODO: Change it
+    .current_address_i (addr_d),
 
     .mailbox_en_i,
     .mailbox_addr_i,
@@ -760,7 +759,9 @@ module spi_readcmd
     .clk_i,
     .rst_ni,
 
+    .sys_clk_i,
     .sys_rst_ni,
+    .sys_clr_i (sys_readbuf_clr_i),
 
     .spi_mode_i,
 

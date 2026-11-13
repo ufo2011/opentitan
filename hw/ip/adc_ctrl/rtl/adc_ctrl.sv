@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -9,14 +9,16 @@
 module adc_ctrl
   import adc_ctrl_reg_pkg::*;
 #(
-  parameter logic [NumAlerts-1:0] AlertAsyncOn = {NumAlerts{1'b1}}
+  parameter logic [NumAlerts-1:0] AlertAsyncOn = {NumAlerts{1'b1}},
+  // Number of cycles a differential skew is tolerated on the alert signal
+  parameter int unsigned AlertSkewCycles = 1
 ) (
   input clk_i,      // regular core clock for SW config interface
   input clk_aon_i,  // always-on slow clock for internal logic
   input rst_ni,     // power-on hardware reset
   input rst_aon_ni, // power-on reset for the 200KHz clock(logic)
 
-  // Regster interface
+  // Register interface
   input  tlul_pkg::tl_h2d_t tl_i,
   output tlul_pkg::tl_d2h_t tl_o,
 
@@ -34,7 +36,7 @@ module adc_ctrl
   input  ast_pkg::adc_ast_rsp_t adc_i,
 
   // Interrupt indicates a matching or measurement is done
-  output logic intr_match_done_o,
+  output logic intr_match_pending_o,
 
   // Pwrmgr interface
   // Debug cable is detected; wake up the chip in normal sleep and deep sleep mode
@@ -51,6 +53,7 @@ module adc_ctrl
   for (genvar i = 0; i < NumAlerts; i++) begin : gen_alert_tx
     prim_alert_sender #(
       .AsyncOn(AlertAsyncOn[i]),
+      .SkewCycles(AlertSkewCycles),
       .IsFatal(1'b1)
     ) u_prim_alert_sender (
       .clk_i,
@@ -75,8 +78,7 @@ module adc_ctrl
     .reg2hw(reg2hw),
     .hw2reg(hw2reg),
     // SEC_CM: BUS.INTEGRITY
-    .intg_err_o(alerts[0]),
-    .devmode_i(1'b1)
+    .intg_err_o(alerts[0])
   );
 
   // Instantiate DCD core module
@@ -91,13 +93,14 @@ module adc_ctrl
     .adc_intr_status_o(hw2reg.adc_intr_status),
     .aon_filter_status_o(hw2reg.filter_status),
     .wkup_req_o,
-    .intr_o(intr_match_done_o),
+    .intr_o(intr_match_pending_o),
     .adc_i(adc_i),
-    .adc_o(adc_o)
+    .adc_o(adc_o),
+    .aon_fsm_state_o(hw2reg.adc_fsm_state.d)
   );
 
   // All outputs should be known value after reset
-  `ASSERT_KNOWN(IntrKnown, intr_match_done_o)
+  `ASSERT_KNOWN(IntrKnown, intr_match_pending_o)
   `ASSERT_KNOWN(WakeKnown, wkup_req_o)
   `ASSERT_KNOWN(TlODValidKnown, tl_o.d_valid)
   `ASSERT_KNOWN(TlOAReadyKnown, tl_o.a_ready)

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,9 +26,10 @@ class otbn_env_cfg extends cip_base_env_cfg #(.RAL_T(otbn_reg_block));
   virtual otbn_rf_base_if    rf_base_vif;
   virtual otbn_escalate_if   escalate_vif;
   virtual otbn_rnd_if        rnd_vif;
+  virtual otbn_ssctrl_if     ssctrl_vif;
 
-  mem_bkdr_util imem_util;
-  mem_bkdr_util dmem_util;
+  sram_ctrl_bkdr_util imem_util;
+  sram_ctrl_bkdr_util dmem_util;
 
   // A handle to the scoreboard, used to flag expected errors.
   otbn_scoreboard scoreboard;
@@ -78,10 +79,8 @@ class otbn_env_cfg extends cip_base_env_cfg #(.RAL_T(otbn_reg_block));
     `DV_COMMON_CLK_CONSTRAINT(otp_freq_mhz)
   }
 
-  function void initialize(bit [31:0] csr_base_addr = '1);
+  virtual function void initialize(bit inherit_ral_models = 1'b0);
     num_edn = 2;
-    // Tell the CIP base code not to look for a "devmode" interface. OTBN doesn't have one.
-    has_devmode = 0;
 
     // Set the list of alerts, needed by the CIP base code. This needs to match the names assigned
     // in tb.sv (where we bind in the alert interfaces and register each with the UVM DB).
@@ -102,7 +101,7 @@ class otbn_env_cfg extends cip_base_env_cfg #(.RAL_T(otbn_reg_block));
     // Build OTP Key cfg object
     key_cfg = otp_key_agent_cfg::type_id::create("key_cfg");
 
-    super.initialize(csr_base_addr);
+    super.initialize(inherit_ral_models);
 
     // We can only have one outstanding TL item
     m_tl_agent_cfg.max_outstanding_req = 1;
@@ -122,8 +121,6 @@ class otbn_env_cfg extends cip_base_env_cfg #(.RAL_T(otbn_reg_block));
   // Constrain the randomness of FIPS for RND. This is needed because otherwise FIPS would have
   // a fifty percent chance of being low. That would result with OTBN getting a recoverable error
   // half the time.
-  // TODO (lowRISC/opentitan#11915): Model recoverable alert behaviour in ISS and add a test where
-  // we change the percentage of FIPS being high to check it.
   function void gen_rnd_edn_rsp();
     bit fips;
     bit [cip_base_pkg::EDN_BUS_WIDTH-1:0] entropy;
@@ -184,7 +181,8 @@ class otbn_env_cfg extends cip_base_env_cfg #(.RAL_T(otbn_reg_block));
     idx_arr = new[ImemIndexWidth]; idx_arr = {<<{idx}};
 
     // Scramble the index to find the word in physical memory
-    phys_idx_arr = sram_scrambler_pkg::encrypt_sram_addr(idx_arr, ImemIndexWidth, nonce_arr);
+    phys_idx_arr = sram_scrambler_pkg::encrypt_sram_addr(idx_arr, ImemIndexWidth,
+                                                         2**ImemIndexWidth, nonce_arr);
     phys_idx = {<<{phys_idx_arr}};
 
     // Read the memory at that location to get scrambled data
@@ -215,7 +213,8 @@ class otbn_env_cfg extends cip_base_env_cfg #(.RAL_T(otbn_reg_block));
     idx_arr = new[DmemIndexWidth]; idx_arr = {<<{idx}};
 
     // Scramble the index to find the word in physical memory
-    phys_idx_arr = sram_scrambler_pkg::encrypt_sram_addr(idx_arr, DmemIndexWidth, nonce_arr);
+    phys_idx_arr = sram_scrambler_pkg::encrypt_sram_addr(idx_arr, DmemIndexWidth,
+                                                         2**DmemIndexWidth, nonce_arr);
     phys_idx = {<<{phys_idx_arr}};
 
     // Read the memory at that location to get scrambled data
@@ -248,7 +247,8 @@ class otbn_env_cfg extends cip_base_env_cfg #(.RAL_T(otbn_reg_block));
     idx_arr = new[ImemIndexWidth]; idx_arr = {<<{idx}};
 
     // Scramble the index to find the word in physical memory
-    phys_idx_arr = sram_scrambler_pkg::encrypt_sram_addr(idx_arr, ImemIndexWidth, nonce_arr);
+    phys_idx_arr = sram_scrambler_pkg::encrypt_sram_addr(idx_arr, ImemIndexWidth,
+                                                         2**ImemIndexWidth, nonce_arr);
     phys_idx = {<<{phys_idx_arr}};
 
     // flip some bits to inject integrity fault
@@ -282,7 +282,8 @@ class otbn_env_cfg extends cip_base_env_cfg #(.RAL_T(otbn_reg_block));
     idx_arr = new[DmemIndexWidth]; idx_arr = {<<{idx}};
 
     // Scramble the index to find the word in physical memory
-    phys_idx_arr = sram_scrambler_pkg::encrypt_sram_addr(idx_arr, DmemIndexWidth, nonce_arr);
+    phys_idx_arr = sram_scrambler_pkg::encrypt_sram_addr(idx_arr, DmemIndexWidth,
+                                                         2**DmemIndexWidth, nonce_arr);
     phys_idx = {<<{phys_idx_arr}};
     // flip some bits to inject integrity fault
     clr_data ^= flip_bits;

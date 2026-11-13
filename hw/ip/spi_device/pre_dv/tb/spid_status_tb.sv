@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -139,7 +139,7 @@ module spid_status_tb;
     @(wel_update_done);
 
     // Expect SW to set WEL again.
-    // The SW request is comitted after a SPI transaction is received.
+    // The SW request is committed after a SPI transaction is received.
     // Sending read status command but expect WEL still 0.
     // Then next Read Status will return the correct value (WEL == 1)
 

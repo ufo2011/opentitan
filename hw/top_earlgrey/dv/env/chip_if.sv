@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 // One chip level interface to rule them all, and in the IOs, bind them...
@@ -32,55 +32,57 @@ interface chip_if;
   // TODO: Autogen this in top_<top>_pkg.
 `ifdef XCELIUM
   `define TOP_HIER          tb.dut.top_earlgrey
+  `define PD_MAIN_HIER      tb.dut.top_earlgrey.earlgrey_pd_main
+  `define PD_AON_HIER       tb.dut.top_earlgrey.earlgrey_pd_aon
 `else
   `define TOP_HIER          top_earlgrey
+  `define PD_MAIN_HIER      top_earlgrey.earlgrey_pd_main
+  `define PD_AON_HIER       top_earlgrey.earlgrey_pd_aon
 `endif
-`define ADC_CTRL_HIER       `TOP_HIER.u_adc_ctrl_aon
-`define AES_HIER            `TOP_HIER.u_aes
-`define ALERT_HANDLER_HIER  `TOP_HIER.u_alert_handler
-`define AON_TIMER_HIER      `TOP_HIER.u_aon_timer_aon
-`define AST_HIER            u_ast
-`define CLKMGR_HIER         `TOP_HIER.u_clkmgr_aon
-`define CPU_HIER            `TOP_HIER.u_rv_core_ibex
+`define ADC_CTRL_HIER       `PD_AON_HIER.u_adc_ctrl
+`define AES_HIER            `PD_MAIN_HIER.u_aes
+`define AES_CONTROL_HIER    `AES_HIER.u_aes_core.u_aes_control
+`define ALERT_HANDLER_HIER  `PD_MAIN_HIER.u_alert_handler
+`define AON_TIMER_HIER      `PD_AON_HIER.u_aon_timer
+`define CLKMGR_HIER         `PD_AON_HIER.u_clkmgr
+`define CPU_HIER            `PD_MAIN_HIER.u_rv_core_ibex
 `define CPU_CORE_HIER       `CPU_HIER.u_core
 `define CPU_TL_ADAPT_D_HIER `CPU_HIER.tl_adapter_host_d_ibex
-`define CSRNG_HIER          `TOP_HIER.u_csrng
-`define ENTROPY_SRC_HIER    `TOP_HIER.u_entropy_src
-`define EDN_HIER(i)         `TOP_HIER.u_edn``i
-`define FLASH_CTRL_HIER     `TOP_HIER.u_flash_ctrl
-`define GPIO_HIER           `TOP_HIER.u_gpio
-`define HMAC_HIER           `TOP_HIER.u_hmac
-`define I2C_HIER(i)         `TOP_HIER.u_i2c``i
+`define CSRNG_HIER          `PD_MAIN_HIER.u_csrng
+`define ENTROPY_SRC_HIER    `PD_MAIN_HIER.u_entropy_src
+`define EDN_HIER(i)         `PD_MAIN_HIER.u_edn``i
+`define RRAM_CTRL_HIER      `PD_MAIN_HIER.u_rram_ctrl
+`define RRAM_MACRO_HIER     `PD_MAIN_HIER.u_rram_macro
+`define GPIO_HIER(i)        `PD_MAIN_HIER.u_gpio``i
+`define HMAC_HIER           `PD_MAIN_HIER.u_hmac
+`define I2C_HIER(i)         `PD_MAIN_HIER.u_i2c``i
 `define IBEX_HIER           `CPU_CORE_HIER.u_ibex_core
 `define IBEX_CSRS_HIER      `IBEX_HIER.cs_registers_i
-`define KMAC_HIER           `TOP_HIER.u_kmac
-`define KEYMGR_HIER         `TOP_HIER.u_keymgr
-`define LC_CTRL_HIER        `TOP_HIER.u_lc_ctrl
-`define OTP_CTRL_HIER       `TOP_HIER.u_otp_ctrl
-`define OTBN_HIER           `TOP_HIER.u_otbn
-`define PATTGEN_HIER        `TOP_HIER.u_pattgen
-`define PINMUX_HIER         `TOP_HIER.u_pinmux_aon
-`define PWM_HIER            `TOP_HIER.u_pwm_aon
-`define PWRMGR_HIER         `TOP_HIER.u_pwrmgr_aon
-`define ROM_CTRL_HIER       `TOP_HIER.u_rom_ctrl
-`define RSTMGR_HIER         `TOP_HIER.u_rstmgr_aon
-`define RV_CORE_IBEX_HIER   `TOP_HIER.u_rv_core_ibex
-`define RV_DM_HIER          `TOP_HIER.u_rv_dm
-`define RV_PLIC_HIER        `TOP_HIER.u_rv_plic
-`define RV_TIMER_HIER       `TOP_HIER.u_rv_timer
-`define SENSOR_CTRL_HIER    `TOP_HIER.u_sensor_ctrl
-`define SPI_DEVICE_HIER     `TOP_HIER.u_spi_device
-`define SPI_HOST_HIER(i)    `TOP_HIER.u_spi_host``i
-`define SRAM_CTRL_MAIN_HIER `TOP_HIER.u_sram_ctrl_main
-`define SRAM_CTRL_RET_HIER  `TOP_HIER.u_sram_ctrl_ret_aon
-`define SYSRST_CTRL_HIER    `TOP_HIER.u_sysrst_ctrl_aon
-`define UART_HIER(i)        `TOP_HIER.u_uart``i
-`define USBDEV_HIER         `TOP_HIER.u_usbdev
+`define KMAC_HIER           `PD_MAIN_HIER.u_kmac
+`define KEYMGR_DPE_HIER     `PD_MAIN_HIER.u_keymgr_dpe
+`define LC_CTRL_HIER        `PD_MAIN_HIER.u_lc_ctrl
+`define OTP_CTRL_HIER       `PD_MAIN_HIER.u_otp_ctrl
+`define OTBN_HIER           `PD_MAIN_HIER.u_otbn
+`define PINMUX_HIER         `PD_AON_HIER.u_pinmux
+`define PWRMGR_HIER         `PD_AON_HIER.u_pwrmgr
+`define ROM_CTRL_HIER       `PD_MAIN_HIER.u_rom_ctrl
+`define RSTMGR_HIER         `PD_AON_HIER.u_rstmgr
+`define RV_CORE_IBEX_HIER   `PD_MAIN_HIER.u_rv_core_ibex
+`define RV_PLIC_HIER        `PD_MAIN_HIER.u_rv_plic
+`define RV_TIMER_HIER       `PD_MAIN_HIER.u_rv_timer
+`define SENSOR_CTRL_HIER    `PD_AON_HIER.u_sensor_ctrl
+`define SPI_DEVICE_HIER     `PD_MAIN_HIER.u_spi_device
+`define SPI_HOST_HIER(i)    `PD_MAIN_HIER.u_spi_host``i
+`define SRAM_CTRL_MAIN_HIER `PD_MAIN_HIER.u_sram_ctrl_main
+`define SRAM_CTRL_RET_HIER  `PD_AON_HIER.u_sram_ctrl_ret
+`define SYSRST_CTRL_HIER    `PD_AON_HIER.u_sysrst_ctrl
+`define UART_HIER(i)        `PD_MAIN_HIER.u_uart``i
+`define USBDEV_HIER         `PD_MAIN_HIER.u_usbdev
 
   // Identifier for logs.
   string MsgId = $sformatf("%m");
 
-  // Identifier for the envorinment to which this interface is passed on via uvm_config_db.
+  // Identifier for the environment to which this interface is passed on via uvm_config_db.
   string env_name = "env";
 
   // Directly connected to chip IOs.
@@ -94,10 +96,9 @@ interface chip_if;
   pins_if#(.Width(top_earlgrey_pkg::MioPadCount), .PullStrength("Weak")) mios_if(.pins(mios));
   pins_if#(.Width(top_earlgrey_pkg::DioPadCount), .PullStrength("Weak")) dios_if(.pins(dios));
 
-  // Functional (dedicated) interface (input): AST misc.
-  wire ast_misc;
-  pins_if #(.Width(1), .PullStrength("Weak")) ast_misc_if(.pins(ast_misc));
-
+  //Allow pull up from testbench on POR and PORA pads
+  bit por_external_pu = 1;
+  bit pora_external_pu = 1;
   // Weak pulls for DIOs.
   //
   // These weak pulls enable all DIOs to reflect a legal value. Active low signals are pulled up,
@@ -116,7 +117,14 @@ interface chip_if;
       dios_if.pins_pd = '1;
 
       // These are active low, so pull up.
-      dios_if.pins_pu[top_earlgrey_pkg::DioPadPorN] = 1;
+      void'($value$plusargs("por_external_pu=%0b", por_external_pu));
+      if (por_external_pu) begin
+        dios_if.pins_pu[top_earlgrey_pkg::DioPadPorN] = 1;
+      end
+      void'($value$plusargs("pora_external_pu=%0b", pora_external_pu));
+      if (pora_external_pu) begin
+        dios_if.pins_pu[top_earlgrey_pkg::DioPadPoraN] = 1;
+      end
       dios_if.pins_pu[top_earlgrey_pkg::DioPadUsbP] = 1;
       dios_if.pins_pu[top_earlgrey_pkg::DioPadIor8] = 1;
       dios_if.pins_pu[top_earlgrey_pkg::DioPadIor9] = 1;
@@ -137,6 +145,7 @@ interface chip_if;
   // Chip IOs must always either be undriven or driven to a known value. Xs indicate multiple
   // drivers, which is an issue likely caused by multiple functions simultaneously attempting to
   // control the shared (muxed) pads.
+  bit disable_mios_x_check = 0;
   for (genvar i = top_earlgrey_pkg::MioPadIoa0; i < top_earlgrey_pkg::MioPadCount; i++)
   begin : gen_mios_x_check
     wire glitch_free_io;
@@ -144,8 +153,8 @@ interface chip_if;
 
     top_earlgrey_pkg::mio_pad_e named_io = top_earlgrey_pkg::mio_pad_e'(i);
     always (* xprop_off *) @(glitch_free_io) begin
-      if (glitch_free_io === 1'bx) begin
-        `uvm_error(MsgId, $sformatf("Detected an X on %0s", named_io.name()))
+      if (glitch_free_io === 1'bx && disable_mios_x_check == 0) begin
+        `uvm_error(MsgId, $sformatf("Detected an X on %0s (num=%0d)", named_io.name(), i))
       end
     end
   end : gen_mios_x_check
@@ -180,6 +189,14 @@ interface chip_if;
   // Functional (dedicated) interface (input): power on reset input.
   pins_if #(.Width(1), .PullStrength("Weak")) por_n_if(.pins(dios[top_earlgrey_pkg::DioPadPorN]));
 
+  // Functional (dedicated) interface (input): VIOA power on reset input.
+  pins_if #(.Width(1), .PullStrength("Weak")) pora_n_if(
+    .pins(dios[top_earlgrey_pkg::DioPadPoraN])
+  );
+
+  // The chip power on reset is based on POR_N and PORA_N is generated inside AST.
+  wire chip_por_n = dios[top_earlgrey_pkg::DioPadPorN] & dios[top_earlgrey_pkg::DioPadPoraN];
+
   // Functional (dedicated) interface (inout): USB.
   // TODO!
 
@@ -188,20 +205,10 @@ interface chip_if;
     .pins(dios[top_earlgrey_pkg::DioPadCc2:top_earlgrey_pkg::DioPadCc1])
   );
 
-  // Functional (dedicated) interface (analog input): flash test volt.
-  pins_if #(.Width(1), .PullStrength("Weak")) flash_test_volt_if(
-    .pins(dios[top_earlgrey_pkg::DioPadFlashTestVolt])
-  );
-
-  // Functional (dedicated) interface (input): flash test mode0.
-  pins_if #(.Width(2), .PullStrength("Weak")) flash_test_mode_if(
-    .pins(dios[top_earlgrey_pkg::DioPadFlashTestMode1:top_earlgrey_pkg::DioPadFlashTestMode0])
-  );
-
-  // Functional (dedicated) interface (analog input): OTP ext volt.
-  pins_if #(.Width(1), .PullStrength("Weak")) otp_ext_volt_if(
-    .pins(dios[top_earlgrey_pkg::DioPadOtpExtVolt])
-  );
+  // Returns 1 for an undriven pad, as if the pad had a pull-up.
+  function automatic logic pulled_up(logic pad);
+    return (pad === 1'bz) ? 1'b1 : pad;
+  endfunction
 
   // Functional (dedicated) interface: SPI host interface (drives traffic into the chip).
   bit enable_spi_host = 1;
@@ -235,8 +242,11 @@ interface chip_if;
   assign spi_device0_if.sck = __enable_spi_device[0] ?
       dios[top_earlgrey_pkg::DioPadSpiHostClk] : 1'bz;
 
+  // CSB[0] is on a dedicated pad, CSB[1] and CSB[2] are muxed.  Undriven pads are inactive.
   assign spi_device0_if.csb = __enable_spi_device[0] ?
-      {'1, dios[top_earlgrey_pkg::DioPadSpiHostCsL]} : '1;
+      {{(spi_agent_pkg::CSB_WIDTH-3){1'b1}}, pulled_up(mios[top_earlgrey_pkg::MioPadIoa6]),
+       pulled_up(mios[top_earlgrey_pkg::MioPadIoa3]),
+       dios[top_earlgrey_pkg::DioPadSpiHostCsL]} : '1;
 
   initial begin
     uvm_config_db#(virtual spi_if)::set(null, "*.env.m_spi_device_agents0*", "vif", spi_device0_if);
@@ -258,8 +268,11 @@ interface chip_if;
   assign spi_device1_if.sck = __enable_spi_device[1] ?
       mios[top_earlgrey_pkg::MioPadIob0] : 1'bz;
 
+  // All CSB lines are muxed.  Undriven pads are inactive.
   assign spi_device1_if.csb = __enable_spi_device[1] ?
-      {'1, mios[top_earlgrey_pkg::MioPadIob1]} : '1;
+      {{(spi_agent_pkg::CSB_WIDTH-3){1'b1}}, pulled_up(mios[top_earlgrey_pkg::MioPadIoc10]),
+       pulled_up(mios[top_earlgrey_pkg::MioPadIob7]),
+       mios[top_earlgrey_pkg::MioPadIob1]} : '1;
 
   initial begin
     uvm_config_db#(virtual spi_if)::set(null, "*.env.m_spi_device_agents1*", "vif", spi_device1_if);
@@ -304,7 +317,7 @@ interface chip_if;
 
   // Functional (muxed) interface: DFT straps.
   pins_if #(.Width(2), .PullStrength("Weak")) dft_straps_if(
-    .pins(mios[top_earlgrey_pkg::MioPadIoc4:top_earlgrey_pkg::MioPadIoc3])
+    .pins({mios[top_earlgrey_pkg::MioPadIor7], mios[top_earlgrey_pkg::MioPadIor5]})
   );
 
   // Functional (muxed) interface: TAP straps.
@@ -324,11 +337,20 @@ interface chip_if;
   // same issue, except that it is sampled only once during power up.
   //
   // The pinmux version of lc_dft_en is used below because it goes through synchronizers.
+`ifdef GATE_LEVEL
+  wire pinmux_lc_dft_en =
+  (`PINMUX_HIER.u_pinmux_strap_sampling.u_prim_lc_sync_lc_dft_en.lc_en_o[3:0] == lc_ctrl_pkg::On);
+`else
   wire pinmux_lc_dft_en = (`PINMUX_HIER.u_pinmux_strap_sampling.lc_dft_en[0] == lc_ctrl_pkg::On);
+`endif
   wire pinmux_lc_hw_debug_en = `PINMUX_HIER.u_pinmux_strap_sampling.pinmux_hw_debug_en_o ==
                                lc_ctrl_pkg::On;
 
+`ifdef GATE_LEVEL
+  wire pwrmgr_fast_pwr_state_strap_en = `PINMUX_HIER.u_pinmux_strap_sampling.strap_en_q_reg.Q;
+`else
   wire pwrmgr_fast_pwr_state_strap_en = `PINMUX_HIER.u_pinmux_strap_sampling.strap_en_q;
+`endif
   initial begin
     fork
       forever @(pwrmgr_fast_pwr_state_strap_en or pinmux_lc_dft_en) begin
@@ -440,22 +462,6 @@ interface chip_if;
     end
   endfunction
 
-  // Functional (muxed) interface: Flash controller JTAG.
-  bit enable_flash_ctrl_jtag, flash_ctrl_jtag_enabled;
-  jtag_if flash_ctrl_jtag_if();
-
-  // TODO: Revisit this logic.
-  wire lc_hw_debug_en = (`LC_CTRL_HIER.lc_hw_debug_en_o == lc_ctrl_pkg::On);
-  assign flash_ctrl_jtag_enabled = enable_flash_ctrl_jtag && lc_hw_debug_en;
-  assign mios[top_earlgrey_pkg::MioPadIob0] = flash_ctrl_jtag_enabled ?
-      flash_ctrl_jtag_if.tms : 1'bz;
-  assign flash_ctrl_jtag_if.tdo = flash_ctrl_jtag_enabled ?
-      mios[top_earlgrey_pkg::MioPadIob1] : 1'bz;
-  assign mios[top_earlgrey_pkg::MioPadIob2] = flash_ctrl_jtag_enabled ?
-      flash_ctrl_jtag_if.tdi : 1'bz;
-  assign mios[top_earlgrey_pkg::MioPadIob3] = flash_ctrl_jtag_enabled ?
-      flash_ctrl_jtag_if.tck : 1'bz;
-
   // Functional (muxed) interface: AST2PAD.
   pins_if #(.Width(9), .PullStrength("Weak")) ast2pad_if(
     .pins({mios[top_earlgrey_pkg::MioPadIoa0], mios[top_earlgrey_pkg::MioPadIoa1],
@@ -520,12 +526,12 @@ interface chip_if;
 
   // {ioa7, ioa8}, {iob9, iob10}, {iob11, iob12} are the i2c connections
   localparam int AssignedI2cSclIos [NUM_I2CS]  = {
-    top_earlgrey_pkg::MioPadIoa7,
+    top_earlgrey_pkg::MioPadIoa8,
     top_earlgrey_pkg::MioPadIob9,
     top_earlgrey_pkg::MioPadIob11
   };
   localparam int AssignedI2cSdaIos [NUM_I2CS] = {
-    top_earlgrey_pkg::MioPadIoa8,
+    top_earlgrey_pkg::MioPadIoa7,
     top_earlgrey_pkg::MioPadIob10,
     top_earlgrey_pkg::MioPadIob12
   };
@@ -558,84 +564,78 @@ interface chip_if;
     __enable_i2c[inst_num] = enable;
   endfunction
 
-  // Functional (muxed) interface: PWM.
-  localparam int AssignedPwmIos[NUM_PWM_CHANNELS] = {
-      top_earlgrey_pkg::MioPadIob10, top_earlgrey_pkg::MioPadIob11, top_earlgrey_pkg::MioPadIob12,
-      top_earlgrey_pkg::MioPadIoc10, top_earlgrey_pkg::MioPadIoc11, top_earlgrey_pkg::MioPadIoc12
-  };
-
-  for (genvar i = 0; i < NUM_PWM_CHANNELS; i++) begin : gen_pwm_if_conn
-    pwm_if pwm_if(.clk  (`CLKMGR_HIER.clocks_o.clk_aon_powerup),
-                  .rst_n(`RSTMGR_HIER.resets_o.rst_lc_aon_n[0]),
-                  .pwm  (mios[AssignedPwmIos[i]]));
-
-    initial begin
-      uvm_config_db#(virtual pwm_if)::set(null, $sformatf("*.env.m_pwm_monitor%0d*", i), "vif",
-                                          pwm_if);
-    end
-  end : gen_pwm_if_conn
-
-  // Functional (muxed) interface: PATTGEN
-  // each channel has pda, pcl
-
-  bit __enable_pattgen = 0;
-
-  pattgen_if #(NUM_PATTGEN_CH) pattgen_if();
-  assign pattgen_if.rst_ni = `PATTGEN_HIER.rst_ni;
-  assign pattgen_if.clk_i  = `PATTGEN_HIER.clk_i;
-  assign pattgen_if.pda_tx = !__enable_pattgen ? {NUM_PATTGEN_CH{1'bz}} :
-                                                 {mios[top_earlgrey_pkg::MioPadIob11],
-                                                  mios[top_earlgrey_pkg::MioPadIob9]};
-  assign pattgen_if.pcl_tx = !__enable_pattgen ? {NUM_PATTGEN_CH{1'bz}} :
-                                                 {mios[top_earlgrey_pkg::MioPadIob12],
-                                                  mios[top_earlgrey_pkg::MioPadIob10]};
-
-  initial begin
-    uvm_config_db#(virtual pattgen_if)::set(null, "*.env.m_pattgen_agent*", "vif", pattgen_if);
-  end
-  function automatic void enable_pattgen(bit enable);
-    __enable_pattgen = enable;
-  endfunction
-
   // Functional (muxed) interface: external clock source.
   //
   // The reset port is passive only.
-  clk_rst_if#("ExtClkDriver") ext_clk_if(
-     .clk (mios[top_earlgrey_pkg::MioPadIoc6]),
-    .rst_n(dios[top_earlgrey_pkg::DioPadPorN])
+  clk_rst_if ext_clk_if(
+    .clk (mios[top_earlgrey_pkg::MioPadIoc6]),
+    .rst_n(chip_por_n)
   );
 
   // Internal probes / monitors.
-
+`ifdef GATE_LEVEL
+  wire sys_clk = 1'b0;
+  wire sys_rst_n = 1'b1;
+`else
   wire sys_clk = `CLKMGR_HIER.clocks_o.clk_main_powerup;
   wire sys_rst_n = `RSTMGR_HIER.resets_o.rst_sys_n[0];
+`endif
   clk_rst_if sys_clk_rst_if(.clk(sys_clk), .rst_n(sys_rst_n));
 
+`ifdef GATE_LEVEL
+  wire cpu_clk = `CPU_HIER.u_core.u_ibex_core.load_store_unit_i.ls_fsm_cs_reg_0_.CK;
+`else
   wire cpu_clk = `CPU_HIER.clk_i;
+`endif
   wire cpu_rst_n = `CPU_HIER.rst_ni;
   clk_rst_if cpu_clk_rst_if(.clk(cpu_clk), .rst_n(cpu_rst_n));
 
+`ifdef GATE_LEVEL
+  wire aon_clk = `CLKMGR_HIER.clocks_o_clk_aon_powerup;
+  wire aon_rst_n = `RSTMGR_HIER.resets_o_rst_por_aon_n_0_;
+`else
   wire aon_clk = `CLKMGR_HIER.clocks_o.clk_aon_powerup;
   wire aon_rst_n = `RSTMGR_HIER.resets_o.rst_por_aon_n[0];
+`endif
   clk_rst_if aon_clk_por_rst_if(.clk(aon_clk), .rst_n(aon_rst_n));
 
   wire usb_clk = `USBDEV_HIER.clk_i;
   wire usb_rst_n = `USBDEV_HIER.rst_ni;
   clk_rst_if usb_clk_rst_if(.clk(usb_clk), .rst_n(usb_rst_n));
 
+`ifdef GATE_LEVEL
+  wire io_div4_clk = 1'b0;
+  wire io_div4_rst_n = 1'b1;
+`else
   wire io_div4_clk = `CLKMGR_HIER.clocks_o.clk_io_div4_powerup;
   wire io_div4_rst_n = `RSTMGR_HIER.resets_o.rst_por_io_div4_n[0];
+`endif
   clk_rst_if io_div4_clk_rst_if(.clk(io_div4_clk), .rst_n(io_div4_rst_n));
 
-  wire lc_ready = `LC_CTRL_HIER.u_reg.u_status_ready.qs;
+`ifdef GATE_LEVEL
+  wire lc_ready = !`LC_CTRL_HIER.u_lc_ctrl_fsm.idle_o_BAR;
+`else
+  wire lc_ready = `LC_CTRL_HIER.u_reg_regs.u_status_ready.qs;
+`endif
 
   wire pwrmgr_low_power = `PWRMGR_HIER.low_power_o;
   wire pwrmgr_cpu_fetch_en = `PWRMGR_HIER.fetch_en_o == lc_ctrl_pkg::On;
-  wire pwrmgr_fast_pwr_state_active = `PWRMGR_HIER.u_fsm.state_q
+  wire pwrmgr_fast_pwr_state_active = `PWRMGR_HIER.u_fsm.u_state_regs.state_o
       == pwrmgr_pkg::FastPwrStateActive;
 
-  wire rom_ctrl_done = `PWRMGR_HIER.rom_ctrl_i.done == prim_mubi_pkg::MuBi4True;
-  wire rom_ctrl_good = `PWRMGR_HIER.rom_ctrl_i.good == prim_mubi_pkg::MuBi4True;
+`ifdef GATE_LEVEL
+  wire rom_ctrl_done = 0;
+  wire rom_ctrl_good = 0;
+
+  wire rv_core_ibex_icache_otp_key_req = 0;
+  wire rv_core_ibex_icache_otp_key_ack = 0;
+
+  wire sram_main_init_done = `SRAM_CTRL_MAIN_HIER.u_reg_regs.u_status_init_done.qs[0:0];
+  wire sram_ret_init_done = `SRAM_CTRL_RET_HIER.u_reg_regs.u_status_init_done.qs[0:0];
+
+`else
+  wire rom_ctrl_done = `PWRMGR_HIER.rom_ctrl_i[0].done == prim_mubi_pkg::MuBi4True;
+  wire rom_ctrl_good = `PWRMGR_HIER.rom_ctrl_i[0].good == prim_mubi_pkg::MuBi4True;
 
   wire rv_core_ibex_icache_otp_key_req = `RV_CORE_IBEX_HIER.icache_otp_key_o.req;
   wire rv_core_ibex_icache_otp_key_ack = `RV_CORE_IBEX_HIER.icache_otp_key_i.ack;
@@ -643,9 +643,44 @@ interface chip_if;
   wire sram_main_init_done = `SRAM_CTRL_MAIN_HIER.u_reg_regs.status_init_done_qs;
   wire sram_ret_init_done = `SRAM_CTRL_RET_HIER.u_reg_regs.status_init_done_qs;
 
-  wire flash_core1_host_req = `FLASH_CTRL_HIER.u_eflash.gen_flash_cores[1].u_core.host_req_i;
+`endif
+  wire adc_data_valid = `PD_AON_HIER.u_ast_part_secondary.adc_o.data_valid;
+  wire rram_rd_buf_rdy = ~((|`RRAM_CTRL_HIER.u_rram_phy.u_rram_phy_rd.buf_valid) ||
+                           (|`RRAM_CTRL_HIER.u_rram_phy.u_rram_phy_rd.buf_wip));
 
-  wire adc_data_valid = `AST_HIER.u_adc.adc_d_val_o;
+  task static force_adc_d_o(input bit [9:0] channel_val);
+    force `PD_AON_HIER.u_ast_part_secondary.adc_o.data = channel_val;
+  endtask
+
+  task static release_adc_d_o();
+    release `PD_AON_HIER.u_ast_part_secondary.adc_o.data;
+  endtask
+
+  // This task triggers a wakeup by forcing an incoming alert from AST to sensor_ctrl.
+  // It should be used when the device is in sleep mode, and the alert will be cleared by
+  // sensor_ctrl alert ack output.
+  task static trigger_sensor_ctrl_wkup();
+    `uvm_info(MsgId, "forcing sensor_ctrl ast_alert_i[0] to 1", UVM_MEDIUM)
+`ifdef GATE_LEVEL
+    force `SENSOR_CTRL_HIER.ast_alert_i[1:1] = 1'b1;
+`else
+    force `SENSOR_CTRL_HIER.ast_alert_i.alerts[0].p = 1'b1;
+`endif
+    // Release the alert when an ack cycle is done, so wait for ack to rise
+    // and release when it falls, with a timeout of 20 micro seconds.
+`ifdef GATE_LEVEL
+    `DV_WAIT(`SENSOR_CTRL_HIER.alert_event_p[0:0] == 1'b1, , 20_000_000, "chip_if")
+`else
+    `DV_WAIT(`SENSOR_CTRL_HIER.ast_alert_o.alerts_ack[0].p == 1'b1, , 20_000_000, "chip_if")
+`endif
+    `uvm_info(MsgId, "releasing sensor_ctrl ast_alert_i[0]", UVM_MEDIUM)
+    @(posedge `SENSOR_CTRL_HIER.clk_i);
+`ifdef GATE_LEVEL
+    release `SENSOR_CTRL_HIER.ast_alert_i[1:1];
+`else
+    release `SENSOR_CTRL_HIER.ast_alert_i.alerts[0].p;
+`endif
+  endtask
 
   // alert_esc_if alert_if[NUM_ALERTS](.clk  (`ALERT_HANDLER_HIER.clk_i),
   //                                   .rst_n(`ALERT_HANDLER_HIER.rst_ni));
@@ -657,16 +692,37 @@ interface chip_if;
                       .alerts(`ALERT_HANDLER_HIER.alert_trig));
 
   // TODO: use pwrmgr_low_power, internal aon clk / rst monitor instead.
-  pwrmgr_low_power_if pwrmgr_low_power_if(.clk     (`CLKMGR_HIER.clocks_o.clk_aon_powerup),
+  pwrmgr_low_power_if pwrmgr_low_power_if(
+`ifdef GATE_LEVEL
+                                          .clk     (0),
+                                          .fast_clk(0),
+                                          .rst_n   (1)
+`else
+                                          .clk     (`CLKMGR_HIER.clocks_o.clk_aon_powerup),
                                           .fast_clk(`CLKMGR_HIER.clocks_o.clk_io_div4_powerup),
-                                          .rst_n   (`RSTMGR_HIER.resets_o.rst_por_io_div4_n[0]));
+                                          .rst_n   (`RSTMGR_HIER.resets_o.rst_por_io_div4_n[0])
+`endif
+                                          );
   assign pwrmgr_low_power_if.low_power      = `PWRMGR_HIER.low_power_o;
-  assign pwrmgr_low_power_if.in_sleep       = `PWRMGR_HIER.u_fsm.state_q
+  assign pwrmgr_low_power_if.in_sleep       = `PWRMGR_HIER.u_fsm.u_state_regs.state_o
                                             == pwrmgr_pkg::FastPwrStateLowPower;
+`ifdef GATE_LEVEL
+  assign pwrmgr_low_power_if.deep_powerdown = 0;
+`else
   assign pwrmgr_low_power_if.deep_powerdown = ~`PWRMGR_HIER.pwr_ast_i.main_pok;
-
-  // clkmgr related: SW controlled clock gating contol signals reflecting the actual status
+`endif
+  // clkmgr related: SW controlled clock gating control signals reflecting the actual status
   // of these clocks.
+`ifdef GATE_LEVEL
+  wire aes_clk_is_enabled = 0;
+  wire hmac_clk_is_enabled = 0;
+  wire kmac_clk_is_enabled = 0;
+  wire otbn_clk_is_enabled = 0;
+
+  wire usbdev_clk_is_enabled = 0;
+  wire io_clk_is_enabled = 0;
+  wire io_div4_clk_is_enabled = 0;
+`else
   wire aes_clk_is_enabled = `CLKMGR_HIER.u_reg.hw2reg.clk_hints_status.clk_main_aes_val.d;
   wire hmac_clk_is_enabled = `CLKMGR_HIER.u_reg.hw2reg.clk_hints_status.clk_main_hmac_val.d;
   wire kmac_clk_is_enabled = `CLKMGR_HIER.u_reg.hw2reg.clk_hints_status.clk_main_kmac_val.d;
@@ -674,14 +730,91 @@ interface chip_if;
 
   wire usbdev_clk_is_enabled = `CLKMGR_HIER.u_reg.reg2hw.clk_enables.clk_usb_peri_en.q;
   wire io_clk_is_enabled = `CLKMGR_HIER.u_reg.reg2hw.clk_enables.clk_io_peri_en.q;
-  wire io_div2_clk_is_enabled = `CLKMGR_HIER.u_reg.reg2hw.clk_enables.clk_io_div2_peri_en.q;
   wire io_div4_clk_is_enabled = `CLKMGR_HIER.u_reg.reg2hw.clk_enables.clk_io_div4_peri_en.q;
-
+`endif
   // Ibex monitors.
   ibex_pkg::pmp_mseccfg_t pmp_mseccfg;
   ibex_pkg::pmp_cfg_t pmp_cfg[16];
   wire [31:0] pmp_addr[16];
   // TODO: merge with probed_cpu_csrs_t below.
+`ifdef GATE_LEVEL
+  assign pmp_mseccfg =  {
+                          `IBEX_CSRS_HIER.g_pmp_registers_u_pmp_mseccfg.rd_data_o[2]
+                          , 1'b1
+                          ,`IBEX_CSRS_HIER.g_pmp_registers_u_pmp_mseccfg.rd_data_o[0]
+                        };
+
+  // pmp_cfg
+  assign pmp_cfg[0] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_0__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[1] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_1__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[2] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_2__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[3] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_3__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[4] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_4__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[5] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_5__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[6] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_6__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[7] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_7__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[8] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_8__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[9] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_9__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[10] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_10__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[11] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_11__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[12] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_12__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[13] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_13__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[14] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_14__u_pmp_cfg_csr.rd_data_o[5:0];
+  assign pmp_cfg[15] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_15__u_pmp_cfg_csr.rd_data_o[5:0];
+
+  // pmp_addr
+  assign pmp_addr[0] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_0__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[1] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_1__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[2] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_2__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[3] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_3__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[4] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_4__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[5] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_5__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[6] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_6__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[7] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_7__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[8] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_9__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[9] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_9__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[10] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_10__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[11] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_11__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[12] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_12__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[13] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_13__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[14] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_14__u_pmp_addr_csr.rd_data_o[31:0];
+  assign pmp_addr[15] =
+    `IBEX_CSRS_HIER.g_pmp_registers_g_pmp_csrs_15__u_pmp_addr_csr.rd_data_o[31:0];
+
+  wire mstatus_mie = `IBEX_CSRS_HIER.u_mstatus_csr.rd_data_o[5];
+
+`else
   assign pmp_mseccfg = `IBEX_CSRS_HIER.g_pmp_registers.pmp_mseccfg_q;
   for(genvar i = 0; i < 16; i++) begin : gen_ibex_pmp_cfg_conn
     assign pmp_cfg[i] = `IBEX_CSRS_HIER.g_pmp_registers.pmp_cfg[i];
@@ -689,7 +822,7 @@ interface chip_if;
   end : gen_ibex_pmp_cfg_conn
 
   wire mstatus_mie = `IBEX_CSRS_HIER.mstatus_q.mie;
-
+`endif
   // Probed Ibex CSRs.
   typedef struct packed {
     logic [31:0][31:0] gprs;
@@ -704,8 +837,27 @@ interface chip_if;
     logic [31:0] mcause;
   } probed_cpu_csrs_t;
   wire probed_cpu_csrs_t probed_cpu_csrs;
-  for (genvar i = 0; i < 32; i++) begin : gen_probed_cpu_csrs_conn
-    assign probed_cpu_csrs.gprs[i] = `CPU_CORE_HIER.gen_regfile_ff.register_file_i.rf_reg[i][31:0];
+  // In the shared register file (BaseIsaRV32IorCHERIoT) under RV32I (non-CHERIoT) mode, rf_data
+  // holds the data for registers x0-x15 and rf_shared the data for x16-x31. In CHERIoT mode,
+  // rf_shared holds capability metadata for x0-x15 and CHERIoT implicitly sets RV32E.
+  // Therefore, this probing interface will need to be adapted to run CHERIoT tests. Currently,
+  // these paths are hardcoded to match EarlGrey's configuration and hierarchy. If parameters
+  // affecting the register file change, these paths will need to be adapted accordingly.
+  for (genvar i = 0; i < 16; i++) begin : gen_probed_cpu_csrs_conn_lower
+`ifdef GATE_LEVEL
+    assign probed_cpu_csrs.gprs[i] = 0;
+`else
+    assign probed_cpu_csrs.gprs[i] =
+        `CPU_CORE_HIER.gen_regfile_ff.register_file_i.g_cheriot_rf.rf_data[i][31:0];
+`endif
+  end
+  for (genvar i = 16; i < 32; i++) begin : gen_probed_cpu_csrs_conn_upper
+`ifdef GATE_LEVEL
+    assign probed_cpu_csrs.gprs[i] = 0;
+`else
+    assign probed_cpu_csrs.gprs[i] =
+        `CPU_CORE_HIER.gen_regfile_ff.register_file_i.g_cheriot_rf.rf_shared[i-16][31:0];
+`endif
   end
   assign probed_cpu_csrs.dcsr = jtag_rv_debugger_pkg::rv_core_csr_dcsr_t'(
       `CPU_CORE_HIER.u_ibex_core.cs_registers_i.u_dcsr_csr.rd_data_o);
@@ -722,7 +874,19 @@ interface chip_if;
   assign probed_cpu_csrs.mcause =
       `CPU_CORE_HIER.u_ibex_core.cs_registers_i.u_mcause_csr.rd_data_o;
 
-  // Stub CPU envorinment.
+  // Probed Ibex PC.
+  typedef struct packed {
+    logic [31:0] pc_if;
+    logic [31:0] pc_id;
+    logic [31:0] pc_wb;
+  } probed_cpu_pc_t;
+  wire probed_cpu_pc_t probed_cpu_pc;
+ `ifndef GATE_LEVEL
+  assign probed_cpu_pc.pc_if = `CPU_CORE_HIER.u_ibex_core.pc_if;
+  assign probed_cpu_pc.pc_id = `CPU_CORE_HIER.u_ibex_core.pc_id;
+  assign probed_cpu_pc.pc_wb = `CPU_CORE_HIER.u_ibex_core.pc_wb;
+`endif
+  // Stub CPU environment.
   //
   // The initial value is sought from a plusarg. It can however, be set by the sequence on the fly
   // as well. If enabled, the following things happen:
@@ -731,7 +895,7 @@ interface chip_if;
   // 3. The TL agent interface takes over the tl_d interface on the adapter.
   bit stub_cpu;
   tl_if cpu_d_tl_if(.clk(cpu_clk), .rst_n(cpu_rst_n));
-
+`ifndef GATE_LEVEL
   initial begin
     void'($value$plusargs("stub_cpu=%0b", stub_cpu));
     forever begin
@@ -746,6 +910,11 @@ interface chip_if;
         force `CPU_CORE_HIER.clk_i = 1'b0;
         force `CPU_HIER.u_ibus_trans.rst_ni = 1'b0;
         force `CPU_HIER.u_dbus_trans.rst_ni = 1'b0;
+        // The CHERIoT sidebands leave the core directly, so with its clock silenced they hold X
+        // for the whole simulation.
+        force `CPU_HIER.cored_tag_h2d_o = 1'b0;
+        force `CPU_HIER.main_core_revbm_req = 1'b0;
+        force `CPU_HIER.main_core_revbm_addr = '0;
         force `CPU_TL_ADAPT_D_HIER.tl_out = cpu_d_tl_if.h2d;
         force cpu_d_tl_if.d2h = `CPU_TL_ADAPT_D_HIER.tl_i;
 
@@ -761,19 +930,18 @@ interface chip_if;
             end
           end
         join_none
-
       end else begin
         // when en_sim_sram == 1, need to make sure the access to sim_sram doesn't appear on
-        // cpu_d_tl_if, otherwise, we may have unmapped access as scb doesn't regnize addresses of
+        // cpu_d_tl_if, otherwise, we may have unmapped access as scb doesn't recognize addresses of
         // sim_sram. `CPU_HIER.tl_d_* is the right place to avoid seeing sim_sram accesses
         force cpu_d_tl_if.h2d = `CPU_HIER.cored_tl_h_o;
         force cpu_d_tl_if.d2h = `CPU_HIER.cored_tl_h_i;
       end
       @stub_cpu;
-      disable stub_cpu_cmd_intg_thread;
+     disable stub_cpu_cmd_intg_thread;
     end
   end
-
+`endif
   // Pass interface handles to uvm_config_db.
   //
   // Since the chip_if handle itself will be passed to the chip env, there is no need to set
@@ -797,26 +965,21 @@ interface chip_if;
   // Disconnects all interfaces from chip IOs.
   //
   // Provides the test sequence a fresh start to connect specific interfaces needed by the test.
-  // The por_n_if is exempt from this. The disconnection of default pulls using dios_if is
-  // conditioned on the `disconnect_default_pulls` arg.
+  // The por_n_if and pora_n_if are exempt from this. The disconnection of default pulls using
+  // dios_if is conditioned on the `disconnect_default_pulls` arg.
   function automatic void disconnect_all_interfaces(bit disconnect_default_pulls);
     `uvm_info(MsgId, "Disconnecting all interfaces from the chip IOs", UVM_LOW)
     if (disconnect_default_pulls) dios_if.disconnect();
     mios_if.disconnect();
     cc_if.disconnect();
-    flash_test_volt_if.disconnect();
-    flash_test_mode_if.disconnect();
-    otp_ext_volt_if.disconnect();
     ec_rst_l_if.disconnect();
     flash_wp_l_if.disconnect();
     pwrb_in_if.disconnect();
     sysrst_ctrl_if.disconnect();
-    ast_misc_if.disconnect();
     dft_straps_if.disconnect();
     tap_straps_if.disconnect();
     sw_straps_if.disconnect();
     gpios_if.disconnect();
-    enable_flash_ctrl_jtag = 0;
     ast2pad_if.disconnect();
     pad2ast_if.disconnect();
     pinmux_wkup_if.disconnect();
@@ -827,24 +990,35 @@ interface chip_if;
     ext_clk_if.set_active(0, 0);
   endfunction
 
-  // Verifies an LC control signal broadcast by the LC controller.
-  function automatic void check_lc_ctrl_enable_signal(lc_ctrl_signal_e signal, bit expected_value);
-    lc_ctrl_pkg::lc_tx_t value;
+  // Get the requested LC control signal that was broadcast by the LC controller
+  function automatic lc_ctrl_pkg::lc_tx_t get_lc_ctrl_enable_signal(lc_ctrl_signal_e signal);
     case (signal)
-      LcCtrlSignalDftEn:        value = `LC_CTRL_HIER.lc_dft_en_o;
-      LcCtrlSignalNvmDebugEn:   value = `LC_CTRL_HIER.lc_nvm_debug_en_o;
-      LcCtrlSignalHwDebugEn:    value = `LC_CTRL_HIER.lc_hw_debug_en_o;
-      LcCtrlSignalCpuEn:        value = `LC_CTRL_HIER.lc_cpu_en_o;
-      LcCtrlSignalCreatorSeedEn:value = `LC_CTRL_HIER.lc_creator_seed_sw_rw_en_o;
-      LcCtrlSignalOwnerSeedEn:  value = `LC_CTRL_HIER.lc_owner_seed_sw_rw_en_o;
-      LcCtrlSignalIsoRdEn:      value = `LC_CTRL_HIER.lc_iso_part_sw_rd_en_o;
-      LcCtrlSignalIsoWrEn:      value = `LC_CTRL_HIER.lc_iso_part_sw_wr_en_o;
-      LcCtrlSignalSeedRdEn:     value = `LC_CTRL_HIER.lc_seed_hw_rd_en_o;
-      LcCtrlSignalKeyMgrEn:     value = `LC_CTRL_HIER.lc_keymgr_en_o;
-      LcCtrlSignalEscEn:        value = `LC_CTRL_HIER.lc_escalate_en_o;
-      LcCtrlSignalCheckBypEn:   value = `LC_CTRL_HIER.lc_check_byp_en_o;
+      LcCtrlSignalDftEn:        return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_dft_en_o);
+      LcCtrlSignalNvmDebugEn:   return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_nvm_debug_en_o);
+      LcCtrlSignalHwDebugEn:    return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_hw_debug_en_o);
+      LcCtrlSignalCpuEn:        return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_cpu_en_o);
+      LcCtrlSignalCreatorSeedEn: begin
+        return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_creator_seed_sw_rw_en_o);
+      end
+      LcCtrlSignalOwnerSeedEn: begin
+        return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_owner_seed_sw_rw_en_o);
+      end
+      LcCtrlSignalIsoRdEn:      return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_iso_part_sw_rd_en_o);
+      LcCtrlSignalIsoWrEn:      return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_iso_part_sw_wr_en_o);
+      LcCtrlSignalSeedRdEn:     return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_seed_hw_rd_en_o);
+      LcCtrlSignalRmaState: begin
+        return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_rma_state_o);
+      end
+      LcCtrlSignalKeyMgrEn:     return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_keymgr_en_o);
+      LcCtrlSignalEscEn:        return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_escalate_en_o);
+      LcCtrlSignalCheckBypEn:   return lc_ctrl_pkg::lc_tx_t'(`LC_CTRL_HIER.lc_check_byp_en_o);
       default:                  `uvm_fatal(MsgId, $sformatf("Bad choice: %0s", signal.name()))
     endcase
+  endfunction
+
+  // Verifies an LC control signal broadcast by the LC controller.
+  function automatic void check_lc_ctrl_enable_signal(lc_ctrl_signal_e signal, bit expected_value);
+    lc_ctrl_pkg::lc_tx_t value = get_lc_ctrl_enable_signal(signal);
     if (expected_value ~^ (value == lc_ctrl_pkg::On)) begin
       `uvm_info(MsgId, $sformatf("LC control signal %0s: value = %0s matched",
                                  signal.name(), value.name()), UVM_HIGH)
@@ -862,59 +1036,6 @@ interface chip_if;
     end
   endfunction
 
-  // Returns string path to an IP block instance.
-  // TODO: Autogen this in top_<top>_pkg.
-  function automatic string get_hier_path(top_earlgrey_pkg::peripheral_e peripheral);
-    string path = dv_utils_pkg::get_parent_hier($sformatf("%m"));
-    case (peripheral)
-      PeripheralAdcCtrlAon:     path = {path, ".", `DV_STRINGIFY(`ADC_CTRL_HIER)};
-      PeripheralAes:            path = {path, ".", `DV_STRINGIFY(`AES_HIER)};
-      PeripheralAlertHandler:   path = {path, ".", `DV_STRINGIFY(`ALERT_HANDLER_HIER)};
-      PeripheralAonTimerAon:    path = {path, ".", `DV_STRINGIFY(`AON_TIMER_HIER)};
-      PeripheralAst:            path = {path, ".", `DV_STRINGIFY(`AST_HIER)};
-      PeripheralClkmgrAon:      path = {path, ".", `DV_STRINGIFY(`CLKMGR_HIER)};
-      PeripheralCsrng:          path = {path, ".", `DV_STRINGIFY(`CSRNG_HIER)};
-      PeripheralEdn0:           path = {path, ".", `DV_STRINGIFY(`EDN_HIER(0))};
-      PeripheralEdn1:           path = {path, ".", `DV_STRINGIFY(`EDN_HIER(1))};
-      PeripheralEntropySrc:     path = {path, ".", `DV_STRINGIFY(`ENTROPY_SRC_HIER)};
-      PeripheralFlashCtrl:      path = {path, ".", `DV_STRINGIFY(`FLASH_CTRL_HIER)};
-      PeripheralGpio:           path = {path, ".", `DV_STRINGIFY(`GPIO_HIER)};
-      PeripheralHmac:           path = {path, ".", `DV_STRINGIFY(`HMAC_HIER)};
-      PeripheralI2c0:           path = {path, ".", `DV_STRINGIFY(`I2C_HIER(0))};
-      PeripheralI2c1:           path = {path, ".", `DV_STRINGIFY(`I2C_HIER(1))};
-      PeripheralI2c2:           path = {path, ".", `DV_STRINGIFY(`I2C_HIER(2))};
-      PeripheralKeymgr:         path = {path, ".", `DV_STRINGIFY(`KEYMGR_HIER)};
-      PeripheralKmac:           path = {path, ".", `DV_STRINGIFY(`KMAC_HIER)};
-      PeripheralLcCtrl:         path = {path, ".", `DV_STRINGIFY(`LC_CTRL_HIER)};
-      PeripheralOtbn:           path = {path, ".", `DV_STRINGIFY(`OTBN_HIER)};
-      PeripheralOtpCtrl:        path = {path, ".", `DV_STRINGIFY(`OTP_CTRL_HIER)};
-      PeripheralPattgen:        path = {path, ".", `DV_STRINGIFY(`PATTGEN_HIER)};
-      PeripheralPinmuxAon:      path = {path, ".", `DV_STRINGIFY(`PINMUX_HIER)};
-      PeripheralPwmAon:         path = {path, ".", `DV_STRINGIFY(`PWM_HIER)};
-      PeripheralPwrmgrAon:      path = {path, ".", `DV_STRINGIFY(`PWRMGR_HIER)};
-      PeripheralRomCtrl:        path = {path, ".", `DV_STRINGIFY(`ROM_CTRL_HIER)};
-      PeripheralRstmgrAon:      path = {path, ".", `DV_STRINGIFY(`RSTMGR_HIER)};
-      PeripheralRvCoreIbex:     path = {path, ".", `DV_STRINGIFY(`RV_CORE_IBEX_HIER)};
-      PeripheralRvDm:           path = {path, ".", `DV_STRINGIFY(`RV_DM_HIER)};
-      PeripheralRvPlic:         path = {path, ".", `DV_STRINGIFY(`RV_PLIC_HIER)};
-      PeripheralRvTimer:        path = {path, ".", `DV_STRINGIFY(`RV_TIMER_HIER)};
-      PeripheralSensorCtrl:     path = {path, ".", `DV_STRINGIFY(`SENSOR_CTRL_HIER)};
-      PeripheralSpiDevice:      path = {path, ".", `DV_STRINGIFY(`SPI_DEVICE_HIER)};
-      PeripheralSpiHost0:       path = {path, ".", `DV_STRINGIFY(`SPI_HOST_HIER(0))};
-      PeripheralSpiHost1:       path = {path, ".", `DV_STRINGIFY(`SPI_HOST_HIER(1))};
-      PeripheralSramCtrlMain:   path = {path, ".", `DV_STRINGIFY(`SRAM_CTRL_MAIN_HIER)};
-      PeripheralSramCtrlRetAon: path = {path, ".", `DV_STRINGIFY(`SRAM_CTRL_RET_HIER)};
-      PeripheralSysrstCtrlAon:  path = {path, ".", `DV_STRINGIFY(`SYSRST_CTRL_HIER)};
-      PeripheralUart0:          path = {path, ".", `DV_STRINGIFY(`UART_HIER(0))};
-      PeripheralUart1:          path = {path, ".", `DV_STRINGIFY(`UART_HIER(1))};
-      PeripheralUart2:          path = {path, ".", `DV_STRINGIFY(`UART_HIER(2))};
-      PeripheralUart3:          path = {path, ".", `DV_STRINGIFY(`UART_HIER(3))};
-      PeripheralUsbdev:         path = {path, ".", `DV_STRINGIFY(`USBDEV_HIER)};
-      default:      `uvm_fatal(MsgId, $sformatf("Bad peripheral: %0s", peripheral.name()))
-    endcase
-    return path;
-  endfunction
-
   // Disable SVAs in certain hierarchies specific to tests.
   bit chip_padctrl_attributes_test_sva_disable;
   bit chip_sw_sleep_pin_mio_dio_val_sva_disable;
@@ -930,13 +1051,67 @@ interface chip_if;
   `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_otp_ctrl_lc_err_o,
       `OTP_CTRL_HIER.u_otp_ctrl_lci.lc_err_o, 1)
 
+  // Signal probe function for LC program request to OTP ctrl.
+`ifdef GATE_LEVEL
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_otp_ctrl_lc_program_req,
+      `OTP_CTRL_HIER.lc_otp_program_i_req, 1)
+`else
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_otp_ctrl_lc_program_req,
+      `OTP_CTRL_HIER.lc_otp_program_i.req, 1)
+`endif
+
+  // A custom signal probe function for LC program request to OTP.
+  // See dv_macros.svh for a signal probe function description, but they only deal with
+  // vectors: it would be nice to extend them to deal with arbitrary types, or at least
+  // support enums.
+  function static void signal_probe_otp_ctrl_lc_program_state (
+      dv_utils_pkg::signal_probe_e kind, lc_ctrl_state_pkg::lc_state_e state);
+`ifndef GATE_LEVEL
+    case (kind)
+      dv_utils_pkg::SignalProbeSample: ;
+      dv_utils_pkg::SignalProbeForce: force `OTP_CTRL_HIER.lc_otp_program_i.state = state;
+      dv_utils_pkg::SignalProbeRelease: release `OTP_CTRL_HIER.lc_otp_program_i.state;
+      default:
+        `uvm_fatal("signal_probe_otp_ctrl_lc_program_state", $sformatf("Bad value: %0d", kind))
+    endcase
+`endif
+  endfunction
+
+  // This injects fatal errors in otp_ctrl tampering with an lc state change request to otp.
+  // The otp should error if any bit changes back to 0, which will happen by a transition from
+  // any non-RAW state when all the new state bits are 0, as in the RAW state.
+  //
+  // The lc_ctrl will block any illegal transition, thus the need to tamper with a request
+  // in-flight.
+  task static create_illegal_lc_request_for_otp();
+    forever begin
+      if (signal_probe_otp_ctrl_lc_program_req(SignalProbeSample)) begin
+        lc_ctrl_state_pkg::lc_state_e state;
+        `uvm_info("create_illegal_lc_request_for_otp", "Got program request", UVM_MEDIUM)
+        state = lc_ctrl_state_pkg::lc_state_e'(0);
+        `uvm_info("create_illegal_lc_request_for_otp", "Error injected", UVM_MEDIUM)
+        signal_probe_otp_ctrl_lc_program_state(SignalProbeForce, state);
+        break;
+      end
+      @(negedge `OTP_CTRL_HIER.clk_i);
+    end
+  endtask
+
   // Signal probe function for wait cycle mask in alert handler.
   `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_alert_handler_ping_timer_wait_cyc_mask_i,
       `ALERT_HANDLER_HIER.u_ping_timer.wait_cyc_mask_i)
 
   // Signal probe function for keymgr key state.
-  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_keymgr_key_state,
-      `KEYMGR_HIER.u_ctrl.key_state_q)
+  // TODO(#30907): Decide if we need this probing function (only used in alert handler escalation
+  //               sequence)
+  //`ifdef GATE_LEVEL
+  //  bit dummy_signal_probe_keymgr_key_state;
+  //  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_keymgr_key_state,
+  //      dummy_signal_probe_keymgr_key_state)
+  //`else
+  //  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_keymgr_key_state,
+  //      `KEYMGR_DPE_HIER.u_ctrl.key_state_q)
+  //`endif
 
   // Signal probe function for RX idle detection in usbdev.
   `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_usbdev_rx_idle_det_o,
@@ -976,12 +1151,136 @@ interface chip_if;
   `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_pinmux_periph_to_dio_oe_i,
       `PINMUX_HIER.periph_to_dio_oe_i)
 
+  /*
+   * Signal probe functions for sampling the FSM states of the IPs
+   * during the max power epoch of the power_virus test.
+   */
+
+  // Signal probe function for `fsm_state_q` of ADC_CTRL
+  wire [4:0] adc_ctrl_state;
+`ifdef GATE_LEVEL
+`define _ADC_FSM_STATE_Q(i) \
+   `ADC_CTRL_HIER.u_adc_ctrl_core.u_adc_ctrl_fsm.fsm_state_q_``i``_
+
+  //RTL has "assign aon_fsm_state_o = fsm_state_q;"
+  assign adc_ctrl_state = `ADC_CTRL_HIER.u_adc_ctrl_core.u_adc_ctrl_fsm.aon_fsm_state_o;
+
+`undef _ADC_FSM_STATE_Q
+`else
+  assign adc_ctrl_state = `ADC_CTRL_HIER.u_adc_ctrl_core.u_adc_ctrl_fsm.fsm_state_q;
+`endif
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_adc_ctrl_fsm_state,
+      adc_ctrl_state, 5)
+
+  // Signal probe function for `cio_csb_o` of SPI_HOST_0
+  wire spi_host_0_cio_csb_o;
+  assign spi_host_0_cio_csb_o = `SPI_HOST_HIER(0).cio_csb_o;
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_spi_host_0_cio_csb_o,
+      spi_host_0_cio_csb_o, 1)
+
+  // Signal probe function for `cio_csb_i` of SPI_DEVICE
+  wire spi_device_cio_csb_i;
+  assign spi_device_cio_csb_i = `SPI_DEVICE_HIER.cio_csb_i;
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_spi_device_cio_csb_i,
+      spi_device_cio_csb_i, 1)
+
+  // Signal probe function for `fsm.state_q` of SPI_HOST_1
+  wire [2:0] spi_host_1_state;
+`ifdef GATE_LEVEL
+assign spi_host_1_state = {tb.dut.top_earlgrey.earlgrey_pd_main.u_spi_host1.u_spi_core.u_fsm.state_q_reg_2_.Q
+                          ,tb.dut.top_earlgrey.earlgrey_pd_main.u_spi_host1.u_spi_core.u_fsm.state_q_reg_1_.Q
+                          ,tb.dut.top_earlgrey.earlgrey_pd_main.u_spi_host1.u_spi_core.u_fsm.state_q_reg_0_.Q
+                          };
+`else
+  assign spi_host_1_state = `SPI_HOST_HIER(1).u_spi_core.u_fsm.state_q;
+`endif
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_spi_host_1_fsm_state,
+      spi_host_1_state, 3)
+
+  // Signal probe function for `acmd_q` of CSRNG core
+  wire [2:0] csrng_acmd_q;
+`ifdef GATE_LEVEL
+  assign csrng_acmd_q = `CSRNG_HIER.u_csrng_core.acmd_q[2:0];
+`else
+  assign csrng_acmd_q = `CSRNG_HIER.u_csrng_core.acmd_q;
+`endif
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_csrng_acmd_q,
+      csrng_acmd_q, 3)
+  // Signal probe function for `rnd_ctr` of AES_CIPHER_CTRL
+  wire [3:0] aes_ctrl_rnd_ctr;
+  assign aes_ctrl_rnd_ctr =
+`ifdef GATE_LEVEL
+      `AES_HIER.u_aes_core.u_aes_cipher_core.u_aes_cipher_control.mr_rnd_ctr[3:0];
+`else
+      `AES_HIER.u_aes_core.u_aes_cipher_core.u_aes_cipher_control.rnd_ctr;
+`endif
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_aes_ctrl_rnd_ctr,
+      aes_ctrl_rnd_ctr, 4)
+
+  // Signal probe function for `st_q` of HMAC
+  wire [2:0] hmac_fsm_state;
+`ifdef GATE_LEVEL
+  assign hmac_fsm_state = {
+                           `HMAC_HIER.u_hmac.st_q_reg_2_.Q,
+                           `HMAC_HIER.u_hmac.st_q_reg_1_.Q,
+                           `HMAC_HIER.u_hmac.st_q_reg_0_.Q
+                          };
+`else
+  assign hmac_fsm_state = `HMAC_HIER.u_hmac.st_q;
+`endif
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_hmac_fsm_state,
+      hmac_fsm_state, 3)
+
+  // Signal probe function for `st` of KMAC_CORE
+  wire [5:0] kmac_fsm_state;
+  assign kmac_fsm_state = `KMAC_HIER.gen_kmac_core.u_kmac_core.u_state_regs.state_o;
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_kmac_fsm_state,
+      kmac_fsm_state, 6)
+
+  // Signal probe function for `state_q` OTBN_START_STOP_CONTROL
+  wire [6:0] otbn_fsm_state;
+  assign otbn_fsm_state = `OTBN_HIER.u_otbn_core.u_otbn_start_stop_control.u_state_regs.state_o;
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_otbn_fsm_state,
+      otbn_fsm_state, 7)
+
+  // Signal probe function for `state_q` of EDN_0_MAIN_SM
+  wire [8:0] edn_0_fsm_state;
+`ifdef GATE_LEVEL
+  assign edn_0_fsm_state = 0;
+`else
+  assign edn_0_fsm_state = `EDN_HIER(0).u_edn_core.u_edn_main_sm.state_q;
+`endif
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_edn_0_fsm_state,
+      edn_0_fsm_state, 9)
+
+  // Signal probe function for `state_q` of EDN_1_MAIN_SM
+  wire [8:0] edn_1_fsm_state;
+`ifdef GATE_LEVEL
+  assign edn_1_fsm_state = 0;
+`else
+  assign edn_1_fsm_state = `EDN_HIER(1).u_edn_core.u_edn_main_sm.state_q;
+`endif
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_edn_1_fsm_state,
+      edn_1_fsm_state, 9)
+
+  // Signal probe function for `state_q` of ENTROPY_SOURCE_MAIN_SM
+  wire [8:0] entropy_src_fsm_state;
+`ifdef GATE_LEVEL
+  assign entropy_src_fsm_state = 0;
+`else
+  assign entropy_src_fsm_state = `ENTROPY_SRC_HIER.u_entropy_src_core.u_entropy_src_main_sm.state_q;
+`endif
+  `DV_CREATE_SIGNAL_PROBE_FUNCTION(signal_probe_entropy_src_fsm_state,
+      entropy_src_fsm_state, 9)
+
 `undef TOP_HIER
+`undef PD_MAIN_HIER
+`undef PD_AON_HIER
 `undef ADC_CTRL_HIER
 `undef AES_HIER
+`undef AES_CONTROL_HIER
 `undef ALERT_HANDLER_HIER
 `undef AON_TIMER_HIER
-`undef AST_HIER
 `undef CLKMGR_HIER
 `undef CPU_HIER
 `undef CPU_CORE_HIER
@@ -989,23 +1288,19 @@ interface chip_if;
 `undef CSRNG_HIER
 `undef ENTROPY_SRC_HIER
 `undef EDN_HIER
-`undef FLASH_CTRL_HIER
 `undef GPIO_HIER
 `undef HMAC_HIER
 `undef I2C_HIER
 `undef KMAC_HIER
-`undef KEYMGR_HIER
+`undef KEYMGR_DPE_HIER
 `undef LC_CTRL_HIER
 `undef OTP_CTRL_HIER
 `undef OTBN_HIER
-`undef PATTGEN_HIER
 `undef PINMUX_HIER
-`undef PWM_HIER
 `undef PWRMGR_HIER
 `undef ROM_CTRL_HIER
 `undef RSTMGR_HIER
 `undef RV_CORE_IBEX_HIER
-`undef RV_DM_HIER
 `undef RV_PLIC_HIER
 `undef RV_TIMER_HIER
 `undef SENSOR_CTRL_HIER

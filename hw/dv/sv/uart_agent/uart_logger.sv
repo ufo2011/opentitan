@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,13 +22,13 @@ class uart_logger extends uvm_component;
     string fname = {`gfn, ".log"};
     if (cfg.write_logs_to_file) begin
       logs_output_fd = $fopen(fname, "w");
-      `DV_CHECK_FATAL(!logs_output_fd, $sformatf("Failed to open %s for writing", fname))
+      `DV_CHECK_FATAL((logs_output_fd !=0), $sformatf("Failed to open %s for writing", fname))
     end
     capture_logs();
   endtask
 
   virtual function void final_phase(uvm_phase phase);
-    if (logs_output_fd) $fclose(logs_output_fd);
+    if (logs_output_fd != 0) $fclose(logs_output_fd);
   endfunction
 
   // Captures bytes received from UART TX port and constructs the logs for printing.
@@ -36,15 +36,15 @@ class uart_logger extends uvm_component;
     uart_item item;
     string    char;
     string    log;
-    byte      lf = 8'ha;
-    byte      cr = 8'hd;
+    byte      lf = 8'ha;   // \n
+    byte      cr = 8'hd;   // \r
 
     fork
       forever begin
         log_item_fifo.get(item);
         char = string'(item.data);
         `uvm_info(`gfn, $sformatf("received char: %0s", char), UVM_DEBUG)
-        // Continue concatenating chars into the log string untl lf or cr is encountered.
+        // Continue concatenating chars into the log string until lf or cr is encountered.
         if (item.data inside {lf, cr}) begin
           print_log(log);
           log_analysis_port.write(log);
@@ -56,8 +56,8 @@ class uart_logger extends uvm_component;
       end
       forever begin
         // reset thread - if reset occurs, reset the log to an empty string.
-        @(cfg.under_reset);
-        if (cfg.under_reset) log = "";
+        @(cfg.in_reset);
+        if (cfg.in_reset) log = "";
       end
     join
   endtask
@@ -90,7 +90,7 @@ class uart_logger extends uvm_component;
         `uvm_info(`gfn, log, UVM_LOW)
       end
     endcase
-    if (logs_output_fd) begin
+    if (logs_output_fd != 0) begin
       $fwrite(logs_output_fd, "[%15t]: %0s\n", $time, log);
     end
   endfunction

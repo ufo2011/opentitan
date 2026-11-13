@@ -1,4 +1,4 @@
-/* Copyright lowRISC contributors. */
+/* Copyright lowRISC contributors (OpenTitan project). */
 /* Licensed under the Apache License, Version 2.0, see LICENSE for details. */
 /* SPDX-License-Identifier: Apache-2.0 */
 
@@ -15,14 +15,20 @@ main:
   /* Prepare all-zero register. */
   bn.xor w31, w31, w31
 
+  /* Initialize failure counter to 0. */
+  bn.mov w0, w31
+
   /* MOD <= dmem[modulus] = p */
   li      x2, 2
   la      x3, modulus
   bn.lid  x2, 0(x3)
-  bn.wsrw 0x0, w2
+  bn.wsrw MOD, w2
 
   /* w19 <= 19 */
   bn.addi w19, w31, 19
+
+  /* w30 <= 38 */
+  bn.addi w30, w31, 38
 
   /* Call multiply test. */
   jal     x1, fe_mul_test
@@ -33,6 +39,17 @@ main:
   /* Call inverse test. */
   jal     x1, fe_inv_test
 
+  /* Check if there were any failures.
+     If w0 != 0, fail the test deliberately. */
+  bn.cmp  w0, w31
+  csrrs   x2, FG0, x0
+  andi    x2, x2, 8
+  bne     x2, x0, test_pass
+
+  /* Execute an illegal instruction to fail the simulation */
+  unimp
+
+test_pass:
   ecall
 
 fe_mul_test:

@@ -1,11 +1,11 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 class push_pull_agent #(
     parameter int HostDataWidth   = 32,
     parameter int DeviceDataWidth = HostDataWidth
-) extends dv_base_agent #(
+) extends dv_reactive_agent #(
     .CFG_T      (push_pull_agent_cfg#(HostDataWidth, DeviceDataWidth)),
     .DRIVER_T   (push_pull_driver#(HostDataWidth, DeviceDataWidth)),
     .SEQUENCER_T(push_pull_sequencer#(HostDataWidth, DeviceDataWidth)),
@@ -44,6 +44,7 @@ class push_pull_agent #(
   virtual task run_phase(uvm_phase phase);
     push_pull_device_seq#(HostDataWidth, DeviceDataWidth) m_seq =
         push_pull_device_seq#(HostDataWidth, DeviceDataWidth)::type_id::create("m_seq", this);
+    super.run_phase(phase);
     if (cfg.if_mode == dv_utils_pkg::Device && cfg.start_default_device_seq) begin
       uvm_config_db#(uvm_object_wrapper)::set(null, {sequencer.get_full_name(), ".run_phase"},
                                               "default_sequence", m_seq.get_type());

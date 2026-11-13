@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -33,6 +33,8 @@ package tlul_pkg;
   parameter int DataMaxWidth    = 32;
   parameter int DataIntgWidth   = 7;
   parameter int DataFullWidth   = DataMaxWidth + DataIntgWidth;
+  parameter int RsvdWidth       = top_pkg::TL_AUW - prim_mubi_pkg::MuBi4Width -
+                                  H2DCmdIntgWidth - DataIntgWidth;
 
   // Data that is returned upon an a TL-UL error belonging to an instruction fetch.
   // Note that this data will be returned with the correct bus integrity value.
@@ -42,7 +44,7 @@ package tlul_pkg;
   parameter logic [top_pkg::TL_DW-1:0] DataWhenError      = {top_pkg::TL_DW{1'b1}};
 
   typedef struct packed {
-    logic [4:0]                 rsvd;
+    logic [RsvdWidth-1:0]       rsvd;
     prim_mubi_pkg::mubi4_t      instr_type;
     logic [H2DCmdIntgWidth-1:0] cmd_intg;
     logic [DataIntgWidth-1:0]   data_intg;
@@ -178,6 +180,17 @@ package tlul_pkg;
         prim_secded_pkg::prim_secded_inv_64_57_enc(H2DCmdMaxWidth'(cmd));
    return cmd_intg;
   endfunction  // get_cmd_intg
+
+  // calculate ecc for response checking
+  function automatic logic [D2HRspIntgWidth-1:0] get_rsp_intg(tl_d2h_t tl);
+    logic [D2HRspIntgWidth-1:0] rsp_intg;
+    logic [D2HRspMaxWidth-1:0] unused_rsp_payload;
+    tl_d2h_rsp_intg_t rsp;
+    rsp = extract_d2h_rsp_intg(tl);
+    {rsp_intg, unused_rsp_payload} =
+        prim_secded_pkg::prim_secded_inv_64_57_enc(D2HRspMaxWidth'(rsp));
+    return rsp_intg;
+  endfunction  // get_rsp_intg
 
   // calculate ecc for data checking
   function automatic logic [DataIntgWidth-1:0] get_data_intg(logic [top_pkg::TL_DW-1:0] data);

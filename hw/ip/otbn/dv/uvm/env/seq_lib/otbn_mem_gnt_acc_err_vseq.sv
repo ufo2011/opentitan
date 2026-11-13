@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ class otbn_mem_gnt_acc_err_vseq extends otbn_single_vseq;
     bit req;
     bit choose_mem;
     string gnt_path;
-    bit [31:0] err_val = 32'd1 << 20;
+    err_bits_reg_t err_bits = '{bad_internal_state: 1'b1, default: 1'b0};
 
     `DV_CHECK_STD_RANDOMIZE_FATAL(choose_mem)
     cfg.clk_rst_vif.wait_clks($urandom_range(10, 100));
@@ -35,7 +35,8 @@ class otbn_mem_gnt_acc_err_vseq extends otbn_single_vseq;
         `DV_SPINWAIT(
           do begin
             @(cfg.clk_rst_vif.cb);
-            uvm_hdl_read("tb.dut.u_dmem.req_i", req);
+            if (!uvm_hdl_read("tb.dut.u_dmem.req_i", req))
+              `uvm_fatal(`gfn, "failed to read u_dmem.req_i");
           end while(!req);
         )
         `DV_CHECK_FATAL(uvm_hdl_force(gnt_path, 0) == 1)
@@ -45,7 +46,8 @@ class otbn_mem_gnt_acc_err_vseq extends otbn_single_vseq;
         `DV_SPINWAIT(
           do begin
             @(cfg.clk_rst_vif.cb);
-            uvm_hdl_read("tb.dut.u_imem.req_i", req);
+            if (!uvm_hdl_read("tb.dut.u_imem.req_i", req))
+              `uvm_fatal(`gfn, "failed to read u_imem.req_i");
           end while(!req);
         )
         `DV_CHECK_FATAL(uvm_hdl_force(gnt_path, 0) == 1)
@@ -56,7 +58,7 @@ class otbn_mem_gnt_acc_err_vseq extends otbn_single_vseq;
     endcase
       `uvm_info(`gfn, "injecting bad internal state error into ISS", UVM_HIGH)
       @(cfg.clk_rst_vif.cb);
-      cfg.model_agent_cfg.vif.send_err_escalation(err_val);
+      cfg.model_agent_cfg.vif.send_err_escalation(err_bits);
       `DV_WAIT(cfg.model_agent_cfg.vif.status == otbn_pkg::StatusLocked)
       `DV_CHECK_FATAL(uvm_hdl_release(gnt_path) == 1);
       reset_if_locked();

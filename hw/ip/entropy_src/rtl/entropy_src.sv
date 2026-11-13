@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -12,9 +12,15 @@ module entropy_src
   import entropy_src_reg_pkg::*;
   import prim_mubi_pkg::mubi8_t;
 #(
-  parameter bit Stub = 1'b0,
-  parameter logic [NumAlerts-1:0] AlertAsyncOn = {NumAlerts{1'b1}},
-  parameter int EsFifoDepth = 4
+  parameter logic [NumAlerts-1:0] AlertAsyncOn    = {NumAlerts{1'b1}},
+  // Number of cycles a differential skew is tolerated on the alert signal
+  parameter int unsigned AlertSkewCycles          = 1,
+  parameter int RngBusWidth                       = 4,
+  parameter int RngBusBitSelWidth                 = 2,
+  parameter int HealthTestWindowWidth             = 18,
+  parameter int EsFifoDepth                       = 3,
+  parameter int DistrFifoDepth                    = 3,
+  parameter bit Stub                              = 1'b0
 ) (
   input logic clk_i,
   input logic rst_ni,
@@ -22,12 +28,6 @@ module entropy_src
   // Bus Interface
   input  tlul_pkg::tl_h2d_t tl_i,
   output tlul_pkg::tl_d2h_t tl_o,
-
-  // OTP Interface
-  // SEC_CM: INTERSIG.MUBI
-  input  mubi8_t otp_en_entropy_src_fw_read_i,
-  // SEC_CM: INTERSIG.MUBI
-  input  mubi8_t otp_en_entropy_src_fw_over_i,
 
   // RNG Interface
   output logic rng_fips_o,
@@ -37,16 +37,17 @@ module entropy_src
   output entropy_src_hw_if_rsp_t entropy_src_hw_if_o,
 
   // RNG Interface
-  output entropy_src_rng_req_t entropy_src_rng_o,
-  input  entropy_src_rng_rsp_t entropy_src_rng_i,
-
-  // CSRNG Interface
-  output cs_aes_halt_req_t cs_aes_halt_o,
-  input  cs_aes_halt_rsp_t cs_aes_halt_i,
+  output logic                   entropy_src_rng_enable_o,
+  input  logic                   entropy_src_rng_valid_i,
+  input  logic [RngBusWidth-1:0] entropy_src_rng_bits_i,
 
   // External Health Test Interface
-  output entropy_src_xht_req_t entropy_src_xht_o,
-  input  entropy_src_xht_rsp_t entropy_src_xht_i,
+  output logic                             entropy_src_xht_valid_o,
+  output logic [RngBusWidth-1:0]           entropy_src_xht_bits_o,
+  output logic [RngBusBitSelWidth-1:0]     entropy_src_xht_bit_sel_o,
+  output logic [HealthTestWindowWidth-1:0] entropy_src_xht_health_test_window_o,
+  output entropy_src_xht_meta_req_t        entropy_src_xht_meta_o,
+  input  entropy_src_xht_meta_rsp_t        entropy_src_xht_meta_i,
 
   // Alerts
   input  prim_alert_pkg::alert_rx_t [NumAlerts-1:0] alert_rx_i,
@@ -59,8 +60,24 @@ module entropy_src
   output logic    intr_es_fatal_err_o
 );
 
-  localparam int RngBusWidth = 4; // AST RNG bus width
-  localparam int NumBins = 2**RngBusWidth; // bucket health test bin count
+  // For a data width of N, there are 2^N buckets in the bucket health test, each with its own
+  // counter. To make this health test scale reasonably well with `RngBusWidth`, we limit the bucket
+  // health test to 4 bit. If `RngBusWidth` is larger than 4, the bucket health test gets
+  // instantiated multiple times, once per 4 bit.
+  localparam int BucketHtDataWidth = bucket_ht_data_width(RngBusWidth);
+  localparam int NumBuckets = 2**BucketHtDataWidth; // bucket health test bin count
+  localparam int unsigned NumBucketHtInst = num_bucket_ht_inst(RngBusWidth);
+
+  // Register interface supports up to 256-bit wide noise source bus widths. Ensure the that the
+  // parameter does not exceed that limit.
+  `ASSERT_INIT(RngBusBitWidthMaxValue_A, RngBusWidth <= 256)
+  // The IP needs to define both RngBusWidth, RngBusBitSelWidth, and HealthTestWindowWidth, although
+  // the last two are derived from the first. This is needed to allow topgen to pick up the widths
+  // for interfaces IP-level interfaces based on these parameters.
+  `ASSERT_INIT(RngBusBitSelWidthSameAsComputed_A,
+               RngBusBitSelWidth == prim_util_pkg::vbits(RngBusWidth))
+  `ASSERT_INIT(HealthTestWindowWidthSameAsComputed_A,
+               HealthTestWindowWidth == 16 + prim_util_pkg::vbits(RngBusWidth))
 
   // common signals
   entropy_src_hw2reg_t hw2reg;
@@ -72,13 +89,14 @@ module entropy_src
   logic core_rst_n;
   entropy_src_hw2reg_t core_hw2reg;
   entropy_src_hw_if_rsp_t core_entropy_hw_if;
-  entropy_src_rng_req_t core_rng;
-  cs_aes_halt_req_t core_aes_halt;
-  entropy_src_xht_req_t core_xht;
+  logic core_rng_enable;
+  entropy_src_xht_meta_req_t core_xht_meta;
+  logic core_xht_valid;
+  logic [RngBusWidth-1:0] core_xht_bits;
+  logic [RngBusBitSelWidth-1:0] core_xht_bit_sel;
+  logic [HealthTestWindowWidth-1:0] core_xht_health_test_window;
   logic core_intr_es_entropy_valid;
   logic core_intr_es_health_test_failed;
-  // TODO: add intrp
-//  logic core_intr_es_ebus_check_failed;
   logic core_intr_es_observe_fifo_ready;
   logic core_intr_es_fatal_err;
   logic [NumAlerts-1:0] core_alert_test;
@@ -98,18 +116,25 @@ module entropy_src
   // Selecting between core and stub
   ///////////////////////////
 
-  assign hw2reg                       = Stub ? stub_hw2reg        : core_hw2reg;
-  assign core_rst_n                   = Stub ? '0                 : rst_ni;
-  assign entropy_src_hw_if_o          = Stub ? stub_entropy_hw_if : core_entropy_hw_if;
-  assign entropy_src_rng_o            = Stub ? '1                 : core_rng;
-  assign cs_aes_halt_o                = Stub ? '0                 : core_aes_halt;
-  assign entropy_src_xht_o            = Stub ? '0                 : core_xht;
-  assign intr_es_entropy_valid_o      = Stub ? stub_es_valid      : core_intr_es_entropy_valid;
-  assign intr_es_health_test_failed_o = Stub ? '0                 : core_intr_es_health_test_failed;
-  assign intr_es_observe_fifo_ready_o = Stub ? '0                 : core_intr_es_observe_fifo_ready;
-  assign intr_es_fatal_err_o          = Stub ? '0                 : core_intr_es_fatal_err;
-  assign alert_test                   = Stub ? stub_alert_test    : core_alert_test;
-  assign alert                        = Stub ? stub_alert         : core_alert;
+  assign hw2reg                               = Stub ? stub_hw2reg        : core_hw2reg;
+  assign core_rst_n                           = Stub ? '0                 : rst_ni;
+  assign entropy_src_hw_if_o                  = Stub ? stub_entropy_hw_if : core_entropy_hw_if;
+  assign entropy_src_rng_enable_o             = Stub ? '1                 : core_rng_enable;
+  assign entropy_src_xht_valid_o              = Stub ? '0                 : core_xht_valid;
+  assign entropy_src_xht_bits_o               = Stub ? '0                 : core_xht_bits;
+  assign entropy_src_xht_bit_sel_o            = Stub ? '0                 : core_xht_bit_sel;
+  assign entropy_src_xht_health_test_window_o = Stub ? '0                 :
+                                                       core_xht_health_test_window;
+  assign entropy_src_xht_meta_o               = Stub ? '0                 : core_xht_meta;
+  assign intr_es_entropy_valid_o              = Stub ? stub_es_valid      :
+                                                       core_intr_es_entropy_valid;
+  assign intr_es_health_test_failed_o         = Stub ? '0                 :
+                                                       core_intr_es_health_test_failed;
+  assign intr_es_observe_fifo_ready_o         = Stub ? '0                 :
+                                                       core_intr_es_observe_fifo_ready;
+  assign intr_es_fatal_err_o                  = Stub ? '0                 : core_intr_es_fatal_err;
+  assign alert_test                           = Stub ? stub_alert_test    : core_alert_test;
+  assign alert                                = Stub ? stub_alert         : core_alert;
 
   ///////////////////////////
   // core entropy operation
@@ -128,33 +153,38 @@ module entropy_src
     .tl_o,
     .reg2hw,
     .hw2reg(hw2reg),
-    .intg_err_o(intg_err_alert[1]), // Assign this alert to the fatal alert index.
-    .devmode_i(1'b1)
+    .intg_err_o(intg_err_alert[1]) // Assign this alert to the fatal alert index.
   );
 
   entropy_src_core #(
-    .EsFifoDepth(EsFifoDepth)
+    .RngBusWidth(RngBusWidth),
+    .RngBusBitSelWidth(RngBusBitSelWidth),
+    .HealthTestWindowWidth(HealthTestWindowWidth),
+    .EsFifoDepth(EsFifoDepth),
+    .DistrFifoDepth(DistrFifoDepth),
+    .BucketHtDataWidth(BucketHtDataWidth),
+    .NumBucketHtInst(NumBucketHtInst)
   ) u_entropy_src_core (
     .clk_i,
     .rst_ni(core_rst_n),
     .reg2hw,
     .hw2reg(core_hw2reg),
 
-    .otp_en_entropy_src_fw_read_i(otp_en_entropy_src_fw_read_i),
-    .otp_en_entropy_src_fw_over_i(otp_en_entropy_src_fw_over_i),
     .rng_fips_o,
 
     .entropy_src_hw_if_o(core_entropy_hw_if),
     .entropy_src_hw_if_i,
 
-    .entropy_src_xht_o(core_xht),
-    .entropy_src_xht_i,
+    .entropy_src_xht_valid_o(core_xht_valid),
+    .entropy_src_xht_bits_o(core_xht_bits),
+    .entropy_src_xht_bit_sel_o(core_xht_bit_sel),
+    .entropy_src_xht_meta_o(core_xht_meta),
+    .entropy_src_xht_health_test_window_o(core_xht_health_test_window),
+    .entropy_src_xht_meta_i,
 
-    .entropy_src_rng_o(core_rng),
-    .entropy_src_rng_i,
-
-    .cs_aes_halt_o(core_aes_halt),
-    .cs_aes_halt_i,
+    .entropy_src_rng_enable_o(core_rng_enable),
+    .entropy_src_rng_valid_i,
+    .entropy_src_rng_bits_i,
 
     .recov_alert_o(core_alert[0]),
     .fatal_alert_o(core_alert[1]),
@@ -210,8 +240,7 @@ module entropy_src
       stub_hw2reg.fw_ov_rd_data.d = stub_lfsr_value[31:0];
       stub_hw2reg.entropy_data.d = stub_lfsr_value[31:0];
       stub_hw2reg.debug_status.main_sm_idle.d = 1'b1;
-      // need to move this to package so that it can be referenced
-      stub_hw2reg.debug_status.main_sm_state.d = 8'b01110110;
+      stub_hw2reg.main_sm_state.d = entropy_src_main_sm_pkg::Idle;
 
       stub_hw2reg.intr_state.es_entropy_valid.de = stub_es_valid;
       stub_hw2reg.intr_state.es_entropy_valid.d = 1'b1;
@@ -228,6 +257,7 @@ module entropy_src
   for (genvar i = 0; i < NumAlerts; i++) begin : gen_alert_tx
     prim_alert_sender #(
       .AsyncOn(AlertAsyncOn[i]),
+      .SkewCycles(AlertSkewCycles),
       .IsFatal(i)
     ) u_prim_alert_sender (
       .clk_i,
@@ -247,20 +277,25 @@ module entropy_src
 
   // Entropy Interface
   `ASSERT_KNOWN(EsHwIfEsAckKnownO_A, entropy_src_hw_if_o.es_ack)
-  `ASSERT_KNOWN(EsHwIfEsBitsKnownO_A, entropy_src_hw_if_o.es_bits)
-  `ASSERT_KNOWN(EsHwIfEsFipsKnownO_A, entropy_src_hw_if_o.es_fips)
+  `ASSERT_KNOWN_IF(EsHwIfEsBitsKnownO_A, entropy_src_hw_if_o.es_bits,
+      entropy_src_hw_if_o.es_ack)
+  `ASSERT_KNOWN_IF(EsHwIfEsFipsKnownO_A, entropy_src_hw_if_o.es_fips,
+      entropy_src_hw_if_o.es_ack)
 
   // RNG Interface
-  `ASSERT_KNOWN(EsRngEnableKnownO_A, entropy_src_rng_o.rng_enable)
+  `ASSERT_KNOWN(EsRngEnableKnownO_A, entropy_src_rng_enable_o)
+  `ASSERT_KNOWN(EsRngFipsKnownO_A, rng_fips_o)
 
   // External Health Test Interface
-  `ASSERT_KNOWN(EsXhtEntropyBitKnownO_A, entropy_src_xht_o.entropy_bit)
-  `ASSERT_KNOWN(EsXhtEntropyBitValidKnownO_A, entropy_src_xht_o.entropy_bit_valid)
-  `ASSERT_KNOWN(EsXhtClearKnownO_A, entropy_src_xht_o.clear)
-  `ASSERT_KNOWN(EsXhtActiveKnownO_A, entropy_src_xht_o.active)
-  `ASSERT_KNOWN(EsXhtThreshHiKnownO_A, entropy_src_xht_o.thresh_hi)
-  `ASSERT_KNOWN(EsXhtThreshLoKnownO_A, entropy_src_xht_o.thresh_lo)
-  `ASSERT_KNOWN(EsXhtWindowKnownO_A, entropy_src_xht_o.window_wrap_pulse)
+  `ASSERT_KNOWN_IF(EsXhtEntropyBitKnownO_A, entropy_src_xht_bits_o, entropy_src_xht_valid_o)
+  `ASSERT_KNOWN(EsXhtEntropyBitValidKnownO_A, entropy_src_xht_valid_o)
+  `ASSERT_KNOWN(EsXhtBitSelKnownO_A, entropy_src_xht_bit_sel_o)
+  `ASSERT_KNOWN(EsXhtHealthTestWindowKnownO_A, entropy_src_xht_health_test_window_o)
+  `ASSERT_KNOWN(EsXhtClearKnownO_A, entropy_src_xht_meta_o.clear)
+  `ASSERT_KNOWN(EsXhtActiveKnownO_A, entropy_src_xht_meta_o.active)
+  `ASSERT_KNOWN(EsXhtThreshHiKnownO_A, entropy_src_xht_meta_o.thresh_hi)
+  `ASSERT_KNOWN(EsXhtThreshLoKnownO_A, entropy_src_xht_meta_o.thresh_lo)
+  `ASSERT_KNOWN(EsXhtWindowKnownO_A, entropy_src_xht_meta_o.window_wrap_pulse)
 
   // Alerts
   `ASSERT_KNOWN(AlertTxKnownO_A, alert_tx_o)
@@ -268,6 +303,7 @@ module entropy_src
   // Interrupts
   `ASSERT_KNOWN(IntrEsEntropyValidKnownO_A, intr_es_entropy_valid_o)
   `ASSERT_KNOWN(IntrEsHealthTestFailedKnownO_A, intr_es_health_test_failed_o)
+  `ASSERT_KNOWN(IntrEsObserveFifoReadyKnownO_A, intr_es_observe_fifo_ready_o)
   `ASSERT_KNOWN(IntrEsFifoErrKnownO_A, intr_es_fatal_err_o)
 
   // prim_count alerts
@@ -281,11 +317,13 @@ module entropy_src
       alert_tx_o[1])
   end : gen_bit_cntrs
 
-  for (genvar i = 0; i < NumBins; i = i + 1) begin : gen_symbol_match
-   `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(CntAlertCheck_A,
-     u_entropy_src_core.u_entropy_src_bucket_ht.gen_symbol_match[i].u_prim_count_bin_cntr,
-     alert_tx_o[1])
-  end : gen_symbol_match
+  for (genvar j = 0; j < NumBucketHtInst; j = j + 1) begin : gen_symbol_match_inst_loop
+    for (genvar i = 0; i < NumBuckets; i = i + 1) begin : gen_symbol_match
+    `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(CntAlertCheck_A,
+      u_entropy_src_core.gen_health_test[j].u_entropy_src_bucket_ht.gen_symbol_match[i].
+      u_prim_count_bin_cntr, alert_tx_o[1])
+    end : gen_symbol_match
+  end : gen_symbol_match_inst_loop
 
   for (genvar sh = 0; sh < RngBusWidth; sh = sh+1) begin : gen_pair_cntrs
    `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(CntAlertCheck_A,
@@ -311,6 +349,9 @@ module entropy_src
     u_entropy_src_core.u_entropy_src_ack_sm.u_state_regs,
     alert_tx_o[1])
 
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(PipelineDepthCheck_A,
+    u_entropy_src_core.u_prim_count_pipeline_depth, alert_tx_o[1])
+
   `ASSERT_PRIM_FSM_ERROR_TRIGGER_ALERT(SHA3FsmCheck_A,
     u_entropy_src_core.u_sha3.u_state_regs, alert_tx_o[1])
 
@@ -319,7 +360,6 @@ module entropy_src
 
   `ASSERT_PRIM_FSM_ERROR_TRIGGER_ALERT(SHA3padFsmCheck_A,
     u_entropy_src_core.u_sha3.u_pad.u_state_regs, alert_tx_o[1])
-
 
   `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(SentMsgCountCheck_A,
     u_entropy_src_core.u_sha3.u_pad.u_sentmsg_count, alert_tx_o[1])
@@ -403,6 +443,47 @@ module entropy_src
     u_entropy_src_core.u_entropy_src_cntr_reg_extht_lo_alert_fails.u_prim_count_cntr_reg,
     alert_tx_o[1])
 
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(CntAlertCheck27_A,
+    u_entropy_src_core.u_entropy_src_adaptps_ht.u_prim_count_test_cnt,
+    alert_tx_o[1])
+
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(CntAlertCheck28_A,
+    u_entropy_src_core.u_entropy_src_cntr_reg_adaptps.u_prim_count_cntr_reg,
+    alert_tx_o[1])
+
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(CntAlertCheck29_A,
+    u_entropy_src_core.u_entropy_src_cntr_reg_adaptps_alert_fails.u_prim_count_cntr_reg,
+    alert_tx_o[1])
+
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(EsrngFifoWptrCheck_A,
+    u_entropy_src_core.u_prim_fifo_sync_esrng.gen_normal_fifo.u_fifo_cnt.gen_secure_ptrs.u_wptr,
+    alert_tx_o[1])
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(EsrngFifoRptrCheck_A,
+    u_entropy_src_core.u_prim_fifo_sync_esrng.gen_normal_fifo.u_fifo_cnt.gen_secure_ptrs.u_rptr,
+    alert_tx_o[1])
+
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(DistrFifoWptrCheck_A,
+    u_entropy_src_core.u_prim_fifo_sync_distr.gen_normal_fifo.u_fifo_cnt.gen_secure_ptrs.u_wptr,
+    alert_tx_o[1])
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(DistrFifoRptrCheck_A,
+    u_entropy_src_core.u_prim_fifo_sync_distr.gen_normal_fifo.u_fifo_cnt.gen_secure_ptrs.u_rptr,
+    alert_tx_o[1])
+
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(ObserveFifoWptrCheck_A,
+    u_entropy_src_core.u_prim_fifo_sync_observe.gen_normal_fifo.u_fifo_cnt.gen_secure_ptrs.u_wptr,
+    alert_tx_o[1])
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(ObserveFifoRptrCheck_A,
+    u_entropy_src_core.u_prim_fifo_sync_observe.gen_normal_fifo.u_fifo_cnt.gen_secure_ptrs.u_rptr,
+    alert_tx_o[1])
+
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(EsfinalFifoWptrCheck_A,
+    u_entropy_src_core.u_prim_fifo_sync_esfinal.gen_normal_fifo.u_fifo_cnt.gen_secure_ptrs.u_wptr,
+    alert_tx_o[1])
+  `ASSERT_PRIM_COUNT_ERROR_TRIGGER_ALERT(EsfinalFifoRptrCheck_A,
+    u_entropy_src_core.u_prim_fifo_sync_esfinal.gen_normal_fifo.u_fifo_cnt.gen_secure_ptrs.u_rptr,
+    alert_tx_o[1])
+
   // Alert assertions for reg_we onehot check
   `ASSERT_PRIM_REG_WE_ONEHOT_ERROR_TRIGGER_ALERT(RegWeOnehotCheck_A, u_reg, alert_tx_o[1])
+
 endmodule

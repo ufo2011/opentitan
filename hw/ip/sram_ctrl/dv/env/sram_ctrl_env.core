@@ -1,5 +1,5 @@
 CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 name: "lowrisc:dv:sram_ctrl_env:0.1"
@@ -9,13 +9,14 @@ filesets:
     depend:
       - lowrisc:dv:ralgen
       - lowrisc:dv:cip_lib
-      - lowrisc:dv:mem_bkdr_util
+      - lowrisc:dv:sram_ctrl_bkdr_util
       - lowrisc:dv:mem_bkdr_scb
     files:
       - sram_ctrl_prim_ral_pkg.sv
       - sram_ctrl_env_pkg.sv
       - sram_ctrl_lc_if.sv
       - sram_ctrl_exec_if.sv
+      - sram_ctrl_fault_if.sv
       - sram_ctrl_env_cfg.sv: {is_include_file: true}
       - sram_ctrl_env_cov.sv: {is_include_file: true}
       - sram_ctrl_virtual_sequencer.sv: {is_include_file: true}
@@ -36,6 +37,8 @@ filesets:
       - seq_lib/sram_ctrl_regwen_vseq.sv: {is_include_file: true}
       - seq_lib/sram_ctrl_ram_cfg_vseq.sv: {is_include_file: true}
       - seq_lib/sram_ctrl_stress_all_vseq.sv: {is_include_file: true}
+      - seq_lib/sram_ctrl_readback_err_vseq.sv: {is_include_file: true}
+      - seq_lib/sram_ctrl_mubi_enc_err_vseq.sv: {is_include_file: true}
     file_type: systemVerilogSource
 
 generate:
@@ -44,10 +47,11 @@ generate:
     parameters:
       name: sram_ctrl
       ip_hjson: ../../data/sram_ctrl.hjson
+    position: prepend
 
 targets:
   default:
     filesets:
       - files_dv
     generate:
-      - ral
+      - "!chip_level ? (ral)"

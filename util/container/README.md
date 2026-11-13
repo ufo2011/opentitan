@@ -1,8 +1,8 @@
 # Docker Container
 
-Docker container based on Ubuntu 18.04 LTS containing various hardware and
+Docker container based on Ubuntu 22.04 LTS containing various hardware and
 software development tools for OpenTitan, as listed in the
-[OpenTitan documentation]({{< relref "doc/getting_started" >}}).
+[OpenTitan documentation](../../doc/getting_started/README.md).
 
 ## Local Build Instructions
 

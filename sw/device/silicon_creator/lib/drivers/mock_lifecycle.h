@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,7 @@ class MockLifecycle : public global_mock::GlobalMock<MockLifecycle> {
 }  // namespace internal
 
 using MockLifecycle = testing::StrictMock<internal::MockLifecycle>;
+using NiceMockLifecycle = testing::NiceMock<internal::MockLifecycle>;
 
 }  // namespace rom_test
 

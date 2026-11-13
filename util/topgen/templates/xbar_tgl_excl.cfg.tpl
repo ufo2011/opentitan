@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -22,19 +22,24 @@
 // [LOW_RISK] Exclude the full TL a_address signal on all pass-through hierarchies. We instead look
 // at the full coverage of this signal directly at the host or at the device.
 -node tb.dut.top_${top["name"]} *tl_*.a_address
--node tb.dut.top_${top["name"]}.u_xbar_* tl_*.a_address
+-node tb.dut.top_${top["name"]}.${top["name"]}_pd_${top["power"]["default"].lower()}.u_xbar_* tl_*.a_address
 
 <%
   import tlgen.lib as lib
+  import topgen.lib as topgen_lib
 %>\
 // [UNR] Exclude unused address bits based on IP address range. It is not possible to cover this.
 % for xbar in top["xbar"]:
+<%
+  # TODO: Add support for multiple ASIDs within an xbar.
+  addr_space = xbar["addr_spaces"][0]
+%>\
   % for device in xbar["nodes"]:
     % if device["type"] == "device" and not device["xbar"]:
 <%
     addr_ranges = []
     for addr in device["addr_range"]:
-      start_addr = int(addr["base_addr"], 0)
+      start_addr = int(addr["base_addrs"][addr_space], 0)
       end_addr = start_addr + int(addr["size_byte"], 0) - 1
       addr_ranges.append((start_addr, end_addr))
     excl_bits = lib.get_toggle_excl_bits(addr_ranges)
@@ -45,6 +50,12 @@
         if_name += "_"
     except ValueError:
         pass
+    # A split IP hosts its TL interface in the primary partition. Target the
+    # primary partition instance (u_<name>_part_primary).
+    module = topgen_lib.find_module_by_name(top["module"], dev_name)
+    if module is not None:
+        dev_name = topgen_lib.instance_name_for_partition(dev_name, module,
+                                                          topgen_lib.PART_PRIMARY)
 %>\
       % for bit_range in excl_bits:
 -node tb.dut*.u_${dev_name} ${if_name}tl_*i.a_address[${bit_range[1]}:${bit_range[0]}]

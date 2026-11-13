@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +35,9 @@ class spi_device_env extends cip_base_env #(
           scoreboard.upstream_spi_device_fifo.analysis_export);
       spi_host_agent.monitor.req_analysis_port.connect(
           scoreboard.upstream_spi_req_fifo.analysis_export);
+      spi_host_agent.monitor.csb_active_analysis_port.connect(
+          scoreboard.upstream_csb_active_fifo.analysis_export);
+
       spi_device_agent.monitor.host_analysis_port.connect(
           scoreboard.downstream_spi_host_fifo.analysis_export);
     end

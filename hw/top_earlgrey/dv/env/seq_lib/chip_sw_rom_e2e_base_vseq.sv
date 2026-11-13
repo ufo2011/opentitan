@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,7 +30,9 @@ class chip_sw_rom_e2e_base_vseq extends chip_sw_base_vseq;
     // Wait until we receive the expected boot fault message length of bytes over UART0.
     `DV_WAIT(uart_tx_data_q.size() == exp_msg.len(),
       "Timeout waiting for UART FIFO to fill.", 200_000_000)
-    `uvm_info(`gfn, "Checking the UART TX data matches expected boot fault msg ...", UVM_LOW)
+    `uvm_info(`gfn,
+      $sformatf("Checking UART TX data matches '%s'...", exp_msg),
+      UVM_LOW);
     actual_msg = {>>{uart_tx_data_q}};
     `DV_CHECK_STREQ(actual_msg, exp_msg)
   endtask
@@ -52,7 +54,12 @@ class chip_sw_rom_e2e_base_vseq extends chip_sw_base_vseq;
     // prevent X's propagating as a result of multiple drivers on pins IOC3 and IOC4 (due to DFT
     // strap sampling in TestUnlocked* and RMA lifecycle states). Once the retention SRAM is
     // initialized, we have made it to `rom_main()`.
-    `DV_WAIT(cfg.chip_vif.sram_ret_init_done == 1)
+    `DV_WAIT(cfg.chip_vif.sram_ret_init_done == 1,
+             $sformatf({"Timeout occurred when waiting for SRAM initialization; ",
+                        "Current sram_ret_init_done = 1'%0b, Timeout value = %0dns"},
+                        cfg.chip_vif.sram_ret_init_done,
+                        cfg.sw_test_timeout_ns),
+             cfg.sw_test_timeout_ns)
   endtask
 
 endclass : chip_sw_rom_e2e_base_vseq

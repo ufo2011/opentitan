@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,14 +36,6 @@ make_lower_case_loop:
 
 make_lower_case_end:
   ret
-
-/**
- * The size of the `make_lower_case` function in bytes.
- */
-  .global kMakeLowerCaseFnSize
-kMakeLowerCaseFnSize:
-  .4byte .-make_lower_case
-
 
 /**
  * Replaces the content of the given string with a constant string (`name`)
@@ -86,11 +78,19 @@ get_name_end:
   ret
 
 name:
-  .string "My name is Titan, Open Titan"
+  // ensure the following string has an even length (including the null), while
+  // the bug https://github.com/llvm/llvm-project/issues/147771 remains unfixed
+  // or the fix has not been included in the OpenTitan toolchain. LLD uses `nop`
+  // and `c.nop` instructions to realign code sections, so it's unable to
+  // realign back to two bytes. If the code is not aligned to a half word, debug
+  // builds of LLD will trip on an assertion.
+  .string "My name is Titan, Open Titan!"
 
 /**
- * The size of the `get_name` function in bytes.
+ * Reserve some area to map functions to.
  */
-  .global kGetNameFnSize
-kGetNameFnSize:
-  .4byte .-get_name
+  .globl remapped_function
+  .type remapped_function, @function
+  .balign 256
+remapped_function:
+  .fill 256

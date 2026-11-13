@@ -1,12 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 `include "prim_assert.sv"
 
 package rom_ctrl_pkg;
-
-  parameter int AlertFatal = 0;
 
   typedef struct packed {
     prim_mubi_pkg::mubi4_t done;

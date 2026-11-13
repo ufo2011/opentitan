@@ -1,18 +1,19 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "hw/top/dt/otbn.h"     // Generated
+#include "hw/top/dt/rv_plic.h"  // Generated
 #include "sw/device/lib/dif/dif_otbn.h"
 #include "sw/device/lib/runtime/ibex.h"
 #include "sw/device/lib/runtime/irq.h"
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/entropy_testutils.h"
 #include "sw/device/lib/testing/otbn_testutils.h"
+#include "sw/device/lib/testing/profile.h"
 #include "sw/device/lib/testing/rv_plic_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
-
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
 
 /**
  * ECDSA sign and verify test with the NIST P-256 curve using OTBN.
@@ -33,32 +34,39 @@
  * $ ./otbn_test_params.py ecc otbn_ecdsa_p256_test_private_key.pem
  * </code>
  */
+OTBN_DECLARE_APP_SYMBOLS(run_p256);
 
-OTBN_DECLARE_APP_SYMBOLS(p256_ecdsa);
+OTBN_DECLARE_SYMBOL_ADDR(run_p256, mode);
+OTBN_DECLARE_SYMBOL_ADDR(run_p256, msg);
+OTBN_DECLARE_SYMBOL_ADDR(run_p256, r);
+OTBN_DECLARE_SYMBOL_ADDR(run_p256, s);
+OTBN_DECLARE_SYMBOL_ADDR(run_p256, x);
+OTBN_DECLARE_SYMBOL_ADDR(run_p256, y);
+OTBN_DECLARE_SYMBOL_ADDR(run_p256, d0_io);
+OTBN_DECLARE_SYMBOL_ADDR(run_p256, d1_io);
+OTBN_DECLARE_SYMBOL_ADDR(run_p256, x_r);
 
-OTBN_DECLARE_SYMBOL_ADDR(p256_ecdsa, mode);
-OTBN_DECLARE_SYMBOL_ADDR(p256_ecdsa, msg);
-OTBN_DECLARE_SYMBOL_ADDR(p256_ecdsa, r);
-OTBN_DECLARE_SYMBOL_ADDR(p256_ecdsa, s);
-OTBN_DECLARE_SYMBOL_ADDR(p256_ecdsa, x);
-OTBN_DECLARE_SYMBOL_ADDR(p256_ecdsa, y);
-OTBN_DECLARE_SYMBOL_ADDR(p256_ecdsa, d0);
-OTBN_DECLARE_SYMBOL_ADDR(p256_ecdsa, d1);
-OTBN_DECLARE_SYMBOL_ADDR(p256_ecdsa, x_r);
+static const otbn_app_t kOtbnAppP256Ecdsa = OTBN_APP_T_INIT(run_p256);
 
-static const otbn_app_t kOtbnAppP256Ecdsa = OTBN_APP_T_INIT(p256_ecdsa);
+static const otbn_addr_t kOtbnVarMode = OTBN_ADDR_T_INIT(run_p256, mode);
+static const otbn_addr_t kOtbnVarMsg = OTBN_ADDR_T_INIT(run_p256, msg);
+static const otbn_addr_t kOtbnVarR = OTBN_ADDR_T_INIT(run_p256, r);
+static const otbn_addr_t kOtbnVarS = OTBN_ADDR_T_INIT(run_p256, s);
+static const otbn_addr_t kOtbnVarX = OTBN_ADDR_T_INIT(run_p256, x);
+static const otbn_addr_t kOtbnVarY = OTBN_ADDR_T_INIT(run_p256, y);
+static const otbn_addr_t kOtbnVarD0 = OTBN_ADDR_T_INIT(run_p256, d0_io);
+static const otbn_addr_t kOtbnVarD1 = OTBN_ADDR_T_INIT(run_p256, d1_io);
+static const otbn_addr_t kOtbnVarXR = OTBN_ADDR_T_INIT(run_p256, x_r);
 
-static const otbn_addr_t kOtbnVarMode = OTBN_ADDR_T_INIT(p256_ecdsa, mode);
-static const otbn_addr_t kOtbnVarMsg = OTBN_ADDR_T_INIT(p256_ecdsa, msg);
-static const otbn_addr_t kOtbnVarR = OTBN_ADDR_T_INIT(p256_ecdsa, r);
-static const otbn_addr_t kOtbnVarS = OTBN_ADDR_T_INIT(p256_ecdsa, s);
-static const otbn_addr_t kOtbnVarX = OTBN_ADDR_T_INIT(p256_ecdsa, x);
-static const otbn_addr_t kOtbnVarY = OTBN_ADDR_T_INIT(p256_ecdsa, y);
-static const otbn_addr_t kOtbnVarD0 = OTBN_ADDR_T_INIT(p256_ecdsa, d0);
-static const otbn_addr_t kOtbnVarD1 = OTBN_ADDR_T_INIT(p256_ecdsa, d1);
-static const otbn_addr_t kOtbnVarXR = OTBN_ADDR_T_INIT(p256_ecdsa, x_r);
+// Declare mode constants.
+OTBN_DECLARE_SYMBOL_ADDR(run_p256, MODE_SIGN);
+OTBN_DECLARE_SYMBOL_ADDR(run_p256, MODE_VERIFY);
+static const uint32_t kModeSign = OTBN_ADDR_T_INIT(run_p256, MODE_SIGN);
+static const uint32_t kModeVerify = OTBN_ADDR_T_INIT(run_p256, MODE_VERIFY);
 
 OTTF_DEFINE_TEST_CONFIG();
+
+static const uint32_t kPlicTarget = 0;
 
 /**
  * The plic dif to access the hardware.
@@ -73,7 +81,7 @@ static dif_otbn_t otbn;
 /**
  * The peripheral which fired the irq to be filled by the irq handler.
  */
-static volatile top_earlgrey_plic_peripheral_t plic_peripheral;
+static volatile dt_instance_id_t plic_peripheral;
 
 /**
  * The irq id to be filled by the irq handler.
@@ -83,7 +91,7 @@ static volatile dif_rv_plic_irq_id_t irq_id;
 /**
  * The otbn irq to be filled by the irq handler.
  */
-static volatile dif_otbn_irq_t irq;
+static volatile dt_otbn_irq_t irq;
 
 /**
  * Provides external IRQ handling for otbn tests.
@@ -91,28 +99,26 @@ static volatile dif_otbn_irq_t irq;
  * This function overrides the default OTTF external ISR.
  *
  * It performs the following:
- * 1. Claims the IRQ fired (finds PLIC IRQ index).
- * 2. Compute the OTBN peripheral.
- * 3. Compute the otbn irq.
+ * 1. Checks if the interrupt is from OTBN.
+ * 2. Computes the otbn irq from the PLIC ID.
+ * 3. Sets volatile variables for the waiting function.
  * 4. Clears the IRQ at the peripheral.
- * 5. Completes the IRQ service at PLIC.
+ * 5. Returns true to indicate the interrupt was handled.
  */
-void ottf_external_isr(void) {
-  CHECK_DIF_OK(dif_rv_plic_irq_claim(&plic, kTopEarlgreyPlicTargetIbex0,
-                                     (dif_rv_plic_irq_id_t *)&irq_id));
+bool ottf_handle_irq(uint32_t *exc_info, dt_instance_id_t devid,
+                     dif_rv_plic_irq_id_t plic_id) {
+  // Handle interrupts from OTBN
+  if (devid != dt_otbn_instance_id(kDtOtbn)) {
+    return false;
+  }
 
-  plic_peripheral = (top_earlgrey_plic_peripheral_t)
-      top_earlgrey_plic_interrupt_for_peripheral[irq_id];
-
-  irq = (dif_otbn_irq_t)(irq_id -
-                         (dif_rv_plic_irq_id_t)kTopEarlgreyPlicIrqIdOtbnDone);
+  // Store the peripheral and IRQ ID for otbn_wait_for_done_irq
+  plic_peripheral = devid;
+  irq_id = plic_id;
+  irq = dt_otbn_irq_from_plic_id(kDtOtbn, plic_id);
 
   CHECK_DIF_OK(dif_otbn_irq_acknowledge(&otbn, irq));
-
-  // Complete the IRQ by writing the IRQ source to the Ibex specific CC.
-  // register.
-  CHECK_DIF_OK(
-      dif_rv_plic_irq_complete(&plic, kTopEarlgreyPlicTargetIbex0, irq_id));
+  return true;
 }
 
 static void otbn_wait_for_done_irq(dif_otbn_t *otbn) {
@@ -120,34 +126,21 @@ static void otbn_wait_for_done_irq(dif_otbn_t *otbn) {
   // we see the Done interrupt fire.
   irq = UINT32_MAX;
   irq_id = UINT32_MAX;
-  plic_peripheral = UINT32_MAX;
+  plic_peripheral = kDtInstanceIdUnknown;
   // Enable Done interrupt.
   CHECK_DIF_OK(
       dif_otbn_irq_set_enabled(otbn, kDifOtbnIrqDone, kDifToggleEnabled));
 
   // At this point, OTBN should be running. Wait for an interrupt that says
   // it's done.
-  while (true) {
-    // This looks a bit odd, but is needed to avoid a race condition where the
-    // OTBN interrupt comes in after we load the otbn_finished flag but before
-    // we run the WFI instruction. The trick is that WFI returns when an
-    // interrupt comes in even if interrupts are globally disabled, which means
-    // that the WFI can actually sit *inside* the critical section.
-    irq_global_ctrl(false);
-    if (plic_peripheral != UINT32_MAX) {
-      break;
-    }
-    wait_for_interrupt();
-    irq_global_ctrl(true);
-  }
-  irq_global_ctrl(true);
+  ATOMIC_WAIT_FOR_INTERRUPT(plic_peripheral != kDtInstanceIdUnknown);
 
-  CHECK(plic_peripheral == kTopEarlgreyPlicPeripheralOtbn,
+  CHECK(plic_peripheral == dt_otbn_instance_id(kDtOtbn),
         "Interrupt from incorrect peripheral: (exp: %d, obs: %s)",
-        kTopEarlgreyPlicPeripheralOtbn, plic_peripheral);
+        dt_otbn_instance_id(kDtOtbn), plic_peripheral);
 
   // Check this is the interrupt we expected.
-  CHECK(irq_id == kTopEarlgreyPlicIrqIdOtbnDone);
+  CHECK(irq == kDtOtbnIrqDone);
 
   // Disable Done interrupt.
   CHECK_DIF_OK(
@@ -158,21 +151,18 @@ static void otbn_wait_for_done_irq(dif_otbn_t *otbn) {
 }
 
 static void otbn_init_irq(void) {
-  mmio_region_t plic_base_addr =
-      mmio_region_from_addr(TOP_EARLGREY_RV_PLIC_BASE_ADDR);
   // Initialize PLIC and configure OTBN interrupt.
-  CHECK_DIF_OK(dif_rv_plic_init(plic_base_addr, &plic));
+  CHECK_DIF_OK(dif_rv_plic_init_from_dt(kDtRvPlic, &plic));
 
   // Set interrupt priority to be positive.
-  dif_rv_plic_irq_id_t irq_id = kTopEarlgreyPlicIrqIdOtbnDone;
+  dif_rv_plic_irq_id_t irq_id = dt_otbn_irq_to_plic_id(kDtOtbn, kDtOtbnIrqDone);
   CHECK_DIF_OK(dif_rv_plic_irq_set_priority(&plic, irq_id, 0x1));
 
-  CHECK_DIF_OK(dif_rv_plic_irq_set_enabled(
-      &plic, irq_id, kTopEarlgreyPlicTargetIbex0, kDifToggleEnabled));
+  CHECK_DIF_OK(dif_rv_plic_irq_set_enabled(&plic, irq_id, kPlicTarget,
+                                           kDifToggleEnabled));
 
   // Set the threshold for Ibex to 0.
-  CHECK_DIF_OK(dif_rv_plic_target_set_threshold(
-      &plic, kTopEarlgreyPlicTargetIbex0, 0x0));
+  CHECK_DIF_OK(dif_rv_plic_target_set_threshold(&plic, kPlicTarget, 0x0));
 
   // Enable the external IRQ (so that we see the interrupt from the PLIC).
   irq_global_ctrl(true);
@@ -206,31 +196,6 @@ static void check_data(const char *msg, const uint8_t *actual,
 }
 
 /**
- * Starts a profiling section.
- *
- * Call this function at the start of a section that should be profiled, and
- * call `profile_end()` at the end of it to display the results.
- *
- * @return The cycle counter when starting the profiling.
- */
-static uint64_t profile_start(void) { return ibex_mcycle_read(); }
-
-/**
- * Ends a profiling section.
- *
- * The time since `profile_start()` is printed as log message.
- *
- * @param t_start Start timestamp, as returned from profile_start().
- * @param msg Name of the operation (for logging purposes).
- */
-static void profile_end(uint64_t t_start, const char *msg) {
-  uint64_t t_end = ibex_mcycle_read();
-  uint32_t cycles = t_end - t_start;
-  uint32_t time_us = cycles / 100;
-  LOG_INFO("%s took %u cycles or %u us @ 100 MHz.", msg, cycles, time_us);
-}
-
-/**
  * Signs a message with ECDSA using the P-256 curve.
  *
  * @param otbn                The OTBN context object.
@@ -247,26 +212,33 @@ static void p256_ecdsa_sign(dif_otbn_t *otbn, const uint8_t *msg,
   CHECK(otbn != NULL);
 
   // Write input arguments.
-  uint32_t mode = 1;  // mode 1 => sign
-  otbn_testutils_write_data(otbn, sizeof(mode), &mode, kOtbnVarMode);
-  otbn_testutils_write_data(otbn, /*len_bytes=*/32, msg, kOtbnVarMsg);
-  otbn_testutils_write_data(otbn, /*len_bytes=*/32, private_key_d, kOtbnVarD0);
+  uint32_t mode = kModeSign;
+  CHECK_STATUS_OK(
+      otbn_testutils_write_data(otbn, sizeof(uint32_t), &mode, kOtbnVarMode));
+  CHECK_STATUS_OK(
+      otbn_testutils_write_data(otbn, /*len_bytes=*/32, msg, kOtbnVarMsg));
+  CHECK_STATUS_OK(otbn_testutils_write_data(otbn, /*len_bytes=*/32,
+                                            private_key_d, kOtbnVarD0));
 
   // Write redundant upper bits of d (all-zero for this test).
   uint8_t d0_high[32] = {0};
-  otbn_testutils_write_data(otbn, /*len_bytes=*/32, d0_high, kOtbnVarD0 + 32);
+  CHECK_STATUS_OK(otbn_testutils_write_data(otbn, /*len_bytes=*/32, d0_high,
+                                            kOtbnVarD0 + 32));
 
   // Write second share of d (all-zero for this test).
   uint8_t d1[64] = {0};
-  otbn_testutils_write_data(otbn, /*len_bytes=*/64, d1, kOtbnVarD1);
+  CHECK_STATUS_OK(
+      otbn_testutils_write_data(otbn, /*len_bytes=*/64, d1, kOtbnVarD1));
 
   // Call OTBN to perform operation, and wait for it to complete.
-  otbn_testutils_execute(otbn);
+  CHECK_STATUS_OK(otbn_testutils_execute(otbn));
   otbn_wait_for_done_irq(otbn);
 
   // Read back results.
-  otbn_testutils_read_data(otbn, /*len_bytes=*/32, kOtbnVarR, signature_r);
-  otbn_testutils_read_data(otbn, /*len_bytes=*/32, kOtbnVarS, signature_s);
+  CHECK_STATUS_OK(
+      otbn_testutils_read_data(otbn, /*len_bytes=*/32, kOtbnVarR, signature_r));
+  CHECK_STATUS_OK(
+      otbn_testutils_read_data(otbn, /*len_bytes=*/32, kOtbnVarS, signature_s));
 }
 
 /**
@@ -290,20 +262,27 @@ static void p256_ecdsa_verify(dif_otbn_t *otbn, const uint8_t *msg,
   CHECK(otbn != NULL);
 
   // Write input arguments.
-  uint32_t mode = 2;  // mode 2 => verify
-  otbn_testutils_write_data(otbn, sizeof(mode), &mode, kOtbnVarMode);
-  otbn_testutils_write_data(otbn, /*len_bytes=*/32, msg, kOtbnVarMsg);
-  otbn_testutils_write_data(otbn, /*len_bytes=*/32, signature_r, kOtbnVarR);
-  otbn_testutils_write_data(otbn, /*len_bytes=*/32, signature_s, kOtbnVarS);
-  otbn_testutils_write_data(otbn, /*len_bytes=*/32, public_key_x, kOtbnVarX);
-  otbn_testutils_write_data(otbn, /*len_bytes=*/32, public_key_y, kOtbnVarY);
+  uint32_t mode = kModeVerify;
+  CHECK_STATUS_OK(
+      otbn_testutils_write_data(otbn, sizeof(uint32_t), &mode, kOtbnVarMode));
+  CHECK_STATUS_OK(
+      otbn_testutils_write_data(otbn, /*len_bytes=*/32, msg, kOtbnVarMsg));
+  CHECK_STATUS_OK(otbn_testutils_write_data(otbn, /*len_bytes=*/32, signature_r,
+                                            kOtbnVarR));
+  CHECK_STATUS_OK(otbn_testutils_write_data(otbn, /*len_bytes=*/32, signature_s,
+                                            kOtbnVarS));
+  CHECK_STATUS_OK(otbn_testutils_write_data(otbn, /*len_bytes=*/32,
+                                            public_key_x, kOtbnVarX));
+  CHECK_STATUS_OK(otbn_testutils_write_data(otbn, /*len_bytes=*/32,
+                                            public_key_y, kOtbnVarY));
 
   // Call OTBN to perform operation, and wait for it to complete.
-  otbn_testutils_execute(otbn);
+  CHECK_STATUS_OK(otbn_testutils_execute(otbn));
   otbn_wait_for_done_irq(otbn);
 
   // Read back results.
-  otbn_testutils_read_data(otbn, /*len_bytes=*/32, kOtbnVarXR, signature_x_r);
+  CHECK_STATUS_OK(otbn_testutils_read_data(otbn, /*len_bytes=*/32, kOtbnVarXR,
+                                           signature_x_r));
 }
 
 /**
@@ -335,11 +314,10 @@ static void test_ecdsa_p256_roundtrip(void) {
 
   // Initialize
   uint64_t t_start_init = profile_start();
-  CHECK_DIF_OK(
-      dif_otbn_init(mmio_region_from_addr(TOP_EARLGREY_OTBN_BASE_ADDR), &otbn));
+  CHECK_DIF_OK(dif_otbn_init_from_dt(kDtOtbn, &otbn));
   otbn_init_irq();
-  otbn_testutils_load_app(&otbn, kOtbnAppP256Ecdsa);
-  profile_end(t_start_init, "Initialization");
+  CHECK_STATUS_OK(otbn_testutils_load_app(&otbn, kOtbnAppP256Ecdsa));
+  profile_end_and_print(t_start_init, "Initialization");
 
   // Sign
   uint8_t signature_r[32] = {0};
@@ -348,12 +326,12 @@ static void test_ecdsa_p256_roundtrip(void) {
   LOG_INFO("Signing");
   uint64_t t_start_sign = profile_start();
   p256_ecdsa_sign(&otbn, kIn, kPrivateKeyD, signature_r, signature_s);
-  profile_end(t_start_sign, "Sign");
+  profile_end_and_print(t_start_sign, "Sign");
 
   // Securely wipe OTBN data memory and reload app
   LOG_INFO("Wiping OTBN DMEM and reloading app");
   otbn_wipe_dmem(&otbn);
-  otbn_testutils_load_app(&otbn, kOtbnAppP256Ecdsa);
+  CHECK_STATUS_OK(otbn_testutils_load_app(&otbn, kOtbnAppP256Ecdsa));
 
   // Verify
   uint8_t signature_x_r[32] = {0};
@@ -367,7 +345,7 @@ static void test_ecdsa_p256_roundtrip(void) {
   // either OTBN or the host CPU needs to do as part of the signature
   // verification.
   check_data("signature_x_r", signature_r, signature_x_r, 32);
-  profile_end(t_start_verify, "Verify");
+  profile_end_and_print(t_start_verify, "Verify");
 
   // Securely wipe OTBN data memory
   LOG_INFO("Wiping OTBN DMEM");
@@ -375,7 +353,7 @@ static void test_ecdsa_p256_roundtrip(void) {
 }
 
 bool test_main(void) {
-  entropy_testutils_auto_mode_init();
+  CHECK_STATUS_OK(entropy_testutils_auto_mode_init());
 
   test_ecdsa_p256_roundtrip();
 

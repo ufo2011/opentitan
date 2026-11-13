@@ -1,28 +1,33 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 ${autogen_banner}
+<%
+  top_name = top["name"]
+%>
 
 #include "sw/device/lib/testing/autogen/isr_testutils.h"
 #include "sw/device/lib/dif/dif_base.h"
 
 #include "sw/device/lib/dif/dif_rv_plic.h"
 % for ip in ips_with_difs:
-  % if ip.irqs:
-    #include "sw/device/lib/dif/dif_${ip.name_snake}.h"
-  % endif
+%  if ip.name_snake == "adc_ctrl":
+## See below.
+#include "sw/device/lib/dif/dif_adc_ctrl.h"
+%  endif
 % endfor
 #include "sw/device/lib/testing/test_framework/check.h"
-
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h" // Generated.
 
 % for ip in ips_with_difs:
   % if ip.irqs:
     void isr_testutils_${ip.name_snake}_isr(
       plic_isr_ctx_t plic_ctx,
       ${ip.name_snake}_isr_ctx_t ${ip.name_snake}_ctx,
-      top_earlgrey_plic_peripheral_t *peripheral_serviced,
+    % if ip.has_status_type_irqs():
+      bool mute_status_irq,
+    % endif
+      top_${top_name}_plic_peripheral_t *peripheral_serviced,
       dif_${ip.name_snake}_irq_t *irq_serviced) {
 
       // Claim the IRQ at the PLIC.
@@ -33,8 +38,8 @@ ${autogen_banner}
         &plic_irq_id));
 
       // Get the peripheral the IRQ belongs to.
-      *peripheral_serviced = (top_earlgrey_plic_peripheral_t)
-        top_earlgrey_plic_interrupt_for_peripheral[plic_irq_id];
+      *peripheral_serviced = (top_${top_name}_plic_peripheral_t)
+        top_${top_name}_plic_interrupt_for_peripheral[plic_irq_id];
 
       // Get the IRQ that was fired from the PLIC IRQ ID.
       dif_${ip.name_snake}_irq_t irq = (dif_${ip.name_snake}_irq_t)(plic_irq_id -
@@ -71,7 +76,14 @@ ${autogen_banner}
         CHECK_DIF_OK(dif_${ip.name_snake}_irq_acknowledge(
             ${ip.name_snake}_ctx.${ip.name_snake},
             irq));
+      % if ip.has_status_type_irqs():
+      } else if(mute_status_irq) {
+        CHECK_DIF_OK(dif_${ip.name_snake}_irq_set_enabled(${ip.name_snake}_ctx.${ip.name_snake},
+            irq, kDifToggleDisabled));
       }
+      % else:
+      }
+      % endif
 
       // Complete the IRQ at the PLIC.
       CHECK_DIF_OK(dif_rv_plic_irq_complete(

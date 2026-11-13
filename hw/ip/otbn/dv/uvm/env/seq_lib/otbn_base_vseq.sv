@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,8 +35,11 @@ class otbn_base_vseq extends cip_base_vseq #(
   // sideload sequencer will get upset if we kill a process that's waiting for a grant from it).
   protected int unsigned stop_tokens = 0;
 
+  // The bit position of the DONE interrupt in the register.
+  int unsigned DONE_INTR_POSITION = 0;
+
   // Saved TL agent configuration
-  typedef struct packed {
+  typedef struct {
     bit          valid;
     int unsigned a_valid_delay_min;
     int unsigned a_valid_delay_max;
@@ -66,7 +69,8 @@ class otbn_base_vseq extends cip_base_vseq #(
       1 :/ 9
     };)
     `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(num_wipes, num_wipes inside {[0 : 2]};)
-    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(wipe_cmd, wipe_cmd != otbn_pkg::CmdExecute;)
+    `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(wipe_cmd,
+        wipe_cmd inside {otbn_pkg::CmdSecWipeDmem, otbn_pkg::CmdSecWipeImem};)
     if (bogus_write) begin
       // Write a bogus value while we are in IDLE state for coverage.
       _send_bogus_cmd();
@@ -347,12 +351,27 @@ class otbn_base_vseq extends cip_base_vseq #(
     // immediately, causing all sorts of confusion. It's a testbench bug if we are.
     `DV_CHECK_FATAL(!cfg.under_reset)
 
-    // Wait for OTBN to be idle. After a reset, getting an URND value from EDN and performing an
-    // initial secure wipe can take up to 500 cycles if the EDN is held in reset for much longer
-    // than OTBN, so use that as timeout.  Stop waiting on a reset.
+    // Wait for OTBN to be idle. We expect getting there to take some time: OTBN has to get two URND
+    // values from the EDN and then perform its initial secure wipe. To wait for this, wait until
+    // the EDN comes out of reset and then allow some extra time for the actual data to be
+    // transferred. Transferring each URND word will take 8 EDN words and each of those words will
+    // take at least 4 EDN clock cycles. So that gives 32 EDN clock cycles for each URND value while
+    // actually transferring data. Between those transfers, allow another 200 cycles of the main
+    // clock for the secure wipe itself.
+    //
+    // Stop waiting on a reset.
     fork : wait_for_idle_fork
       wait(cfg.model_agent_cfg.vif.status == otbn_pkg::StatusIdle);
-      repeat (500) @(cfg.clk_rst_vif.cbn);
+      begin
+        // Wait for both clock/reset interfaces to be out of reset.
+        wait(cfg.edn_clk_rst_vif.rst_n);
+        wait(cfg.clk_rst_vif.rst_n);
+        // Wait for each round of secure wipe (see longer note above for the logic behind the waits)
+        repeat (2) begin
+          repeat (32) @(cfg.edn_clk_rst_vif.cbn);
+          repeat (200) @(cfg.clk_rst_vif.cbn);
+        end
+      end
       wait(cfg.under_reset);
     join_any
 
@@ -458,50 +477,64 @@ class otbn_base_vseq extends cip_base_vseq #(
     running_ = 1'b0;
   endtask
 
+  // Wait for OTBN to finish, either by polling or by waiting on the interrupt pins
+  //
+  // When polling, this waits up to 1ms before failing with a timeout. If polling, we pass the
+  // backdoor flag to csr_rd, which is a way to avoid starting requests on the TL sequencer.
+  // Avoiding this means we can safely kill the process without leaving anything hanging.
+  task wait_for_run_completion(input bit verbosity, input bit backdoor=0);
+    fork begin : isolation_fork
+      fork
+        begin
+          `DV_WAIT_TIMEOUT(10_000_000, ,
+                           "Timed out waiting for OTBN run to complete")
+        end
+        begin
+          if (_pick_use_interrupt()) begin
+            `uvm_info(`gfn, "\n\t ----| Waiting for OTBN to finish (interrupt)", verbosity)
+            wait_for_interrupt();
+          end else begin
+            uvm_reg_data_t run_status;
+
+            `uvm_info(`gfn, "\n\t ----| Waiting for OTBN to finish (polling)", verbosity)
+            while (cfg.clk_rst_vif.rst_n) begin
+              uvm_reg_data_t rdata;
+              csr_rd(.ptr(ral.status), .value(rdata), .blocking(1), .backdoor(backdoor));
+              if (rdata inside {otbn_pkg::StatusIdle, otbn_pkg::StatusLocked}) begin
+                `uvm_info(`gfn, $sformatf("Seen end of OTBN run (status is %0x)", rdata), UVM_HIGH)
+                break;
+              end
+              if (backdoor) cfg.clk_rst_vif.wait_clks(10);
+            end
+          end
+        end
+      join_any
+      disable fork;
+    end join
+  endtask
+
   // The guts of the run_otbn task. Writes to the CMD register to start OTBN and polls the status
   // register until completion. On reset, this returns immediately.
   protected task _run_otbn_cmd(logic [7:0] cmd_i);
-
-    logic [7:0] exp_data_status;
     case (cmd_i)
       otbn_pkg::CmdSecWipeDmem: begin
         `uvm_info(`gfn, "\n\t ----| Starting OTBN SecWipeDmem", UVM_MEDIUM)
-        exp_data_status = otbn_pkg::StatusBusySecWipeDmem;
       end
       otbn_pkg::CmdSecWipeImem: begin
         `uvm_info(`gfn, "\n\t ----| Starting OTBN SecWipeImem", UVM_MEDIUM)
-        exp_data_status = otbn_pkg::StatusBusySecWipeImem;
       end
       otbn_pkg::CmdExecute: begin
         `uvm_info(`gfn, "\n\t ----| Starting OTBN Execution", UVM_MEDIUM)
-        exp_data_status = otbn_pkg::StatusBusyExecute;
       end
       default: `uvm_fatal(`gfn, "Invalid operation")
     endcase
 
     csr_utils_pkg::csr_wr(ral.cmd, cmd_i);
 
-    // Wait for OTBN to finish, either by polling or by waiting on the interrupt pins
-    if (_pick_use_interrupt()) begin
-      `uvm_info(`gfn, "\n\t ----| Waiting for OTBN to finish (interrupt)", UVM_MEDIUM)
-      wait_for_interrupt();
-    end else begin
-      `uvm_info(`gfn, "\n\t ----| Waiting for OTBN to finish (polling)", UVM_MEDIUM)
-      csr_utils_pkg::csr_spinwait(.ptr(ral.status), .exp_data(exp_data_status),
-                                  .compare_op(CompareOpNe));
-    end
+    wait_for_run_completion(UVM_MEDIUM);
 
     if (cfg.clk_rst_vif.rst_n) begin
-      if (exp_data_status == otbn_pkg::StatusBusyExecute) begin
-        `uvm_info(`gfn, "\n\t ----| OTBN completed execution", UVM_MEDIUM)
-        // After execution, OTBN securely wipes its internal state, so wait until that is complete.
-        exp_data_status = otbn_pkg::StatusBusySecWipeInt;
-        csr_utils_pkg::csr_spinwait(.ptr(ral.status), .exp_data(exp_data_status),
-                                    .compare_op(CompareOpNe));
-        `uvm_info(`gfn, "\n\t ----| OTBN completed secure wipe", UVM_MEDIUM)
-      end else begin
-        `uvm_info(`gfn, "\n\t ----| OTBN finished", UVM_MEDIUM)
-      end
+      `uvm_info(`gfn, "\n\t ----| OTBN finished", UVM_MEDIUM)
     end else begin
       `uvm_info(`gfn, "\n\t ----| OTBN reset", UVM_MEDIUM)
     end
@@ -578,7 +611,7 @@ class otbn_base_vseq extends cip_base_vseq #(
 
       // Loop warping assumes we're not manipulating the loop stack (i.e. no new loop starting or
       // current loop finishing the same cycle we warp).
-      `DV_CHECK_FATAL(!(cfg.loop_vif.loop_stack_push || cfg.loop_vif.loop_stack_pop) &&
+      `DV_CHECK_FATAL(!(cfg.loop_vif.loop_stack_push_req || cfg.loop_vif.loop_stack_pop) &&
                       !cfg.trace_vif.locking_o)
 
       // Convert loop warp's remaining iteration count to "RTL view"
@@ -645,7 +678,7 @@ class otbn_base_vseq extends cip_base_vseq #(
     end else begin
       // If absent keys are not allowed, we want to generate our own sequence that doesn't allow
       // keys to be invalid. We send it with a higher priority to override the default sequence.
-      key_sideload_set_seq #(keymgr_pkg::otbn_key_req_t) sideload_seq;
+      key_sideload_set_seq #(keymgr_dpe_pkg::wide_hw_key_req_t) sideload_seq;
       `uvm_create_on(sideload_seq, p_sequencer.key_sideload_sequencer_h)
       while (stop_tokens == 0) begin
         `DV_CHECK_RANDOMIZE_WITH_FATAL(sideload_seq, sideload_key.valid == 1'b1;)
@@ -657,13 +690,16 @@ class otbn_base_vseq extends cip_base_vseq #(
     stop_tokens -= 1;
   endtask
 
+  virtual task pre_start();
+    super.pre_start();
+    // Check that cfg.otbn_elf_dir was set by the test
+    `DV_CHECK_FATAL(cfg.otbn_elf_dir.len() > 0);
+  endtask
+
   virtual protected function string pick_elf_path();
     chandle helper;
     int     num_files;
     string  elf_path;
-
-    // Check that cfg.otbn_elf_dir was set by the test
-    `DV_CHECK_FATAL(cfg.otbn_elf_dir.len() > 0);
 
     // Pick an ELF file to use in the test. We have to do this via DPI (because you can't list a
     // directory in pure SystemVerilog). To do so, we have to construct a helper object, which will
@@ -727,13 +763,12 @@ class otbn_base_vseq extends cip_base_vseq #(
             end
           join_any
 
-          // When we get here, we know that either the OTBN sequence finished or we timed out
-          // and it's still going. We can see whether OTBN is still going by looking at the status
-          // from the model (which is also in sync with the RTL). Because we wait on the negedge
-          // when updating cycle_counter above, we know we've got the "new version" of the status at
-          // this point.
-          if (cfg.model_agent_cfg.vif.status inside {otbn_pkg::StatusBusyExecute,
-                                                   otbn_pkg::StatusBusySecWipeInt}) begin
+          // When we get here, we know that either the OTBN sequence finished or we timed out and
+          // it's still going. We can see whether OTBN is still in the middle of a run by looking at
+          // the status from the model (which is also in sync with the RTL). Because we wait on the
+          // negedge when updating cycle_counter above, we know we've got the "new version" of the
+          // status at this point.
+          if (cfg.model_agent_cfg.vif.status == otbn_pkg::StatusBusyExecute) begin
             timed_out = 1'b1;
           end else begin
             timed_out = 1'b0;
@@ -761,13 +796,30 @@ class otbn_base_vseq extends cip_base_vseq #(
     // 10 times and each run has taken less than 75% of the time of the previous run. This shouldn't
     // happen!
     `DV_CHECK_FATAL(timed_out, "Failed to pick a working time-out")
+
+    // We have stopped the run_otbn process that was running. Update the "internal state to the
+    // vseq" so that we can safely call this task another time. The running_ status is used to track
+    // the fact that run_otbn is going (not true because we just killed the process). Similarly,
+    // stop_tokens is positive because _run_sideload_sequence was running when it was killed. Zero
+    // that.
+    running_ = 1'b0;
+    stop_tokens = 0;
   endtask
 
-  // Wait for (the one and only) interrupt to strike. Returns early on reset
+  // Wait for the DONE interrupt to strike (can be end of execution of a WFI pause). Returns early
+  // on reset.
   task wait_for_interrupt();
     if (cfg.clk_rst_vif.rst_n && !cfg.intr_vif.pins[0]) begin
       @(negedge cfg.clk_rst_vif.rst_n or posedge cfg.intr_vif.pins[0]);
     end
+  endtask
+
+  task check_done_interrupt(bit check_set, bit clear);
+    check_interrupts(.interrupts(1 << DONE_INTR_POSITION), .check_set(check_set), .clear(clear));
+  endtask
+
+  task cfg_done_interrupt(bit enable);
+    cfg_interrupts(.interrupts(1 << DONE_INTR_POSITION), .enable(enable));
   endtask
 
   // Overridden from cip_base_vseq
@@ -830,10 +882,23 @@ class otbn_base_vseq extends cip_base_vseq #(
     end
   endtask
 
+  // Mirror each of the registers in regs, returning early on a reset. The reads should not respond
+  // with errors.
+  task mirror_regs(uvm_reg regs[$]);
+    foreach (regs[i]) begin
+      uvm_status_e txn_status;
+
+      regs[i].mirror(txn_status);
+      if (cfg.under_reset) return;
+      if (txn_status != UVM_IS_OK) begin
+        `uvm_error(get_full_name(), $sformatf("Failed to mirror %0s.", regs[i].get_name()))
+      end
+    end
+  endtask
+
   // Task to check if otbn is in locked state. If otbn is indeed locked, then ensure fatal error is
   // asserted and reset the dut.
   virtual task reset_if_locked();
-    uvm_reg_data_t act_val;
     wait (!(cfg.model_agent_cfg.vif.status inside {otbn_pkg::StatusBusyExecute,
                                                    otbn_pkg::StatusBusySecWipeInt}));
 
@@ -841,11 +906,7 @@ class otbn_base_vseq extends cip_base_vseq #(
     // sure that it has gone out in at most 100 cycles.
     if (cfg.model_agent_cfg.vif.status == otbn_pkg::StatusLocked) begin
       fork
-        begin
-          csr_utils_pkg::csr_rd(.ptr(ral.status), .value(act_val));
-          csr_utils_pkg::csr_rd(.ptr(ral.err_bits), .value(act_val));
-          csr_utils_pkg::csr_rd(.ptr(ral.fatal_alert_cause), .value(act_val));
-        end
+        mirror_regs('{ral.status, ral.err_bits, ral.fatal_alert_cause});
         begin
           repeat (3) wait_alert_trigger("fatal", .wait_complete(1));
         end
@@ -854,4 +915,113 @@ class otbn_base_vseq extends cip_base_vseq #(
       dut_init("HARD");
     end
   endtask
+
+  // Wait for a single beat of data on an EDN interface
+  //
+  // This waits until it has seen the end of a beat. If we are in the middle of a beat, it will just
+  // wait until the end of this one. Otherwise, it will wait for the next one to start.
+  protected task wait_edn_beat(edn_idx_e iface_idx, int max_wait_before);
+    // Wait at least one cycle (EDN clock) to clear any finishing beat on the EDN interface. Then
+    // wait up to max_wait_before cycles (main clock) for OTBN to ask for some data.
+    @(cfg.m_edn_pull_agent_cfgs[iface_idx].vif.mon_cb);
+    for (int i = 0; i < max_wait_before; ++i) begin
+      if (!cfg.m_edn_pull_agent_cfgs[iface_idx].is_silent()) break;
+      @(cfg.clk_rst_vif.cbn);
+    end
+
+    // Now we know that OTBN is asking for *something*. Wait until the beat has completed.
+    cfg.m_edn_pull_agent_cfgs[iface_idx].wait_while_running();
+  endtask
+
+   // Wait for a reseed on RND or URND
+   //
+   // This assumes that none of the 8 beats of data had been transferred so far, so it waits for each
+   // of them. The max_wait_before argument gives the number of cycles allowed before OTBN asks for
+   // each beat of data.
+   //
+   // If we are called when some beats have already been transferred then we'll end up waiting some
+   // multiple of max_wait_before cycles after the reseed has finished.
+   protected task wait_edn_reseed(edn_idx_e iface_idx, int max_wait_before);
+     repeat (8) wait_edn_beat(iface_idx, max_wait_before);
+   endtask
+
+   // Wait for one phase of a secure wipe
+   //
+   // This might take a bit of time because it needs to reseed over URND and also walk over the
+   // registers. To give ourselves enough time, we wait for the URND reseed and then an extra 64
+   // cycles.
+   protected task wait_secure_wipe_phase();
+     // A secure wipe phase consists of wiping with whatever data we've currently got from the EDN
+     // (takes 64 cycles), then reseeding over the EDN (depends on EDN timing).
+     //
+     // As a special case, the RTL doesn't bother reseeding over the EDN on the second pass if it
+     // knows it's done because it's locking anyway. In that case, this task will wait too long
+     // because it will wait some extra cycles for an EDN transaction that doesn't happen.
+     //
+     // Wipe with whatever we've currently got from the EDN
+     repeat (64) @(cfg.clk_rst_vif.cbn);
+
+     // Ask the EDN for more data
+     //
+     // We pass 10 as max_wait_before in the call to wait_edn_reseed: we expect the secure wipe to
+     // start immediately, but wish to allow a couple of cycles leeway, in case the thing that
+     // caused the wipe is *now*.
+     wait_edn_reseed(UrndEdnIdx, 10);
+
+   endtask
+
+   // Wait for a secure wipe
+   //
+   // This is just waiting for the two phases, one after the other.
+   task wait_secure_wipe();
+     repeat (2) wait_secure_wipe_phase();
+   endtask
+
+  // Injecting an hardware error which should lead to a delayed escalation can also lead to SW
+  // errors which escalate immediately. This tasks keeps the DV model in synch with the RTL if a
+  // SW error occurs. It does so by monitors any SW error until the next positive clock edge. If a
+  // SW error arises an escalation request is sent to the model. It is expected that in the
+  // next cycle (after this task) the test sequence will send a HW escalation to the model.
+  //
+  // This task may not be used to check if an injection leads to a SW error as the error monitoring
+  // directly depends on the RTL model!
+  task handle_sw_error_during_delayed_hw_escalation();
+    err_bits_reg_t err_bits;
+    // Isolation_fork prevents "disable fork" from killing parent processes.
+    fork begin : isolation_fork
+      fork
+        begin
+          // Handle non fatal SW error
+          // We probe the RTL directly to monitor SW errors, avoiding complex error logic
+          // replication in the DV model. While this creates an RTL dependency, it does not
+          // compromise verification as we only synchronize the models and do not influence whether
+          // an actual hardware escalation happens. If the RTL error logic is faulty, the models
+          // will remain synchronized, and the test will still verify whether the hardware
+          // escalation occurred. Exact timing is anyway not a concern due to unpredictable EDN
+          // behavior.
+          wait(cfg.controller_vif.software_err);
+          `uvm_info(`gfn, $sformatf("The injection led to a non fatal SW error"), UVM_LOW)
+          err_bits = '{illegal_insn: 1'b1, default: 1'b0};
+          cfg.model_agent_cfg.vif.send_err_escalation(err_bits);
+          @(cfg.clk_rst_vif.cb);
+        end
+        begin
+          // Handle fatal SW error
+          // See the non fatal SW error case for an explanation why probing the RTL is ok.
+          wait(cfg.controller_vif.fatal_software_err);
+          `uvm_info(`gfn, $sformatf("The injection led to a fatal SW error"), UVM_LOW)
+          err_bits = '{fatal_software: 1'b1, default: 1'b0};
+          cfg.model_agent_cfg.vif.send_err_escalation(err_bits);
+          @(cfg.clk_rst_vif.cb);
+        end
+        begin
+          // Handle HW based escalation
+          // Do nothing yet. The escalation is expected to be signaled in the next cycle / after this task.
+          @(cfg.clk_rst_vif.cb);
+        end
+      join_any
+      disable fork; // Kill the SW handling forks if the HW case completes first.
+    end join
+  endtask
+
 endclass : otbn_base_vseq

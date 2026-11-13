@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ class csrng_smoke_vseq extends csrng_base_vseq;
                                    cs_item.flags == MuBi4True;
                                    cs_item.clen  == 4'hc;)
     `uvm_info(`gfn, $sformatf("%s", cs_item.convert2string()), UVM_DEBUG)
-    send_cmd_req(SW_APP, cs_item);
+    send_cmd_req(cfg.m_sw_app_idx, cs_item);
 
     // Create/Write CSRNG Cmd_Req - Generate Command
     cs_item.acmd  = csrng_pkg::GEN;
@@ -28,12 +28,20 @@ class csrng_smoke_vseq extends csrng_base_vseq;
     cs_item.flags = MuBi4True;
     cs_item.glen  = 'h1;
     `uvm_info(`gfn, $sformatf("%s", cs_item.convert2string()), UVM_DEBUG)
-    send_cmd_req(SW_APP, cs_item);
+    send_cmd_req(cfg.m_sw_app_idx, cs_item);
 
     // Check internal state
     if (cfg.check_int_state) begin
-      for (int i = 0; i < NUM_HW_APPS + 1; i++)
+      for (int i = 0; i < cfg.m_num_apps; i++)
         cfg.check_internal_state(.app(i), .compare(1));
     end
+
+    // Create/Write CSRNG Cmd_Req - Generate Command
+    cs_item.acmd  = csrng_pkg::UNI;
+    cs_item.clen  = 'h0;
+    cs_item.flags = MuBi4True;
+    cs_item.glen  = 'h0;
+    `uvm_info(`gfn, $sformatf("%s", cs_item.convert2string()), UVM_DEBUG)
+    send_cmd_req(cfg.m_sw_app_idx, cs_item);
   endtask : body
 endclass : csrng_smoke_vseq

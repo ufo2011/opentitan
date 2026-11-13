@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,9 @@
 #define OPENTITAN_SW_DEVICE_LIB_TESTING_AUTOGEN_ISR_TESTUTILS_H_
 
 ${autogen_banner}
+<%
+  top_name = top["name"]
+%>
 
 /**
  * @file
@@ -15,11 +18,11 @@ ${autogen_banner}
 #include "sw/device/lib/dif/dif_rv_plic.h"
 % for ip in ips_with_difs:
   % if ip.irqs:
-    #include "sw/device/lib/dif/dif_${ip.name_snake}.h"
+    #include "sw/device/lib/dif/autogen/dif_${ip.name_snake}_autogen.h"
   % endif
 % endfor
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h" // Generated.
+#include "hw/top_${top_name}/sw/autogen/top_${top_name}.h" // Generated.
 
 /**
  * A handle to a PLIC ISR context struct.
@@ -69,13 +72,19 @@ typedef struct plic_isr_ctx {
      *
      * @param plic_ctx A PLIC ISR context handle.
      * @param ${ip.name_snake}_ctx A(n) ${ip.name_snake} ISR context handle.
+    % if ip.has_status_type_irqs():
+     * @param mute_status_irq set to true to disable the serviced status type IRQ.
+    % endif
      * @param[out] peripheral_serviced Out param for the peripheral that was serviced.
      * @param[out] irq_serviced Out param for the IRQ that was serviced.
      */
     void isr_testutils_${ip.name_snake}_isr(
       plic_isr_ctx_t plic_ctx,
       ${ip.name_snake}_isr_ctx_t ${ip.name_snake}_ctx,
-      top_earlgrey_plic_peripheral_t *peripheral_serviced,
+    % if ip.has_status_type_irqs():
+      bool mute_status_irq,
+    % endif
+      top_${top_name}_plic_peripheral_t *peripheral_serviced,
       dif_${ip.name_snake}_irq_t *irq_serviced);
 
   % endif

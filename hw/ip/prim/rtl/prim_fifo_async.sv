@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -249,8 +249,8 @@ module prim_fifo_async #(
       logic                 unused_decsub_msb;
 
       dec_tmp = '0;
-      for (int i = PTR_WIDTH-2; i >= 0; i--) begin
-        dec_tmp[i] = dec_tmp[i+1] ^ grayval[i];
+      for (int unsigned i = PTR_WIDTH-1; i > 0; i--) begin
+        dec_tmp[i-1] = dec_tmp[i] ^ grayval[i-1];
       end
       dec_tmp_sub = (PTR_WIDTH)'(Depth) - dec_tmp - 1'b1;
       if (grayval[PTR_WIDTH-1]) begin

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_base.h"
 
-#include "pwrmgr_regs.h"  // Generated.
+#include "hw/top/pwrmgr_regs.h"  // Generated.
 
 /**
  * Following static assertions make sure that generated values match the
@@ -34,6 +34,7 @@ static_assert(kDifPwrmgrDomainOptionIoClockInLowPower ==
                           PWRMGR_CONTROL_CORE_CLK_EN_BIT)),
               "Layout of control register changed.");
 
+#if defined(OPENTITAN_IS_EARLGREY)
 static_assert(kDifPwrmgrDomainOptionUsbClockInLowPower ==
                   (1u << (PWRMGR_CONTROL_USB_CLK_EN_LP_BIT -
                           PWRMGR_CONTROL_CORE_CLK_EN_BIT)),
@@ -43,6 +44,7 @@ static_assert(kDifPwrmgrDomainOptionUsbClockInActivePower ==
                   (1u << (PWRMGR_CONTROL_USB_CLK_EN_ACTIVE_BIT -
                           PWRMGR_CONTROL_CORE_CLK_EN_BIT)),
               "Layout of control register changed.");
+#endif /* OPENTITAN_IS */
 
 static_assert(kDifPwrmgrDomainOptionMainPowerInLowPower ==
                   (1u << (PWRMGR_CONTROL_MAIN_PD_N_BIT -
@@ -56,48 +58,17 @@ static_assert(kDifPwrmgrDomainOptionMainPowerInLowPower ==
 static const bitfield_field32_t kDomainConfigBitfield = {
     .mask = kDifPwrmgrDomainOptionCoreClockInLowPower |
             kDifPwrmgrDomainOptionIoClockInLowPower |
+#if defined(OPENTITAN_IS_EARLGREY)
             kDifPwrmgrDomainOptionUsbClockInLowPower |
             kDifPwrmgrDomainOptionUsbClockInActivePower |
+#elif defined(OPENTITAN_IS_DARJEELING)
+/* Darjeeling has no USB clock. */
+#else
+#error "dif_pwrmgr does not support this top"
+#endif
             kDifPwrmgrDomainOptionMainPowerInLowPower,
     .index = PWRMGR_CONTROL_CORE_CLK_EN_BIT,
 };
-
-/**
- * Relevant bits of the WAKEUP_EN and WAKE_INFO registers must start at `0` and
- * be in the same order as `dif_pwrmgr_wakeup_request_source_t` constants.
- */
-static_assert(kDifPwrmgrWakeupRequestSourceOne ==
-                  (1u << PWRMGR_WAKEUP_EN_EN_0_BIT),
-              "Layout of WAKEUP_EN register changed.");
-static_assert(kDifPwrmgrWakeupRequestSourceOne ==
-                  (1u << PWRMGR_PARAM_SYSRST_CTRL_AON_WKUP_REQ_IDX),
-              "Layout of WAKE_INFO register changed.");
-static_assert(kDifPwrmgrWakeupRequestSourceTwo ==
-                  (1u << PWRMGR_PARAM_ADC_CTRL_AON_WKUP_REQ_IDX),
-              "Layout of WAKE_INFO register changed.");
-static_assert(kDifPwrmgrWakeupRequestSourceThree ==
-                  (1u << PWRMGR_PARAM_PINMUX_AON_PIN_WKUP_REQ_IDX),
-              "Layout of WAKE_INFO register changed.");
-static_assert(kDifPwrmgrWakeupRequestSourceFour ==
-                  (1u << PWRMGR_PARAM_PINMUX_AON_USB_WKUP_REQ_IDX),
-              "Layout of WAKE_INFO register changed.");
-static_assert(kDifPwrmgrWakeupRequestSourceFive ==
-                  (1u << PWRMGR_PARAM_AON_TIMER_AON_WKUP_REQ_IDX),
-              "Layout of WAKE_INFO register changed.");
-static_assert(kDifPwrmgrWakeupRequestSourceSix ==
-                  (1u << PWRMGR_PARAM_SENSOR_CTRL_WKUP_REQ_IDX),
-              "Layout of WAKE_INFO register changed.");
-
-/**
- * Relevant bits of the RESET_EN register must start at `0` and be in the same
- * order as `dif_pwrmgr_reset_request_source_t` constants.
- */
-static_assert(kDifPwrmgrResetRequestSourceOne ==
-                  (1u << PWRMGR_RESET_EN_EN_0_BIT),
-              "Layout of RESET_EN register changed.");
-static_assert(kDifPwrmgrResetRequestSourceTwo ==
-                  (1u << PWRMGR_RESET_EN_EN_1_BIT),
-              "Layout of RESET_EN register changed.");
 
 /**
  * `dif_pwrmgr_irq_t` constants must match the corresponding generated values.
@@ -113,7 +84,6 @@ typedef struct request_reg_info {
   bitfield_bit32_index_t write_enable_bit_index;
   ptrdiff_t sources_enable_reg_offset;
   ptrdiff_t cur_req_sources_reg_offset;
-  bitfield_field32_t bitfield;
 } request_reg_info_t;
 
 /**
@@ -130,16 +100,6 @@ static const request_reg_info_t request_reg_infos[2] = {
             .write_enable_bit_index = PWRMGR_WAKEUP_EN_REGWEN_EN_BIT,
             .sources_enable_reg_offset = PWRMGR_WAKEUP_EN_REG_OFFSET,
             .cur_req_sources_reg_offset = PWRMGR_WAKE_STATUS_REG_OFFSET,
-            .bitfield =
-                {
-                    .mask = kDifPwrmgrWakeupRequestSourceOne |
-                            kDifPwrmgrWakeupRequestSourceTwo |
-                            kDifPwrmgrWakeupRequestSourceThree |
-                            kDifPwrmgrWakeupRequestSourceFour |
-                            kDifPwrmgrWakeupRequestSourceFive |
-                            kDifPwrmgrWakeupRequestSourceSix,
-                    .index = 0,
-                },
         },
     [kDifPwrmgrReqTypeReset] =
         {
@@ -147,14 +107,79 @@ static const request_reg_info_t request_reg_infos[2] = {
             .write_enable_bit_index = PWRMGR_RESET_EN_REGWEN_EN_BIT,
             .sources_enable_reg_offset = PWRMGR_RESET_EN_REG_OFFSET,
             .cur_req_sources_reg_offset = PWRMGR_RESET_STATUS_REG_OFFSET,
-            .bitfield =
-                {
-                    .mask = kDifPwrmgrResetRequestSourceOne |
-                            kDifPwrmgrResetRequestSourceTwo,
-                    .index = 0,
-                },
         },
 };
+
+dif_result_t dif_pwrmgr_find_request_source(
+    const dif_pwrmgr_t *pwrmgr, dif_pwrmgr_req_type_t req_type,
+    dt_instance_id_t inst_id, size_t sig_idx,
+    dif_pwrmgr_request_sources_t *sources) {
+  if (pwrmgr == NULL || sources == NULL) {
+    return kDifBadArg;
+  }
+  dt_pwrmgr_t dt;
+  DIF_RETURN_IF_ERROR(dif_pwrmgr_get_dt(pwrmgr, &dt));
+  // Query the DT to find the information.
+  if (req_type == kDifPwrmgrReqTypeWakeup) {
+    for (size_t i = 0; i < dt_pwrmgr_wakeup_src_count(dt); i++) {
+      dt_pwrmgr_wakeup_src_t src = dt_pwrmgr_wakeup_src(dt, i);
+      if (src.inst_id == inst_id && src.wakeup == sig_idx) {
+        *sources = 1u << i;
+        return kDifOk;
+      }
+    }
+    return kDifError;
+  } else if (req_type == kDifPwrmgrReqTypeReset) {
+    for (size_t i = 0; i < dt_pwrmgr_reset_request_src_count(dt); i++) {
+      dt_pwrmgr_reset_req_src_t src = dt_pwrmgr_reset_request_src(dt, i);
+      if (src.inst_id == inst_id && src.reset_req == sig_idx) {
+        *sources = 1u << i;
+        return kDifOk;
+      }
+    }
+    return kDifError;
+  } else {
+    return kDifBadArg;
+  }
+}
+
+/**
+ * Obtain the bitfield in PWRMGR_{WAKEUP,RESET}_EN_REG_OFFSET which
+ * represents all wakeup/reset sources.
+ */
+OT_WARN_UNUSED_RESULT
+static dif_result_t request_reg_bitfield(const dif_pwrmgr_t *pwrmgr,
+                                         dif_pwrmgr_req_type_t req_type,
+                                         bitfield_field32_t *bitfield) {
+  dt_pwrmgr_t dt;
+  dif_result_t res = dif_pwrmgr_get_dt(pwrmgr, &dt);
+  if (res != kDifOk) {
+    return res;
+  }
+
+  size_t count = 0;
+  if (req_type == kDifPwrmgrReqTypeWakeup) {
+    count = dt_pwrmgr_wakeup_src_count(dt);
+  } else if (req_type == kDifPwrmgrReqTypeReset) {
+    count = dt_pwrmgr_reset_request_src_count(dt);
+  } else {
+    return kDifBadArg;
+  }
+  bitfield->index = 0;
+  bitfield->mask = (1 << count) - 1;
+  return kDifOk;
+}
+
+dif_result_t dif_pwrmgr_get_all_request_sources(
+    const dif_pwrmgr_t *pwrmgr, dif_pwrmgr_req_type_t req_type,
+    dif_pwrmgr_request_sources_t *sources) {
+  bitfield_field32_t bitfield;
+  dif_result_t res = request_reg_bitfield(pwrmgr, req_type, &bitfield);
+  if (res == kDifOk) {
+    *sources = bitfield.mask;
+  }
+  return res;
+}
 
 /**
  * Checks if a value is a valid `dif_pwrmgr_req_type_t`.
@@ -273,7 +298,7 @@ dif_result_t dif_pwrmgr_set_domain_config(const dif_pwrmgr_t *pwrmgr,
   reg_val = bitfield_field32_write(reg_val, kDomainConfigBitfield, config);
   mmio_region_write32(pwrmgr->base_addr, PWRMGR_CONTROL_REG_OFFSET, reg_val);
 
-  // Slow clock domain may be synced for changes to take effect.
+  // Slow clock domain must be synced for changes to take effect.
   if (sync_state == kDifToggleEnabled)
     sync_slow_clock_domain_polled(pwrmgr);
 
@@ -288,7 +313,8 @@ dif_result_t dif_pwrmgr_get_domain_config(const dif_pwrmgr_t *pwrmgr,
 
   uint32_t reg_val =
       mmio_region_read32(pwrmgr->base_addr, PWRMGR_CONTROL_REG_OFFSET);
-  *config = bitfield_field32_read(reg_val, kDomainConfigBitfield);
+  *config = (dif_pwrmgr_domain_config_t)bitfield_field32_read(
+      reg_val, kDomainConfigBitfield);
 
   return kDifOk;
 }
@@ -302,8 +328,10 @@ dif_result_t dif_pwrmgr_set_request_sources(
   }
 
   request_reg_info_t reg_info = request_reg_infos[req_type];
+  bitfield_field32_t bitfield;
+  DIF_RETURN_IF_ERROR(request_reg_bitfield(pwrmgr, req_type, &bitfield));
 
-  if (!is_valid_for_bitfield(sources, reg_info.bitfield)) {
+  if (!is_valid_for_bitfield(sources, bitfield)) {
     return kDifBadArg;
   }
 
@@ -313,7 +341,7 @@ dif_result_t dif_pwrmgr_set_request_sources(
   }
 
   // Write new value
-  uint32_t reg_val = bitfield_field32_write(0, reg_info.bitfield, sources);
+  uint32_t reg_val = bitfield_field32_write(0, bitfield, sources);
   mmio_region_write32(pwrmgr->base_addr, reg_info.sources_enable_reg_offset,
                       reg_val);
   // Slow clock domain may be synced for changes to take effect.
@@ -331,9 +359,14 @@ dif_result_t dif_pwrmgr_get_request_sources(
   }
 
   request_reg_info_t reg_info = request_reg_infos[req_type];
+  bitfield_field32_t bitfield;
+  dif_result_t res = request_reg_bitfield(pwrmgr, req_type, &bitfield);
+  if (res != kDifOk) {
+    return res;
+  }
   uint32_t reg_val =
       mmio_region_read32(pwrmgr->base_addr, reg_info.sources_enable_reg_offset);
-  *sources = bitfield_field32_read(reg_val, reg_info.bitfield);
+  *sources = bitfield_field32_read(reg_val, bitfield);
 
   return kDifOk;
 }
@@ -346,9 +379,14 @@ dif_result_t dif_pwrmgr_get_current_request_sources(
   }
 
   request_reg_info_t reg_info = request_reg_infos[req_type];
+  bitfield_field32_t bitfield;
+  dif_result_t res = request_reg_bitfield(pwrmgr, req_type, &bitfield);
+  if (res != kDifOk) {
+    return res;
+  }
   uint32_t reg_val = mmio_region_read32(pwrmgr->base_addr,
                                         reg_info.cur_req_sources_reg_offset);
-  *sources = bitfield_field32_read(reg_val, reg_info.bitfield);
+  *sources = bitfield_field32_read(reg_val, bitfield);
 
   return kDifOk;
 }
@@ -427,8 +465,13 @@ dif_result_t dif_pwrmgr_wakeup_reason_get(const dif_pwrmgr_t *pwrmgr,
     types |= kDifPwrmgrWakeupTypeAbort;
   }
 
-  uint32_t request_sources = bitfield_field32_read(
-      reg_val, request_reg_infos[kDifPwrmgrReqTypeWakeup].bitfield);
+  bitfield_field32_t bitfield;
+  dif_result_t res =
+      request_reg_bitfield(pwrmgr, kDifPwrmgrReqTypeWakeup, &bitfield);
+  if (res != kDifOk) {
+    return res;
+  }
+  uint32_t request_sources = bitfield_field32_read(reg_val, bitfield);
   if (request_sources != 0) {
     types |= kDifPwrmgrWakeupTypeRequest;
   }

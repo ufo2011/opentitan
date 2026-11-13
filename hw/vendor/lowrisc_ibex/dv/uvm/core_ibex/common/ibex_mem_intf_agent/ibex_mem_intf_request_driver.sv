@@ -81,10 +81,11 @@ class ibex_mem_intf_request_driver extends uvm_driver #(ibex_mem_intf_seq_item);
     forever begin
       rdata_queue.get(tr);
       vif.wait_clks(1);
-      while(vif.rvalid !== 1'b1) vif.wait_clks(1);
-      if(tr.read_write == READ)
+      while((vif.rvalid !== 1'b1 || vif.spurious_response === 1'b1)) vif.wait_clks(1);
+      if (tr.read_write == READ) begin
         tr.data = vif.request_driver_cb.rdata;
         tr.intg = vif.request_driver_cb.rintg;
+      end
       seq_item_port.put_response(tr);
     end
   endtask : collect_response

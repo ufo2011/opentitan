@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -243,7 +243,7 @@ class ControlGraph:
                 insn = program.get_insn(sec.end)
                 operands = program.get_operands(sec.end)
                 if insn.mnemonic == 'jal' and operands['grd'] == 1:
-                    # push to to the call stack
+                    # push to the call stack
                     call_stack = [sec.end + 4] + call_stack
                     child_indent += 2
                 out += [
@@ -308,9 +308,9 @@ def _get_next_control_locations(insn: Insn, operands: Dict[str, int],
     elif insn.mnemonic == 'ecall':
         return [Ecall()]
 
-    raise RuntimeError(
-        'Unrecognized control flow instruction (straight-line=false) at PC {:#x}: {}'
-        .format(pc, insn.disassemble(pc, operands)))
+    raise RuntimeError('Unrecognized control flow instruction '
+                       '(straight-line=false) at PC {:#x}: {}'
+                       .format(pc, insn.disassemble(pc, operands)))
 
 
 def _populate_control_graph(graph: ControlGraph, program: OTBNProgram,
@@ -436,7 +436,7 @@ def _fix_cycles(program: OTBNProgram, graph: ControlGraph) -> None:
     # The new_entries dictionary will have the same structure as graph.graph.
     new_entries = {}
     for start_pc in graph.graph:
-        sec, edges = graph.get_entry(start_pc)
+        sec, _edges = graph.get_entry(start_pc)
         for pc in sec:
             if pc in cycle_start_pcs and pc != sec.start:
                 # Split this section and create a new edge leading to the cycle

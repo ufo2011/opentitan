@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -6,7 +6,7 @@
 // LFSR-based PRNG to
 //
 // a) determine the next peripheral index to be pinged (can be an alert receiver or an
-//    escalation sender). it it is detected that this particular peripheral is disabled,
+//    escalation sender). If it is detected that a particular peripheral is disabled,
 //    another index will be drawn from the PRNG.
 //
 // b) determine the amount of pause cycles to wait before pinging the peripheral selected in a).
@@ -21,8 +21,8 @@
 
 `include "prim_assert.sv"
 
-module alert_handler_ping_timer import alert_pkg::*; #(
-  // Compile time random constants, to be overriden by topgen.
+module alert_handler_ping_timer import alert_handler_pkg::*; #(
+  // Compile time random constants, to be overridden by topgen.
   parameter lfsr_seed_t        RndCnstLfsrSeed = RndCnstLfsrSeedDefault,
   parameter lfsr_perm_t        RndCnstLfsrPerm = RndCnstLfsrPermDefault,
   // Enable this for DV, disable this for long LFSRs in FPV
@@ -42,7 +42,7 @@ module alert_handler_ping_timer import alert_pkg::*; #(
   input        [PING_CNT_DW-1:0]   ping_timeout_cyc_i, // timeout in cycles
   input        [PING_CNT_DW-1:0]   wait_cyc_mask_i,    // mask to shorten the counters in DV / FPV
   output logic [NAlerts-1:0]       alert_ping_req_o,   // request to alert receivers
-  output logic [N_ESC_SEV-1:0]     esc_ping_req_o,     // enable to esc senders
+  output logic [N_ESC_SEV-1:0]     esc_ping_req_o,     // request to esc senders
   input        [NAlerts-1:0]       alert_ping_ok_i,    // response from alert receivers
   input        [N_ESC_SEV-1:0]     esc_ping_ok_i,      // response from esc senders
   output logic                     alert_ping_fail_o,  // any of the alert receivers failed
@@ -50,6 +50,7 @@ module alert_handler_ping_timer import alert_pkg::*; #(
 );
 
   localparam int unsigned IdDw = $clog2(NAlerts);
+  localparam int unsigned IdMax = NAlerts - 1;
 
   // Entropy reseeding is triggered every time this counter expires.
   // The expected wait time between pings is 2**(PING_CNT_DW-1) on average.
@@ -57,6 +58,9 @@ module alert_handler_ping_timer import alert_pkg::*; #(
   // such that on average the LFSR is reseeded every 16th ping.
   localparam int unsigned ReseedLfsrExtraBits = 3;
   localparam int unsigned ReseedLfsrWidth = PING_CNT_DW + ReseedLfsrExtraBits;
+
+  // The number of bits needed for an index into the esc senders
+  localparam int unsigned EscSenderIdxWidth = $clog2(N_ESC_SEV);
 
   // A few smoke checks for the DV mask:
   // 1) make sure the value is a right-aligned mask.
@@ -123,14 +127,18 @@ module alert_handler_ping_timer import alert_pkg::*; #(
   );
 
   logic [IdDw-1:0] id_to_ping_d, id_to_ping_q;
-  // The subtraction below ensures that the alert ID is always in range. If
-  // all alerts are enabled, an alert ID drawn in this way will always be
-  // valid. This comes at the cost of a bias towards certain alert IDs that
-  // will be pinged twice as often on average - but it ensures that we have
-  // less alert IDs that need to be skipped since they are invalid.
-  assign id_to_ping_d = (lfsr_state[PING_CNT_DW +: IdDw] >= NAlerts) ?
-                        lfsr_state[PING_CNT_DW +: IdDw] - NAlerts    :
-                        lfsr_state[PING_CNT_DW +: IdDw];
+  if (2**IdDw == NAlerts) begin : gen_id_always_in_range
+    // The number of alerts is a power of 2. The drawn alert ID is always in range.
+    assign id_to_ping_d = lfsr_state[PING_CNT_DW +: IdDw];
+  end else begin : gen_force_id_in_range
+    // The number of alerts is not a power of 2. Ensure that the alert ID is in range.
+    // This comes at the cost of a bias towards certain alert IDs that will be pinged twice as
+    // often on average - but it ensures that we have less alert IDs that need to be skipped
+    // since they are invalid.
+    assign id_to_ping_d = (lfsr_state[PING_CNT_DW +: IdDw] > IdMax) ?
+        // Force the top bit to zero if necessary.
+        {1'b0, lfsr_state[PING_CNT_DW +: IdDw - 1]} : lfsr_state[PING_CNT_DW +: IdDw];
+  end
 
   // we need to hold the ID stable while the ping is ongoing since this will result in
   // spurious ping responses otherwise.
@@ -189,15 +197,19 @@ module alert_handler_ping_timer import alert_pkg::*; #(
   // are permanently asserted.
 
   logic esc_cnt_en, esc_cnt_clr, esc_cnt_error;
-  logic [PING_CNT_DW-1:0] esc_cnt;
-  assign esc_cnt_clr = (esc_cnt >= PING_CNT_DW'(N_ESC_SEV-1)) && esc_cnt_en;
+  logic [EscSenderIdxWidth-1:0] esc_cnt;
+  assign esc_cnt_clr = (esc_cnt >= EscSenderIdxWidth'(N_ESC_SEV-1)) && esc_cnt_en;
 
   // SEC_CM: PING_TIMER.CTR.REDUN
   prim_count #(
-    .Width(PING_CNT_DW),
+    .Width(EscSenderIdxWidth),
     // The alert handler behaves differently than other comportable IP. I.e., instead of sending out
     // an alert signal, this condition is handled internally in the alert handler.
-    .EnableAlertTriggerSVA(0)
+    .EnableAlertTriggerSVA(0),
+    // Pass a parameter to disable coverage for some assertions that are unreachable because set_i
+    // and decr_en_i are tied to zero.
+    .PossibleActions(prim_count_pkg::Clr |
+                     prim_count_pkg::Incr)
   ) u_prim_count_esc_cnt (
     .clk_i,
     .rst_ni,
@@ -206,9 +218,10 @@ module alert_handler_ping_timer import alert_pkg::*; #(
     .set_cnt_i('0),
     .incr_en_i(esc_cnt_en),
     .decr_en_i(1'b0),
-    .step_i(PING_CNT_DW'(1)),
+    .step_i(EscSenderIdxWidth'(1)),
+    .commit_i(1'b1),
     .cnt_o(esc_cnt),
-    .cnt_next_o(),
+    .cnt_after_commit_o(),
     .err_o(esc_cnt_error)
   );
 
@@ -230,7 +243,11 @@ module alert_handler_ping_timer import alert_pkg::*; #(
     .Width(PING_CNT_DW),
     // The alert handler behaves differently than other comportable IP. I.e., instead of sending out
     // an alert signal, this condition is handled internally in the alert handler.
-    .EnableAlertTriggerSVA(0)
+    .EnableAlertTriggerSVA(0),
+    // Pass a parameter to disable coverage for some assertions that are unreachable because clr_i
+    // and incr_en_i are tied to zero.
+    .PossibleActions(prim_count_pkg::Set |
+                     prim_count_pkg::Decr)
   ) u_prim_count_cnt (
     .clk_i,
     .rst_ni,
@@ -238,10 +255,11 @@ module alert_handler_ping_timer import alert_pkg::*; #(
     .set_i(cnt_set),
     .set_cnt_i(cnt_setval),
     .incr_en_i(1'b0),
-    .decr_en_i(!timer_expired), // we are counting down here.
+    .decr_en_i(1'b1), // we are counting down here.
     .step_i(PING_CNT_DW'(1'b1)),
+    .commit_i(1'b1),
     .cnt_o(cnt),
-    .cnt_next_o(),
+    .cnt_after_commit_o(),
     .err_o(cnt_error)
   );
 

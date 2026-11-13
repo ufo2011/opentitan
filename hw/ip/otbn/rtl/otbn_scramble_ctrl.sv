@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -79,7 +79,6 @@ module otbn_scramble_ctrl
   assign dmem_key_d = dmem_key_sel_otp ? otp_key : otbn_dmem_scramble_sec_wipe_key_i;
   assign imem_key_d = imem_key_sel_otp ? otp_key : otbn_imem_scramble_sec_wipe_key_i;
 
-  // TODO: Different reset key/nonce for imem/dmem?
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       dmem_key_q <= RndCnstOtbnKey;

@@ -1,76 +1,11 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
-load("@rules_rust//bindgen:bindgen.bzl", "rust_bindgen_library")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust_bindgen//:defs.bzl", "rust_bindgen", "rust_bindgen_library")
 
 package(default_visibility = ["//visibility:public"])
-
-cc_library(
-    name = "difs",
-    hdrs = ["difs.h"],
-    deps = [
-        "//sw/device/lib/dif:lc_ctrl",
-        "//sw/device/lib/dif:rstmgr",
-    ],
-)
-
-rust_bindgen_library(
-    name = "alert",
-    bindgen_flags = [
-        "--allowlist-type=AlertClass",
-        "--allowlist-type=AlertEnable",
-        "--allowlist-type=AlertEscalate",
-    ],
-    cc_lib = "//sw/device/silicon_creator/lib/drivers:alert",
-    header = "//sw/device/silicon_creator/lib/drivers:alert.h",
-    rustc_flags = [
-        "--allow=non_snake_case",
-        "--allow=non_upper_case_globals",
-    ],
-)
-
-rust_bindgen_library(
-    name = "dif",
-    bindgen_flags = [
-        "--allowlist-type=dif_lc_ctrl_state",
-        "--allowlist-type=dif_rstmgr_reset_info",
-    ],
-    cc_lib = ":difs",
-    header = "difs.h",
-    rustc_flags = [
-        "--allow=non_snake_case",
-        "--allow=non_upper_case_globals",
-        "--allow=non_camel_case_types",
-    ],
-)
-
-rust_bindgen_library(
-    name = "earlgrey",
-    bindgen_flags = [
-        "--allowlist-type=top_earlgrey_alert_peripheral",
-        "--allowlist-type=top_earlgrey_alert_id",
-        "--allowlist-type=top_earlgrey_pinmux_peripheral_in",
-        "--allowlist-type=top_earlgrey_pinmux_insel",
-        "--allowlist-type=top_earlgrey_pinmux_mio_out",
-        "--allowlist-type=top_earlgrey_pinmux_outsel",
-        "--allowlist-type=top_earlgrey_direct_pads",
-        "--allowlist-type=top_earlgrey_muxed_pads",
-        "--allowlist-type=top_earlgrey_power_manager_wake_ups",
-        "--allowlist-type=top_earlgrey_reset_manager_sw_resets",
-        "--allowlist-type=top_earlgrey_power_manager_reset_requests",
-        "--allowlist-type=top_earlgrey_gateable_clocks",
-        "--allowlist-type=top_earlgrey_hintable_clocks",
-    ],
-    cc_lib = "//hw/top_earlgrey/sw/autogen:top_earlgrey",
-    header = "//hw/top_earlgrey/sw/autogen:top_earlgrey.h",
-    rustc_flags = [
-        "--allow=non_snake_case",
-        "--allow=non_upper_case_globals",
-        "--allow=non_camel_case_types",
-    ],
-)
 
 rust_bindgen_library(
     name = "hardened",
@@ -87,13 +22,110 @@ rust_bindgen_library(
     ],
 )
 
-rust_bindgen_library(
-    name = "multibits",
+# We generate the bindgen source for rom_error_t so we can post-process it
+# with the :rom_error_enum rule and build a full enum from all known
+# rom_error_t values.
+rust_bindgen(
+    name = "rom_error",
     bindgen_flags = [
-        "--allowlist-type=multi_bit_bool",
+        "--allowlist-type=rom_error_t",
     ],
-    cc_lib = "//sw/device/lib/base:multibits",
-    header = "//sw/device/lib/base:multibits.h",
+    cc_lib = "//sw/device/silicon_creator/lib:error",
+    header = "//sw/device/silicon_creator/lib:error.h",
+)
+
+# Generate a rust source file that contains the enum definition.  This
+# will get textual-included into opentitanlib's `chip::rom_error` module.
+genrule(
+    name = "rom_error_enum",
+    srcs = [":rom_error"],
+    outs = ["rom_error_enum.rs"],
+    cmd = """
+cat >$@ <<HEADER
+with_unknown! {
+    pub enum RomError: u32 [default = Self::Unknown] {
+HEADER
+
+# The sed expression creates enumerators with idiomatic Rust names that
+# refer to the bindgen'ed constants.
+cat $(location :rom_error) \\
+    | grep const \\
+    | sed -E 's/^pub const (rom_error_kError([^:]+)).*$$/        \\2 = bindgen::rom_error::\\1,/g' >>$@
+
+cat >>$@ <<FOOTER
+    }
+}
+FOOTER
+    """,
+)
+
+rust_bindgen_library(
+    name = "sram_program",
+    bindgen_flags = [
+        "--allowlist-var=SRAM_MAGIC_SP_.*",
+    ],
+    cc_lib = "//sw/device/silicon_creator/manuf/lib:sram_start_headers",
+    header = "//sw/device/silicon_creator/manuf/lib:sram_start.h",
+    rustc_flags = [
+        "--allow=non_snake_case",
+        "--allow=non_upper_case_globals",
+        "--allow=non_camel_case_types",
+    ],
+)
+
+rust_bindgen_library(
+    name = "status",
+    bindgen_flags = [
+        "--allowlist-type=ot_status_create_record_t",
+        "--allowlist-type=ot_status_create_record_magic",
+        "--allowlist-type=status",
+        "--allowlist-type=status_t",
+        "--allowlist-type=absl_status_t",
+        "--allowlist-function=status_create",
+        "--allowlist-function=status_extract",
+        # status_err and status_ok are marked as always inline but are also
+        # declared as extern in status.c which means that will actually end up
+        # in the object file.
+        "--allowlist-function=status_err",
+        "--allowlist-function=status_ok",
+        "--generate-inline-functions",
+        "--with-derive-custom=ot_status_create_record=zerocopy::FromBytes",
+    ],
+    cc_lib = "//sw/device/lib/base:status",
+    header = "//sw/device/lib/base:status.h",
+    rustc_flags = [
+        "--allow=non_snake_case",
+        "--allow=non_upper_case_globals",
+        "--allow=non_camel_case_types",
+    ],
+    deps = [
+        "@crate_index//:zerocopy",
+    ],
+)
+
+rust_bindgen_library(
+    name = "test_status",
+    bindgen_flags = [
+        "--allowlist-type=test_status_t",
+    ],
+    cc_lib = "//sw/device/lib/testing/test_framework:status_headers",
+    header = "//sw/device/lib/testing/test_framework:status.h",
+    rustc_flags = [
+        "--allow=non_snake_case",
+        "--allow=non_upper_case_globals",
+        "--allow=non_camel_case_types",
+    ],
+)
+
+rust_bindgen_library(
+    name = "ownership_datatypes",
+    bindgen_flags = [
+        "--allowlist-type=ownership_update_mode",
+        "--rustified-enum=ownership_update_mode",
+    ],
+    cc_lib = "//sw/device/silicon_creator/lib/ownership:datatypes",
+    edition = "2024",
+    header = "//sw/device/silicon_creator/lib/ownership:datatypes.h",
     rustc_flags = [
         "--allow=non_snake_case",
         "--allow=non_upper_case_globals",
@@ -103,12 +135,15 @@ rust_bindgen_library(
 
 rust_library(
     name = "bindgen",
-    srcs = ["lib.rs"],
+    srcs = [
+        "lib.rs",
+        ":rom_error",
+    ],
     deps = [
-        ":alert",
-        ":dif",
-        ":earlgrey",
         ":hardened",
-        ":multibits",
+        ":ownership_datatypes",
+        ":sram_program",
+        ":status",
+        ":test_status",
     ],
 )

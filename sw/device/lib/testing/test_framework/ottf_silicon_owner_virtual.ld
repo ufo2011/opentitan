@@ -1,4 +1,4 @@
-/* Copyright lowRISC contributors. */
+/* Copyright lowRISC contributors (OpenTitan project). */
 /* Licensed under the Apache License, Version 2.0, see LICENSE for details. */
 /* SPDX-License-Identifier: Apache-2.0 */
 
@@ -10,17 +10,27 @@
  * This linker script generates a binary to run BL0 tests.
  */
 
-INCLUDE hw/top_earlgrey/sw/autogen/top_earlgrey_memory.ld
+/* This linker script is preprocessed, OPENTITAN_TOP_MEMORY_LD is a define
+ * set by Bazel to point to the top's linker file. */
+INCLUDE OPENTITAN_TOP_MEMORY_LD
+
+#include "ottf_ld_top_config.ld"
 
 /**
  * Symbols to be used in the setup of the address translation for ROM_EXT.
  */
-/* TODO(#9045): Move BL0 size to a common location. */
-_ottf_size = LENGTH(owner_virtual) - 64K;
-_ottf_start_address = ORIGIN(owner_virtual) + 64K;
-ASSERT((_ottf_size <= (LENGTH(eflash) / 2)),
-  "Error: BL0 flash is bigger than slot.");
+_ottf_start_address = ORIGIN(owner_virtual) + _rom_ext_size;
 
-REGION_ALIAS("ottf_flash", owner_virtual);
+/*
+ * Leaves `_nvm_slot_reserved_bytes` empty at the end of the physical slot.
+ */
+MEMORY {
+  ottf_owner_virtual(rx) : ORIGIN = _ottf_start_address, LENGTH = LENGTH(owner_virtual) - _rom_ext_size - _nvm_slot_reserved_bytes
+}
+_ottf_size = LENGTH(ottf_owner_virtual);
+ASSERT((_ottf_size <= (LENGTH(ottf_storage) / 2)),
+  "Error: BL0 NVM is bigger than slot.");
+
+REGION_ALIAS("ottf_nvm", ottf_owner_virtual);
 
 INCLUDE sw/device/lib/testing/test_framework/ottf_common.ld

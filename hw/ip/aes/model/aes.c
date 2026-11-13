@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -38,7 +38,7 @@ int aes_encrypt_block(const unsigned char *plain_text, const unsigned char *key,
   }
   rcon = 0;
 
-  // ecnrypt
+  // encrypt
   aes_add_round_key(state, round_key);
   for (int j = 0; j < num_rounds; j++) {
     aes_sub_bytes(state);

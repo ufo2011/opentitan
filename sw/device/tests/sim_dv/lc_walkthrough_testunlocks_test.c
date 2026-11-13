@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,23 +67,23 @@ static void lock_otp_secret0_partition(void) {
   CHECK_DIF_OK(dif_otp_ctrl_dai_program64(&otp, kDifOtpCtrlPartitionSecret0,
                                           /*address=*/0x0,
                                           /*value=*/otp_unlock_token_0));
-  otp_ctrl_testutils_wait_for_dai(&otp);
+  CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(&otp));
   CHECK_DIF_OK(dif_otp_ctrl_dai_program64(&otp, kDifOtpCtrlPartitionSecret0,
                                           /*address=*/0x8,
                                           /*value=*/otp_unlock_token_1));
-  otp_ctrl_testutils_wait_for_dai(&otp);
+  CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(&otp));
   CHECK_DIF_OK(dif_otp_ctrl_dai_program64(&otp, kDifOtpCtrlPartitionSecret0,
                                           /*address=*/0x10,
                                           /*value=*/otp_exit_token_0));
-  otp_ctrl_testutils_wait_for_dai(&otp);
+  CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(&otp));
   CHECK_DIF_OK(dif_otp_ctrl_dai_program64(&otp, kDifOtpCtrlPartitionSecret0,
                                           /*address=*/0x18,
                                           /*value=*/otp_exit_token_1));
-  otp_ctrl_testutils_wait_for_dai(&otp);
+  CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(&otp));
 
   CHECK_DIF_OK(dif_otp_ctrl_dai_digest(&otp, kDifOtpCtrlPartitionSecret0,
                                        /*digest=*/0));
-  otp_ctrl_testutils_wait_for_dai(&otp);
+  CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(&otp));
 }
 
 static void get_dest_state_and_cnt(dif_lc_ctrl_state_t *curr_state,
@@ -149,7 +149,8 @@ static void get_dest_state_and_cnt(dif_lc_ctrl_state_t *curr_state,
 bool test_main(void) {
   LOG_INFO("Start LC walkthrough testunlocks test.");
 
-  mmio_region_t lc_reg = mmio_region_from_addr(TOP_EARLGREY_LC_CTRL_BASE_ADDR);
+  mmio_region_t lc_reg =
+      mmio_region_from_addr(TOP_EARLGREY_LC_CTRL_REGS_BASE_ADDR);
   CHECK_DIF_OK(dif_lc_ctrl_init(lc_reg, &lc));
 
   mmio_region_t otp_reg =
@@ -157,7 +158,7 @@ bool test_main(void) {
   CHECK_DIF_OK(dif_otp_ctrl_init(otp_reg, &otp));
 
   CHECK_DIF_OK(dif_rstmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR), &rstmgr));
+      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_BASE_ADDR), &rstmgr));
 
   LOG_INFO("Read and check LC state and count.");
   dif_lc_ctrl_state_t curr_state;
@@ -167,7 +168,7 @@ bool test_main(void) {
   uint8_t kExpCnt;
   get_dest_state_and_cnt(&curr_state, &kDestState, &kExpCnt);
 
-  lc_ctrl_testutils_check_transition_count(&lc, kExpCnt);
+  CHECK_STATUS_OK(lc_ctrl_testutils_check_transition_count(&lc, kExpCnt));
 
   bool secret0_locked;
   CHECK_DIF_OK(dif_otp_ctrl_is_digest_computed(

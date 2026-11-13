@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -128,7 +128,6 @@ module otbn_lsu
 
   `ASSERT_KNOWN_IF(LsuAddrKnown, lsu_addr_i, lsu_load_req_i | lsu_store_req_i)
 
-  // TODO: Produce an error/alert if this doesn't hold?
   `ASSERT(DMemRValidAfterReq, dmem_req_o & ~dmem_write_o |=> dmem_rvalid_i)
 
   assign lsu_bignum_rdata_o = dmem_rdata_i;

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,9 +30,8 @@
       desc: '''
             Verify the countermeasure(s) CONFIG.REGWEN.
             Verify that:
-            1) ME_REGWEN and SW_REGUPD cannot be set back to 1 after being set to 0 once.
-            2) If ME_REGWEN is not set, MODULE_ENABLE cannot be modified.
-            3) Only if MODULE_ENABLE is MuBi4False and SW_REGUPD is 1, a) REGWEN reads as 1 and b) associated control and threshold registers can be modified.
+            1) SW_REGUPD cannot be set back to 1 after being set to 0 once.
+            2) Only if MODULE_ENABLE is MuBi4False and SW_REGUPD is 1, a) REGWEN reads as 1 and b) associated control and threshold registers can be modified.
             '''
       stage: V2S
       tests: ["entropy_src_rng", "entropy_src_cfg_regwen"]
@@ -58,15 +57,6 @@
             '''
       stage: V2S
       tests: ["entropy_src_rng"]
-    }
-    {
-      name: sec_cm_intersig_mubi
-      desc: '''
-            Verify the countermeasure(s) INTERSIG.MUBI.
-            Verify that unless the otp_en_entropy_src_fw_read or otp_en_entropy_src_fw_over input signals are equal to MuBi8True the DUT doesn't allow reading entropy from the ENTROPY_DATA register or from the FW_OV_RD_DATA register, respectively.
-            '''
-      stage: V2S
-      tests: ["entropy_src_rng", "entropy_src_fw_ov"]
     }
     {
       name: sec_cm_main_sm_fsm_sparse
@@ -100,6 +90,17 @@
       tests: ["entropy_src_rng"]
     }
     {
+      name: sec_cm_fifo_ctr_redun
+      desc: '''
+            Verify the countermeasure(s) FIFO.CTR.REDUN.
+            The entropy_src_functional_errors test verifies that if there is any mismatch in the redundant pointers inside the FIFOs this is reported in the ERR_CODE register.
+            It currently doesn't check whether the DUT actually triggers a fatal alert.
+            Alert connection and triggering are verified through automated FPV.
+            '''
+      stage: V2S
+      tests: ["entropy_src_sec_cm", "entropy_src_functional_errors"]
+    }
+    {
       name: sec_cm_ctr_redun
       desc: '''
             Verify the countermeasure(s) CTR.REDUN.
@@ -123,7 +124,7 @@
       name: sec_cm_esfinal_rdata_bus_consistency
       desc: '''
             Verify the countermeasure(s) ESFINAL_RDATA.BUS.CONSISTENCY.
-            Verify that if two subsequents read requests to the esfinal FIFO obtain the same data, the DUT signals a recoverable alert and sets the correct bit in the RECOV_ALERT_STS register.
+            Verify that if two subsequent read requests to the esfinal FIFO obtain the same data, the DUT signals a recoverable alert and sets the correct bit in the RECOV_ALERT_STS register.
             '''
       stage: V2S
       tests: ["entropy_src_functional_alerts"]

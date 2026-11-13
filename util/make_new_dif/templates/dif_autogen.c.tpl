@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,14 +13,14 @@
     1. ip: See util/make_new_dif.py for the definition of the `ip` obj.
 </%doc>
 
-<%def name="mmio_region_read32(intr_reg_offet)">mmio_region_read32(
+<%def name="mmio_region_read32(intr_reg_offset)">mmio_region_read32(
     ${ip.name_snake}->base_addr,
-    ${intr_reg_offet});
+    (ptrdiff_t)${intr_reg_offset});
 </%def>
 
-<%def name="mmio_region_write32(intr_reg_offet, value)">mmio_region_write32(
+<%def name="mmio_region_write32(intr_reg_offset, value)">mmio_region_write32(
     ${ip.name_snake}->base_addr,
-    ${intr_reg_offet},
+    (ptrdiff_t)${intr_reg_offset},
     ${value});
 </%def>
 
@@ -31,13 +31,13 @@ ${autogen_banner}
 #include "sw/device/lib/dif/dif_base.h"
 #include "sw/device/lib/dif/autogen/dif_${ip.name_snake}_autogen.h"
 
-#include "${ip.name_snake}_regs.h"  // Generated.
+#include "hw/top/${ip.name_snake}_regs.h"  // Generated.
 
 % if ip.name_snake == "aon_timer":
   #include <assert.h>
 
   % for irq in ip.irqs:
-    static_assert(${ip.name_upper}_INTR_STATE_${irq.name_upper}_BIT == 
+    static_assert(${ip.name_upper}_INTR_STATE_${irq.name_upper}_BIT ==
                   ${ip.name_upper}_INTR_TEST_${irq.name_upper}_BIT,
                   "Expected IRQ bit offsets to match across STATE/TEST regs.");
   % endfor
@@ -46,10 +46,10 @@ ${autogen_banner}
   #include <assert.h>
 
   % for irq in ip.irqs:
-    static_assert(${ip.name_upper}_INTR_STATE0_IS_${loop.index}_BIT == 
+    static_assert(${ip.name_upper}_INTR_STATE0_IS_${loop.index}_BIT ==
                   ${ip.name_upper}_INTR_ENABLE0_IE_${loop.index}_BIT,
                   "Expected IRQ bit offsets to match across STATE/ENABLE regs.");
-    static_assert(${ip.name_upper}_INTR_STATE0_IS_${loop.index}_BIT == 
+    static_assert(${ip.name_upper}_INTR_STATE0_IS_${loop.index}_BIT ==
                   ${ip.name_upper}_INTR_TEST0_T_${loop.index}_BIT,
                   "Expected IRQ bit offsets to match across STATE/ENABLE regs.");
   % endfor
@@ -63,8 +63,35 @@ dif_result_t dif_${ip.name_snake}_init(
     return kDifBadArg;
   }
 
+  ${ip.name_snake}->dt = kDt${ip.name_camel}Count;
   ${ip.name_snake}->base_addr = base_addr;
 
+  return kDifOk;
+}
+% if ip.has_registers():
+
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_${ip.name_snake}_init_from_dt(
+  dt_${ip.name_snake}_t dt,
+  dif_${ip.name_snake}_t *${ip.name_snake}) {
+  if (${ip.name_snake} == NULL) {
+    return kDifBadArg;
+  }
+
+  ${ip.name_snake}->dt = dt;
+  ${ip.name_snake}->base_addr = mmio_region_from_addr(dt_${ip.name_snake}_primary_reg_block(dt));
+
+  return kDifOk;
+}
+% endif
+
+dif_result_t dif_${ip.name_snake}_get_dt(
+  const dif_${ip.name_snake}_t *${ip.name_snake},
+  dt_${ip.name_snake}_t *dt) {
+  if ((int)${ip.name_snake}->dt == kDt${ip.name_camel}Count || dt == NULL) {
+    return kDifBadArg;
+  }
+  *dt = ${ip.name_snake}->dt;
   return kDifOk;
 }
 
@@ -88,6 +115,9 @@ dif_result_t dif_${ip.name_snake}_init(
   }
 
   uint32_t alert_test_reg = bitfield_bit32_write(0, alert_idx, true);
+  // Keep the alert test enabled: writing 0 to the regwen bit locks the register.
+  alert_test_reg = bitfield_bit32_write(
+      alert_test_reg, ${ip.name_upper}_ALERT_TEST_REGWEN_BIT, true);
   ${mmio_region_write32(ip.name_upper + "_ALERT_TEST_REG_OFFSET", "alert_test_reg")}
 
   return kDifOk;
@@ -147,19 +177,22 @@ dif_result_t dif_${ip.name_snake}_init(
     ## This handles the GPIO IP case where there is a multi-bit interrupt.
     % if irq.width > 1:
       % for irq_idx in range(irq.width):
-        case kDif${ip.name_camel}Irq${irq.name_camel}${irq_idx}:
+        case kDt${ip.name_camel}Irq${irq.name_camel}${irq_idx}:
           *index_out = ${irq_idx};
           break;
       % endfor
     ## This handles all other IPs.
     % else:
-      case kDif${ip.name_camel}Irq${irq.name_camel}:
+      case kDt${ip.name_camel}Irq${irq.name_camel}:
       ## This handles the RV Timer IP.
       % if ip.name_snake == "aon_timer":
         *index_out = ${ip.name_upper}_INTR_STATE_${irq.name_upper}_BIT;
       ## This handles the RV Timer IP.
       % elif ip.name_snake == "rv_timer":
         *index_out = ${ip.name_upper}_INTR_STATE0_IS_${loop.index}_BIT;
+      ## This handles the RACL Controller IP.
+      % elif ip.name_snake == "racl_ctrl":
+        *index_out = ${ip.name_upper}_INTR_STATE_${irq.name_upper}_BIT;
       ## This handles all other IPs that do not have the "no_auto_intr_regs" in
       ## their HJSON files.
       % else:
@@ -201,15 +234,18 @@ dif_result_t dif_${ip.name_snake}_init(
     dif_${ip.name_snake}_irq_t irq,
     dif_irq_type_t *type) {
 
-    % if ip.irqs[-1].width == 1:
-      if (${ip.name_snake} == NULL ||
-          type == NULL ||
-          irq == kDif${ip.name_camel}Irq${ip.irqs[-1].name_camel} + 1) {
-    % else:
-      if (${ip.name_snake} == NULL ||
-          type == NULL ||
-          irq == kDif${ip.name_camel}Irq${ip.irqs[-1].name_camel}${ip.irqs[-1].width - 1} + 1) {
-    % endif
+    <%
+      first_irq_name = "kDif{}Irq{}".format(ip.name_camel, ip.irqs[0].name_camel)
+      last_irq_name = "kDif{}Irq{}".format(ip.name_camel, ip.irqs[-1].name_camel)
+      if ip.irqs[0].width > 1:
+        first_irq_name += "0"
+      if ip.irqs[-1].width > 1:
+        last_irq_name += str(ip.irqs[-1].width - 1)
+    %>
+    if (${ip.name_snake} == NULL ||
+        type == NULL ||
+        irq < ${first_irq_name} ||
+        irq > ${last_irq_name}) {
       return kDifBadArg;
     }
 
@@ -242,6 +278,34 @@ dif_result_t dif_${ip.name_snake}_init(
     }
   % else:
     *snapshot = ${mmio_region_read32(ip.name_upper + "_INTR_STATE_REG_OFFSET")}
+  % endif
+
+    return kDifOk;
+  }
+
+  OT_WARN_UNUSED_RESULT
+  dif_result_t dif_${ip.name_snake}_irq_acknowledge_state(
+    const dif_${ip.name_snake}_t *${ip.name_snake},
+  % if ip.name_snake == "rv_timer":
+    uint32_t hart_id,
+  % endif
+    dif_${ip.name_snake}_irq_state_snapshot_t snapshot) {
+    if (${ip.name_snake} == NULL) {
+      return kDifBadArg;
+    }
+
+  % if ip.name_snake == "rv_timer":
+    switch (hart_id) {
+      % for hart_id in range(int(ip.parameters["N_HARTS"].default)):
+        case ${hart_id}:
+          ${mmio_region_write32("RV_TIMER_INTR_STATE%d_REG_OFFSET" % hart_id, "snapshot")}
+          break;
+      % endfor
+      default:
+        return kDifBadArg;
+    }
+  % else:
+    ${mmio_region_write32(ip.name_upper + "_INTR_STATE_REG_OFFSET", "snapshot")}
   % endif
 
     return kDifOk;
@@ -377,7 +441,7 @@ dif_result_t dif_${ip.name_snake}_init(
     const dif_${ip.name_snake}_t *${ip.name_snake},
     dif_${ip.name_snake}_irq_t irq,
     dif_toggle_t *state) {
-    
+
     if (${ip.name_snake} == NULL || state == NULL) {
       return kDifBadArg;
     }
@@ -400,7 +464,7 @@ dif_result_t dif_${ip.name_snake}_init(
   % endif
 
     bool is_enabled = bitfield_bit32_read(intr_enable_reg, index);
-    *state = is_enabled ? 
+    *state = is_enabled ?
       kDifToggleEnabled : kDifToggleDisabled;
 
     return kDifOk;

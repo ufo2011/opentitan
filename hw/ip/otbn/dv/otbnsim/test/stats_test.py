@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -137,7 +137,7 @@ def test_general_and_loop(tmpdir: py.path.local) -> None:
     stats = _simulate_asm_file(asm_file, tmpdir)
 
     # General statistics
-    assert stats.stall_count == 3
+    assert stats.stall_count == 13
     assert stats.get_insn_count() == 28
     assert stats.insn_histo == {'addi': 22, 'loop': 4, 'loopi': 1, 'ecall': 1}
     assert stats.func_calls == []

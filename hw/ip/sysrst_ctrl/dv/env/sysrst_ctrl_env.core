@@ -1,5 +1,5 @@
 CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 name: "lowrisc:dv:sysrst_ctrl_env:0.1"
@@ -33,6 +33,8 @@ filesets:
       - seq_lib/sysrst_ctrl_combo_detect_vseq.sv: {is_include_file: true}
       - seq_lib/sysrst_ctrl_edge_detect_vseq.sv: {is_include_file: true}
       - seq_lib/sysrst_ctrl_stress_all_vseq.sv: {is_include_file: true}
+      - seq_lib/sysrst_ctrl_combo_detect_with_pre_cond_vseq.sv: {is_include_file: true}
+      - seq_lib/sysrst_ctrl_feature_disable_vseq.sv: {is_include_file: true}
     file_type: systemVerilogSource
 
 generate:
@@ -41,10 +43,11 @@ generate:
     parameters:
       name: sysrst_ctrl
       ip_hjson: ../../data/sysrst_ctrl.hjson
+    position: prepend
 
 targets:
   default:
     filesets:
       - files_dv
     generate:
-      - ral
+      - "!chip_level ? (ral)"

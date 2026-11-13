@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,7 @@ set -o pipefail
 done)| \
     xargs -r ./bazelisk.sh test //quality:license_check --test_output=streamed || {
 
-    echo >&2 -n "##vso[task.logissue type=error]"
+    echo >&2 -n "::error::"
     echo >&2 "Licence header check failed."
     exit 1
 }

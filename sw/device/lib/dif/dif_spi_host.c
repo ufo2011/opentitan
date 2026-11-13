@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include "sw/device/lib/base/memory.h"
 #include "sw/device/lib/base/mmio.h"
 
-#include "spi_host_regs.h"  // Generated.
+#include "hw/top/spi_host_regs.h"  // Generated.
 
 // We create weak symbol aliases for the FIFO write and read functions so the
 // unit tests can provide mocks.  The mocks provide for separate testing of
@@ -29,9 +29,11 @@ dif_result_t spi_host_fifo_read_alias(const dif_spi_host_t *spi_host, void *dst,
 
 static void spi_host_reset(const dif_spi_host_t *spi_host) {
   // Set the software reset request bit.
+  uint32_t reg =
+      mmio_region_read32(spi_host->base_addr, SPI_HOST_CONTROL_REG_OFFSET);
   mmio_region_write32(
       spi_host->base_addr, SPI_HOST_CONTROL_REG_OFFSET,
-      bitfield_bit32_write(0, SPI_HOST_CONTROL_SW_RST_BIT, true));
+      bitfield_bit32_write(reg, SPI_HOST_CONTROL_SW_RST_BIT, true));
 
   // Wait for the spi host to go inactive.
   bool active;
@@ -57,9 +59,11 @@ static void spi_host_reset(const dif_spi_host_t *spi_host) {
 }
 
 static void spi_host_enable(const dif_spi_host_t *spi_host, bool enable) {
+  uint32_t reg =
+      mmio_region_read32(spi_host->base_addr, SPI_HOST_CONTROL_REG_OFFSET);
   mmio_region_write32(
       spi_host->base_addr, SPI_HOST_CONTROL_REG_OFFSET,
-      bitfield_bit32_write(0, SPI_HOST_CONTROL_SPIEN_BIT, enable));
+      bitfield_bit32_write(reg, SPI_HOST_CONTROL_SPIEN_BIT, enable));
 }
 
 dif_result_t dif_spi_host_configure(const dif_spi_host_t *spi_host,
@@ -73,25 +77,32 @@ dif_result_t dif_spi_host_configure(const dif_spi_host_t *spi_host,
 
   uint32_t divider =
       ((config.peripheral_clock_freq_hz / config.spi_clock) / 2) - 1;
-  if (divider & ~SPI_HOST_CONFIGOPTS_CLKDIV_0_MASK) {
+  if (divider & ~(uint32_t)SPI_HOST_CONFIGOPTS_CLKDIV_MASK) {
     return kDifBadArg;
   }
 
   spi_host_reset(spi_host);
   uint32_t reg = 0;
-  reg =
-      bitfield_field32_write(reg, SPI_HOST_CONFIGOPTS_CLKDIV_0_FIELD, divider);
-  reg = bitfield_field32_write(reg, SPI_HOST_CONFIGOPTS_CSNIDLE_0_FIELD,
+  reg = bitfield_field32_write(reg, SPI_HOST_CONFIGOPTS_CLKDIV_FIELD, divider);
+  reg = bitfield_field32_write(reg, SPI_HOST_CONFIGOPTS_CSNIDLE_FIELD,
                                config.chip_select.idle);
-  reg = bitfield_field32_write(reg, SPI_HOST_CONFIGOPTS_CSNTRAIL_0_FIELD,
+  reg = bitfield_field32_write(reg, SPI_HOST_CONFIGOPTS_CSNTRAIL_FIELD,
                                config.chip_select.trail);
-  reg = bitfield_field32_write(reg, SPI_HOST_CONFIGOPTS_CSNLEAD_0_FIELD,
+  reg = bitfield_field32_write(reg, SPI_HOST_CONFIGOPTS_CSNLEAD_FIELD,
                                config.chip_select.lead);
-  reg = bitfield_bit32_write(reg, SPI_HOST_CONFIGOPTS_FULLCYC_0_BIT,
+  reg = bitfield_bit32_write(reg, SPI_HOST_CONFIGOPTS_FULLCYC_BIT,
                              config.full_cycle);
-  reg = bitfield_bit32_write(reg, SPI_HOST_CONFIGOPTS_CPHA_0_BIT, config.cpha);
-  reg = bitfield_bit32_write(reg, SPI_HOST_CONFIGOPTS_CPOL_0_BIT, config.cpol);
+  reg = bitfield_bit32_write(reg, SPI_HOST_CONFIGOPTS_CPHA_BIT, config.cpha);
+  reg = bitfield_bit32_write(reg, SPI_HOST_CONFIGOPTS_CPOL_BIT, config.cpol);
   mmio_region_write32(spi_host->base_addr, SPI_HOST_CONFIGOPTS_REG_OFFSET, reg);
+
+  reg = mmio_region_read32(spi_host->base_addr, SPI_HOST_CONTROL_REG_OFFSET);
+  reg = bitfield_field32_write(reg, SPI_HOST_CONTROL_TX_WATERMARK_FIELD,
+                               config.tx_watermark);
+  reg = bitfield_field32_write(reg, SPI_HOST_CONTROL_RX_WATERMARK_FIELD,
+                               config.rx_watermark);
+  mmio_region_write32(spi_host->base_addr, SPI_HOST_CONTROL_REG_OFFSET, reg);
+
   spi_host_enable(spi_host, true);
   return kDifOk;
 }
@@ -193,7 +204,7 @@ static void enqueue_byte(queue_t *queue, uint8_t data) {
 }
 
 static void enqueue_word(queue_t *queue, uint32_t data) {
-  if (queue->length % sizeof(uint32_t) == 0) {
+  if (queue->length % (int32_t)sizeof(uint32_t) == 0) {
     write_32(data, queue->data + queue->length);
     queue->length += 4;
   } else {
@@ -289,9 +300,9 @@ static void issue_opcode(const dif_spi_host_t *spi_host,
                          dif_spi_host_segment_t *segment, bool last_segment) {
   wait_tx_fifo(spi_host);
   mmio_region_write8(spi_host->base_addr, SPI_HOST_TXDATA_REG_OFFSET,
-                     segment->opcode);
-  write_command_reg(spi_host, 1, kDifSpiHostWidthStandard,
-                    kDifSpiHostDirectionTx, last_segment);
+                     segment->opcode.opcode);
+  write_command_reg(spi_host, 1, segment->opcode.width, kDifSpiHostDirectionTx,
+                    last_segment);
 }
 
 static void issue_address(const dif_spi_host_t *spi_host,
@@ -299,7 +310,7 @@ static void issue_address(const dif_spi_host_t *spi_host,
   wait_tx_fifo(spi_host);
   // The address appears on the wire in big-endian order.
   uint32_t address = bitfield_byteswap32(segment->address.address);
-  uint32_t length;
+  uint16_t length;
   if (segment->address.mode == kDifSpiHostAddrMode4b) {
     length = 4;
     mmio_region_write32(spi_host->base_addr, SPI_HOST_TXDATA_REG_OFFSET,
@@ -316,35 +327,38 @@ static void issue_address(const dif_spi_host_t *spi_host,
 
 static void issue_dummy(const dif_spi_host_t *spi_host,
                         dif_spi_host_segment_t *segment, bool last_segment) {
-  write_command_reg(spi_host, segment->dummy.length, segment->dummy.width,
-                    kDifSpiHostDirectionDummy, last_segment);
+  if (segment->dummy.length > 0) {
+    // We only want to program a dummy segment if the number of cycles is
+    // greater than zero.  Programming a zero to the hardware results in a
+    // dummy segment of 512 bits.
+    write_command_reg(spi_host, (uint16_t)segment->dummy.length,
+                      segment->dummy.width, kDifSpiHostDirectionDummy,
+                      last_segment);
+  }
 }
 
 static dif_result_t issue_data_phase(const dif_spi_host_t *spi_host,
                                      dif_spi_host_segment_t *segment,
                                      bool last_segment) {
-  size_t length;
-  dif_spi_host_width_t width;
-  dif_spi_host_direction_t direction;
-
   switch (segment->type) {
     case kDifSpiHostSegmentTypeTx:
-      width = segment->tx.width;
-      length = segment->tx.length;
-      direction = kDifSpiHostDirectionTx;
-      spi_host_fifo_write_alias(spi_host, segment->tx.buf, segment->tx.length);
+      write_command_reg(spi_host, (uint16_t)segment->tx.length,
+                        segment->tx.width, kDifSpiHostDirectionTx,
+                        last_segment);
+      spi_host_fifo_write_alias(spi_host, segment->tx.buf,
+                                (uint16_t)segment->tx.length);
       break;
     case kDifSpiHostSegmentTypeBidirectional:
-      width = segment->bidir.width;
-      length = segment->bidir.length;
-      direction = kDifSpiHostDirectionBidirectional;
+      write_command_reg(spi_host, (uint16_t)segment->bidir.length,
+                        segment->bidir.width, kDifSpiHostDirectionBidirectional,
+                        last_segment);
       spi_host_fifo_write_alias(spi_host, segment->bidir.txbuf,
-                                segment->bidir.length);
+                                (uint16_t)segment->bidir.length);
       break;
     case kDifSpiHostSegmentTypeRx:
-      width = segment->rx.width;
-      length = segment->rx.length;
-      direction = kDifSpiHostDirectionRx;
+      write_command_reg(spi_host, (uint16_t)segment->rx.length,
+                        segment->rx.width, kDifSpiHostDirectionRx,
+                        last_segment);
       break;
     default:
       // Programming error (within this file).  We should never get here.
@@ -352,14 +366,17 @@ static dif_result_t issue_data_phase(const dif_spi_host_t *spi_host,
       // represent a data transfer.
       return kDifBadArg;
   }
-  write_command_reg(spi_host, length, width, direction, last_segment);
   return kDifOk;
 }
 
-dif_result_t dif_spi_host_transaction(const dif_spi_host_t *spi_host,
-                                      uint32_t csid,
-                                      dif_spi_host_segment_t *segments,
-                                      size_t length) {
+dif_result_t dif_spi_host_start_transaction(const dif_spi_host_t *spi_host,
+                                            uint32_t csid,
+                                            dif_spi_host_segment_t *segments,
+                                            size_t length) {
+  if (spi_host == NULL || segments == NULL) {
+    return kDifBadArg;
+  }
+
   // Write to chip select ID.
   mmio_region_write32(spi_host->base_addr, SPI_HOST_CSID_REG_OFFSET, csid);
 
@@ -392,21 +409,161 @@ dif_result_t dif_spi_host_transaction(const dif_spi_host_t *spi_host,
         return kDifBadArg;
     }
   }
+  return kDifOk;
+}
+
+dif_result_t dif_spi_host_transaction(const dif_spi_host_t *spi_host,
+                                      uint32_t csid,
+                                      dif_spi_host_segment_t *segments,
+                                      size_t length) {
+  DIF_RETURN_IF_ERROR(
+      dif_spi_host_start_transaction(spi_host, csid, segments, length));
 
   // For each segment which receives data, read from the receive FIFO.
   for (size_t i = 0; i < length; ++i) {
     dif_spi_host_segment_t *segment = &segments[i];
     switch (segment->type) {
       case kDifSpiHostSegmentTypeRx:
-        spi_host_fifo_read_alias(spi_host, segment->rx.buf, segment->rx.length);
+        spi_host_fifo_read_alias(spi_host, segment->rx.buf,
+                                 (uint16_t)segment->rx.length);
         break;
       case kDifSpiHostSegmentTypeBidirectional:
         spi_host_fifo_read_alias(spi_host, segment->bidir.rxbuf,
-                                 segment->bidir.length);
+                                 (uint16_t)segment->bidir.length);
         break;
       default:
           /* do nothing */;
     }
   }
+  return kDifOk;
+}
+
+dif_result_t dif_spi_host_event_set_enabled(const dif_spi_host_t *spi_host,
+                                            dif_spi_host_events_t event,
+                                            bool enable) {
+  if (spi_host == NULL || (event & ~(uint32_t)kDifSpiHostEvtAll) != 0) {
+    return kDifBadArg;
+  }
+
+  uint32_t reg =
+      mmio_region_read32(spi_host->base_addr, SPI_HOST_EVENT_ENABLE_REG_OFFSET);
+  if (enable) {
+    reg |= event;
+  } else {
+    reg &= ~event;
+  }
+  mmio_region_write32(spi_host->base_addr, SPI_HOST_EVENT_ENABLE_REG_OFFSET,
+                      reg);
+  return kDifOk;
+}
+
+dif_result_t dif_spi_host_event_get_enabled(const dif_spi_host_t *spi_host,
+                                            dif_spi_host_events_t *events) {
+  if (spi_host == NULL || events == NULL) {
+    return kDifBadArg;
+  }
+
+  *events =
+      mmio_region_read32(spi_host->base_addr, SPI_HOST_EVENT_ENABLE_REG_OFFSET);
+  return kDifOk;
+}
+
+dif_result_t dif_spi_host_get_status(const dif_spi_host_t *spi_host,
+                                     dif_spi_host_status_t *status) {
+  if (spi_host == NULL || status == NULL) {
+    return kDifBadArg;
+  }
+
+  uint32_t reg =
+      mmio_region_read32(spi_host->base_addr, SPI_HOST_STATUS_REG_OFFSET);
+
+  status->ready = bitfield_bit32_read(reg, SPI_HOST_STATUS_READY_BIT);
+  status->active = bitfield_bit32_read(reg, SPI_HOST_STATUS_ACTIVE_BIT);
+  status->tx_empty = bitfield_bit32_read(reg, SPI_HOST_STATUS_TXEMPTY_BIT);
+  status->rx_empty = bitfield_bit32_read(reg, SPI_HOST_STATUS_RXEMPTY_BIT);
+  status->tx_full = bitfield_bit32_read(reg, SPI_HOST_STATUS_TXFULL_BIT);
+  status->rx_full = bitfield_bit32_read(reg, SPI_HOST_STATUS_RXFULL_BIT);
+  status->tx_water_mark = bitfield_bit32_read(reg, SPI_HOST_STATUS_TXWM_BIT);
+  status->rx_water_mark = bitfield_bit32_read(reg, SPI_HOST_STATUS_RXWM_BIT);
+  status->tx_stall = bitfield_bit32_read(reg, SPI_HOST_STATUS_TXSTALL_BIT);
+  status->rx_stall = bitfield_bit32_read(reg, SPI_HOST_STATUS_RXSTALL_BIT);
+  status->least_significant_first =
+      bitfield_bit32_read(reg, SPI_HOST_STATUS_BYTEORDER_BIT);
+  status->tx_queue_depth =
+      bitfield_field32_read(reg, SPI_HOST_STATUS_TXQD_FIELD);
+  status->rx_queue_depth =
+      bitfield_field32_read(reg, SPI_HOST_STATUS_RXQD_FIELD);
+  status->cmd_queue_depth =
+      bitfield_field32_read(reg, SPI_HOST_STATUS_CMDQD_FIELD);
+
+  return kDifOk;
+}
+
+dif_result_t dif_spi_host_write_command(const dif_spi_host_t *spi_host,
+                                        uint16_t length,
+                                        dif_spi_host_width_t speed,
+                                        dif_spi_host_direction_t direction,
+                                        bool last_segment) {
+  if (spi_host == NULL) {
+    return kDifBadArg;
+  }
+  write_command_reg(spi_host, length, speed, direction, last_segment);
+  return kDifOk;
+}
+
+dif_result_t dif_spi_host_error_set_enabled(const dif_spi_host_t *spi_host,
+                                            dif_spi_host_errors_t error,
+                                            bool enable) {
+  if (spi_host == NULL || (error & ~(uint32_t)kDifSpiHostIrqErrorAll) != 0) {
+    return kDifBadArg;
+  }
+
+  uint32_t reg =
+      mmio_region_read32(spi_host->base_addr, SPI_HOST_ERROR_ENABLE_REG_OFFSET);
+  if (enable) {
+    reg |= error;
+  } else {
+    reg &= ~error;
+  }
+  mmio_region_write32(spi_host->base_addr, SPI_HOST_ERROR_ENABLE_REG_OFFSET,
+                      reg);
+  return kDifOk;
+}
+
+dif_result_t dif_spi_host_error_get_enabled(const dif_spi_host_t *spi_host,
+                                            dif_spi_host_errors_t *errors) {
+  if (spi_host == NULL || errors == NULL) {
+    return kDifBadArg;
+  }
+
+  *errors =
+      mmio_region_read32(spi_host->base_addr, SPI_HOST_ERROR_ENABLE_REG_OFFSET);
+  return kDifOk;
+}
+
+dif_result_t dif_spi_host_get_error(const dif_spi_host_t *spi_host,
+                                    dif_spi_host_errors_t *error) {
+  if (spi_host == NULL || error == NULL) {
+    return kDifBadArg;
+  }
+
+  *error =
+      mmio_region_read32(spi_host->base_addr, SPI_HOST_ERROR_STATUS_REG_OFFSET);
+
+  return kDifOk;
+}
+
+dif_result_t dif_spi_host_wait_until_idle(const dif_spi_host_t *spi_host) {
+  if (spi_host == NULL) {
+    return kDifBadArg;
+  }
+
+  bool active;
+  do {
+    uint32_t reg =
+        mmio_region_read32(spi_host->base_addr, SPI_HOST_STATUS_REG_OFFSET);
+    active = bitfield_bit32_read(reg, SPI_HOST_STATUS_ACTIVE_BIT);
+  } while (active);
+
   return kDifOk;
 }

@@ -1,7 +1,8 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "hw/top/dt/kmac.h"
 #include "sw/device/lib/arch/device.h"
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_kmac.h"
@@ -9,7 +10,12 @@
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
+#include "hw/top/kmac_regs.h"  // Generated.
+
+static_assert(kDtKmacCount >= 1,
+              "This test requires at least one KMAC instance");
+
+static dt_kmac_t kTestKmac = (dt_kmac_t)0;
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -170,9 +176,14 @@ void run_sha3_test(dif_kmac_t *kmac) {
     }
     uint32_t out[DIGEST_LEN_SHA3_MAX];
     CHECK(DIGEST_LEN_SHA3_MAX >= test.digest_len);
-    CHECK_DIF_OK(
-        dif_kmac_squeeze(kmac, &operation_state, out, test.digest_len, NULL));
+    CHECK_DIF_OK(dif_kmac_squeeze(kmac, &operation_state, out, test.digest_len,
+                                  /*processed=*/NULL, /*capacity=*/NULL));
     CHECK_DIF_OK(dif_kmac_end(kmac, &operation_state));
+
+    // Wait for the hardware engine to actually finish. On FPGA, it may take
+    // a while until the DONE command gets actually executed (see SecCmdDelay
+    // SystemVerilog parameter).
+    CHECK_DIF_OK(dif_kmac_poll_status(kmac, KMAC_STATUS_SHA3_IDLE_BIT));
 
     for (int j = 0; j < test.digest_len; ++j) {
       CHECK(out[j] == test.digest[j],
@@ -206,9 +217,15 @@ void run_sha3_alignment_test(dif_kmac_t *kmac) {
 
     // Checking the first 32-bits of the digest is sufficient.
     uint32_t out;
-    CHECK_DIF_OK(
-        dif_kmac_squeeze(kmac, &operation_state, &out, sizeof(uint32_t), NULL));
+    CHECK_DIF_OK(dif_kmac_squeeze(kmac, &operation_state, &out,
+                                  sizeof(uint32_t), /*processed=*/NULL,
+                                  /*capacity=*/NULL));
     CHECK_DIF_OK(dif_kmac_end(kmac, &operation_state));
+
+    // Wait for the hardware engine to actually finish. On FPGA, it may take
+    // a while until the DONE command gets actually executed (see SecCmdDelay
+    // SystemVerilog parameter).
+    CHECK_DIF_OK(dif_kmac_poll_status(kmac, KMAC_STATUS_SHA3_IDLE_BIT));
 
     CHECK_DIF_OK((out == kExpect),
                  "mismatch at alignment %u got 0x%u want 0x%x", i, out,
@@ -227,9 +244,15 @@ void run_sha3_alignment_test(dif_kmac_t *kmac) {
 
     // Checking the first 32-bits of the digest is sufficient.
     uint32_t out;
-    CHECK_DIF_OK(
-        dif_kmac_squeeze(kmac, &operation_state, &out, sizeof(uint32_t), NULL));
+    CHECK_DIF_OK(dif_kmac_squeeze(kmac, &operation_state, &out,
+                                  sizeof(uint32_t), /*processed=*/NULL,
+                                  /*capacity=*/NULL));
     CHECK_DIF_OK(dif_kmac_end(kmac, &operation_state));
+
+    // Wait for the hardware engine to actually finish. On FPGA, it may take
+    // a while until the DONE command gets actually executed (see SecCmdDelay
+    // SystemVerilog parameter).
+    CHECK_DIF_OK(dif_kmac_poll_status(kmac, KMAC_STATUS_SHA3_IDLE_BIT));
 
     CHECK_DIF_OK((out == kExpect), "mismatch got 0x%u want 0x%x", out, kExpect);
   }
@@ -251,9 +274,14 @@ void run_shake_test(dif_kmac_t *kmac) {
     }
     uint32_t out[DIGEST_LEN_SHAKE_MAX];
     CHECK(DIGEST_LEN_SHAKE_MAX >= test.digest_len);
-    CHECK_DIF_OK(
-        dif_kmac_squeeze(kmac, &operation_state, out, test.digest_len, NULL));
+    CHECK_DIF_OK(dif_kmac_squeeze(kmac, &operation_state, out, test.digest_len,
+                                  /*processed=*/NULL, /*capacity=*/NULL));
     CHECK_DIF_OK(dif_kmac_end(kmac, &operation_state));
+
+    // Wait for the hardware engine to actually finish. On FPGA, it may take
+    // a while until the DONE command gets actually executed (see SecCmdDelay
+    // SystemVerilog parameter).
+    CHECK_DIF_OK(dif_kmac_poll_status(kmac, KMAC_STATUS_SHA3_IDLE_BIT));
 
     for (int j = 0; j < test.digest_len; ++j) {
       CHECK(out[j] == test.digest[j],
@@ -268,14 +296,15 @@ bool test_main(void) {
 
   // Intialize KMAC hardware.
   dif_kmac_t kmac;
-  CHECK_DIF_OK(
-      dif_kmac_init(mmio_region_from_addr(TOP_EARLGREY_KMAC_BASE_ADDR), &kmac));
+  CHECK_DIF_OK(dif_kmac_init_from_dt(kTestKmac, &kmac));
 
-  // Configure KMAC hardware using software entropy.
+  // Configure KMAC hardware using software entropy. The seed has been randomnly
+  // chosen and is genrated using enerated using
+  // ./util/design/gen-lfsr-seed.py --width 192 --seed 2034386436 --prefix ""
   dif_kmac_config_t config = (dif_kmac_config_t){
       .entropy_mode = kDifKmacEntropyModeSoftware,
-      .entropy_seed = {0xaa25b4bf, 0x48ce8fff, 0x5a78282a, 0x48465647,
-                       0x70410fef},
+      .entropy_seed = {0xb153e3fe, 0x09596819, 0x3e85a6e8, 0xb6dcdaba,
+                       0x50dc409c, 0x11e1ebd1},
       .entropy_fast_process = kDifToggleEnabled,
   };
   CHECK_DIF_OK(dif_kmac_configure(&kmac, config));

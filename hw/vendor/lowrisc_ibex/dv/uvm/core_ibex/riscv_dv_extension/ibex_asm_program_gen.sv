@@ -54,7 +54,7 @@ class ibex_asm_program_gen extends riscv_asm_program_gen;
 
     riscv_csr_instr::create_csr_filter(cfg);
 
-    if ($value$plusargs("disable_pmp_exception_handler", disable_pmp_exception_handler) &&
+    if ($value$plusargs("disable_pmp_exception_handler=%d", disable_pmp_exception_handler) &&
         disable_pmp_exception_handler) begin
       cfg.pmp_cfg.enable_pmp_exception_handler = 0;
     end
@@ -75,6 +75,8 @@ class ibex_asm_program_gen extends riscv_asm_program_gen;
              $sformatf("addi  x%0d, x%0d, 4", cfg.gpr[0], cfg.gpr[0]),
              $sformatf("csrw  0x%0x, x%0d", MEPC, cfg.gpr[0])
              };
+    // Pop the frame pushed on trap entry.
+    pop_gpr_from_kernel_stack(MSTATUS, MSCRATCH, cfg.mstatus_mprv, cfg.sp, cfg.tp, instr);
     instr.push_back("mret");
     gen_section(get_label("ecall_handler", hart), instr);
   endfunction
@@ -98,7 +100,8 @@ class ibex_asm_program_gen extends riscv_asm_program_gen;
     instr_stream.push_back(".option norvc");
     // 0x0 debug mode entry
     instr_stream.push_back("j debug_rom");
-    // 0x4 debug mode exception handler
+    instr_stream.push_back(".align 3");
+    // 0x8 debug mode exception handler
     instr_stream.push_back("j debug_exception");
     // Align the start section to 0x80
     instr_stream.push_back(".align 7");
@@ -112,7 +115,7 @@ class ibex_asm_program_gen extends riscv_asm_program_gen;
   endfunction
 
   // Re-define gen_test_done() to override the base-class with an empty implementation.
-  // Then, our own overrided gen_program() can append new test_done code.
+  // Then, our own overriding gen_program() can append new test_done code.
   virtual function void gen_test_done();
     // empty
   endfunction
@@ -152,6 +155,13 @@ class ibex_asm_program_gen extends riscv_asm_program_gen;
     string instr[$];
 
     super.gen_init_section(hart);
+
+    // RISCV-DV assumes main is immediately after init when riscv_instr_pkg::support_pmp isn't set.
+    // This override of gen_init_section breaks that assumption so add a jump to main here so the
+    // test starts correctly for configurations that don't support PMP.
+    if (!riscv_instr_pkg::support_pmp) begin
+      instr_stream.push_back({indent, "j main"});
+    end
 
     gen_test_end(.result(TEST_PASS), .instr(instr));
     instr_stream = {instr_stream,

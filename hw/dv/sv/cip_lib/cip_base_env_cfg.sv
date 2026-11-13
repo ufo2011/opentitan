@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,30 @@ class cip_base_env_cfg #(type RAL_T = dv_base_reg_block) extends dv_base_env_cfg
   // these are default enabled. If en_cov is off, these will be disabled as well.
   bit en_tl_err_cov      = 1;
   bit en_tl_intg_err_cov = 1;
+
+  // True if the scoreboard should check TL transactions for integrity. A transaction that fails its
+  // integrity check is expected to be ignored (although it may cause an alert).
+  bit en_scb_tl_err_chk = 1;
+
+  // True if the scoreboard should check that pings on the alert interface get timely responses.
+  bit en_scb_ping_chk = 1;
+
+  // A flag that the cip_base_vseq sets before it triggers a reset in the stress_all_with_rand_reset
+  // test. Once this is set, it causes the stop_transaction_generators() function to return true,
+  // which causes some environments to pause their sequences to leave a "quiet gap".
+  //
+  // The flag is set by calling the set_intention_to_reset() function and can be seen by calling
+  // stop_transaction_generators.
+  local bit will_reset  = 0;
+
+  // If this flag is set then we allow the stress_all_with_rand_reset task to apply a reset without
+  // waiting for CSR accesses to complete. This will only work if the IP block's vseqs
+  //
+  //  - Check for reset after performing a CSR read, skipping any check on the result if we are in
+  //  reset (because the result will be rubbish if we are in reset)
+  //
+  //  - Check for reset every so often (to run quickly to completion if a reset has been applied).
+  bit can_reset_with_csr_accesses = 1'b0;
 
   // Downstream agent cfg objects.
 
@@ -26,7 +50,7 @@ class cip_base_env_cfg #(type RAL_T = dv_base_reg_block) extends dv_base_env_cfg
   // Format: tl_intg_alert_fields[ral.a_reg.a_field] = value
   uvm_reg_data_t      tl_intg_alert_fields[dv_base_reg_field];
 
-  // Flag to indicate tl mem acess are gated due to local or global escalation.
+  // Flag to indicate tl mem access are gated due to local or global escalation.
   bit                 tl_mem_access_gated;
 
   // Flag to indicate if it is an IP or chip level testbench.
@@ -37,7 +61,7 @@ class cip_base_env_cfg #(type RAL_T = dv_base_reg_block) extends dv_base_env_cfg
   uvm_reg_data_t      shadow_update_err_status_fields[dv_base_reg_field];
   uvm_reg_data_t      shadow_storage_err_status_fields[dv_base_reg_field];
 
-  alert_esc_agent_cfg m_alert_agent_cfgs[string];
+  alert_agent_cfg     m_alert_agent_cfgs[string];
   push_pull_agent_cfg#(.DeviceDataWidth(EDN_DATA_WIDTH)) m_edn_pull_agent_cfgs[];
 
   // EDN clk freq setting, if EDN is present.
@@ -46,14 +70,11 @@ class cip_base_env_cfg #(type RAL_T = dv_base_reg_block) extends dv_base_env_cfg
 
   // Common interfaces - interrupts, alerts, edn clk.
   intr_vif            intr_vif;
-  devmode_vif         devmode_vif;
   rst_shadowed_vif    rst_shadowed_vif;
   virtual clk_rst_if  edn_clk_rst_vif;
 
-  // en_devmode default sets to 1 because all IPs' devmode_i is tied off internally to 1
-  // ICEBOX(#16739): enable random drive devmode once design supports
-  bit  has_devmode = 1;
-  bit  en_devmode = 1;
+  // Default tl_access timeout - override in child classes where necessary
+  uint tl_access_timeout_ns = default_spinwait_timeout_ns;
 
   // If the data intg is passthru for the memory and the data intg value in mem is incorrect, it
   // won't trigger d_error in this mem block and the check is done in the processor
@@ -67,6 +88,16 @@ class cip_base_env_cfg #(type RAL_T = dv_base_reg_block) extends dv_base_env_cfg
 
   uint num_interrupts;
   uint num_edn;
+
+  // Knob to disable random delays in specific `prim_cdc_rand_delay`s even if CDC instrumentation is
+  // generally enabled.  This takes one absolute path to a `prim_cdc_rand_delay` instance per array
+  // element.
+  //
+  // This can be used to disable CDC instrumentation specifically for `prim_alert_sender`s, for
+  // which the scoreboard -- if random CDC delays were enabled -- would not know precisely in which
+  // clock cycle the handshake for an alert completes and thus could not accurately predict whether
+  // an alert request gets merged with an outstanding request or not (#18796).
+  string disabled_prim_cdc_rand_delays[];
 
   // if module has alerts, this list_of_alerts needs to override in cfg before super.initialize()
   // function is called
@@ -99,14 +130,25 @@ class cip_base_env_cfg #(type RAL_T = dv_base_reg_block) extends dv_base_env_cfg
 
   `uvm_object_new
 
-  virtual function void initialize(bit [BUS_AW-1:0] csr_base_addr = '1);
-    super.initialize(csr_base_addr);
-    // Create downstream agent cfg objects.
-    foreach (ral_model_names[i]) begin
-      string ral_name = ral_model_names[i];
+  // Initialize the register models in the environment
+  //
+  // This works by calling initialize_ral (implemented in dv_base_env_cfg) after ral_model_names has
+  // been initialised. To add a new RAL model, a subclass should extend cip_base_env_cfg::initialize
+  // with a function that adds the model's name to ral_model_names before calling
+  // super.initialize().
+  virtual function void initialize(bit inherit_ral_models = 1'b0);
+    // Initialize the register models themselves. This uses initialize_ral, which is implemented in
+    // dv_base_env_cfg.
+    initialize_ral(bus_params_pkg::BUS_AW,
+                   bus_params_pkg::BUS_DW,
+                   bus_params_pkg::BUS_DBW,
+                   inherit_ral_models);
 
+    // Create downstream agent cfg objects.
+    foreach (ral_model_names[ral_name]) begin
       m_tl_agent_cfgs[ral_name] = tl_agent_cfg::type_id::create({"m_tl_agent_cfg_", ral_name});
-      m_tl_agent_cfgs[ral_name].if_mode = dv_utils_pkg::Host;
+      m_tl_agent_cfgs[ral_name].is_active = is_active;
+      m_tl_agent_cfgs[ral_name].if_mode = (is_active ? dv_utils_pkg::Host : dv_utils_pkg::Monitor);
       // TL host cannot support device same cycle response. Host may drive d_ready=0 when a_valid=1.
       m_tl_agent_cfgs[ral_name].host_can_stall_rsp_when_a_valid_high = $urandom_range(0, 1);
 
@@ -118,8 +160,8 @@ class cip_base_env_cfg #(type RAL_T = dv_base_reg_block) extends dv_base_env_cfg
 
     // Assign handle to the default `m_tl_agent_cfg` for default `RAL_T`
     if (ral_model_names.size > 0) begin
-      `DV_CHECK_FATAL(m_tl_agent_cfgs.exists(RAL_T::type_name))
-      m_tl_agent_cfg = m_tl_agent_cfgs[RAL_T::type_name];
+      `DV_CHECK_FATAL(m_tl_agent_cfgs.exists(ral_type_name))
+      m_tl_agent_cfg = m_tl_agent_cfgs[ral_type_name];
       `DV_CHECK_NE_FATAL(m_tl_agent_cfg, null)
     end
 
@@ -128,13 +170,15 @@ class cip_base_env_cfg #(type RAL_T = dv_base_reg_block) extends dv_base_env_cfg
       check_alert_configs();
       foreach(list_of_alerts[i]) begin
         string alert_name = list_of_alerts[i];
-        m_alert_agent_cfgs[alert_name] = alert_esc_agent_cfg::type_id::create(
+        m_alert_agent_cfgs[alert_name] = alert_agent_cfg::type_id::create(
             $sformatf("m_alert_agent_cfgs[%s]", alert_name));
-        `DV_CHECK_RANDOMIZE_FATAL(m_alert_agent_cfgs[alert_name])
-        m_alert_agent_cfgs[alert_name].if_mode = dv_utils_pkg::Device;
+        m_alert_agent_cfgs[alert_name].is_active = is_active;
+        m_alert_agent_cfgs[alert_name].if_mode = (is_active ?
+                                                  dv_utils_pkg::Device : dv_utils_pkg::Monitor);
         m_alert_agent_cfgs[alert_name].is_async = 1; // default async_on, can override this
         m_alert_agent_cfgs[alert_name].en_ping_cov = 0;
         m_alert_agent_cfgs[alert_name].en_lpg_cov = 0;
+        `DV_CHECK_RANDOMIZE_FATAL(m_alert_agent_cfgs[alert_name])
       end
     end
 
@@ -156,7 +200,11 @@ class cip_base_env_cfg #(type RAL_T = dv_base_reg_block) extends dv_base_env_cfg
     // initialization.
     bit create_jtag_riscv_map;
     void'($value$plusargs("create_jtag_riscv_map=%0b", create_jtag_riscv_map));
-    if (create_jtag_riscv_map) begin
+
+    // The +create_jtag_riscv_map flag tells the environment to take a clone of the uvm_reg_map for
+    // its default register model (which is visible as cfg.ral) and store it in the jtag_riscv_map
+    // class variable.
+    if (create_jtag_riscv_map && ral.get_name() == ral_type_name) begin
       jtag_riscv_map = clone_reg_map("jtag_riscv_map", ral.default_map);
       `uvm_info(`gfn, "Cloned default_map to jtag_riscv_map.", UVM_HIGH)
     end
@@ -198,8 +246,17 @@ class cip_base_env_cfg #(type RAL_T = dv_base_reg_block) extends dv_base_env_cfg
     `DV_CHECK_NE_FATAL(alert_test_csr, null,
                        $sformatf("cannot find alert_test csr in %0s", blk.get_name()))
 
-    `DV_CHECK_EQ(alert_test_csr.get_n_used_bits(), alert_names.size(),
-                 "alert_test field number and list_of_alerts size mismatch")
+    // Ignore the `regwen` field in the alert_test register
+    begin
+      uvm_reg_field alert_test_fields[$];
+      int num_alert_test_fields;
+      alert_test_csr.get_fields(alert_test_fields);
+      foreach (alert_test_fields[i]) begin
+        if (alert_test_fields[i].get_name() != "regwen") num_alert_test_fields++;
+      end
+      `DV_CHECK_EQ(num_alert_test_fields, alert_names.size(),
+                   "alert_test field number and list_of_alerts size mismatch")
+    end
 
     foreach(alert_names[i]) begin
       uvm_reg_field alert_test_field = blk.get_field_by_name(alert_names[i]);
@@ -243,4 +300,27 @@ class cip_base_env_cfg #(type RAL_T = dv_base_reg_block) extends dv_base_env_cfg
 
   endfunction
 
- endclass
+  // This can be used to stop transaction generators either upon reset or in preparation to issue a
+  // random reset.
+  function bit stop_transaction_generators();
+    return this.will_reset || this.under_reset;
+  endfunction
+
+  // This can be used to announce the intention to generate a random reset soon, to allow
+  // transaction generators to stop, and fire a reset with no outstanding transactions.
+  virtual function void set_intention_to_reset();
+    `uvm_info(`gfn, "Setting intention to reset", UVM_MEDIUM)
+    this.will_reset = 1'b1;
+  endfunction
+
+  // This dv_base_env_cfg function is called by dv_base_scoreboard::monitor_reset when it sees a
+  // reset on the main clk_rst_if.
+  //
+  // The override here clears the will_reset flag (since we have now seen the reset we were waiting
+  // for).
+  function void reset_asserted();
+    super.reset_asserted();
+    this.will_reset = 0;
+  endfunction
+
+endclass

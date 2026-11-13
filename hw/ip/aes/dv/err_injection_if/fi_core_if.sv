@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@ interface fi_core_if
     $sformatf("%s.%s", par_hier, "aes_op_q"),
     $sformatf("%s.%s", par_hier, "aes_mode_q"),
     $sformatf("%s.%s", par_hier, "key_len_q"),
+    $sformatf("%s.%s", par_hier, "gcm_phase_q"),
     // signals not triggering alerts and not causing mismatches
     $sformatf("%s.%s", par_hier, "prng_reseed_rate_q")
   };
@@ -32,7 +33,7 @@ interface fi_core_if
     return intf_mul_array.size();
   endfunction // get_if_size
 
-  // check which array we need to access and force or releae
+  // check which array we need to access and force or release
   function automatic void force_signal(int target, bit rel, bit [31:0] value);
     if (!rel) begin
       aes_core_cg_inst.sample(target);
@@ -63,9 +64,19 @@ interface fi_core_if
   endfunction
 
   function automatic void release_multi_bit(int target);
-    uvm_hdl_release(intf_mul_array[target]);
+
+    //VCS coverage off
+    // pragma coverage off
+
+    if (!uvm_hdl_release(intf_mul_array[target])) begin
+      `uvm_error("fi_core_if", $sformatf("Was not able to release %s", intf_mul_array[target]))
+    end
+
+    //VCS coverage on
+    // pragma coverage on
+
     $asserton(0,"tb.dut");
-  endfunction // release_single_bit
+  endfunction
 
   ///////////////////////////////////
   // Fault inject coverage         //

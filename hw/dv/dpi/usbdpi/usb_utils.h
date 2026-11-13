@@ -1,9 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #ifndef OPENTITAN_HW_DV_DPI_USBDPI_USB_UTILS_H_
 #define OPENTITAN_HW_DV_DPI_USBDPI_USB_UTILS_H_
+#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 

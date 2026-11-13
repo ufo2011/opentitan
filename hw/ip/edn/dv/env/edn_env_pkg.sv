@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,10 +22,12 @@ package edn_env_pkg;
   `include "dv_macros.svh"
 
   // parameters
+  parameter uint     NUM_ALERTS = 2;
+  parameter string   LIST_OF_ALERTS[NUM_ALERTS] = {"recov_alert","fatal_alert"};
+
   parameter uint     MIN_NUM_ENDPOINTS = 1;
-  parameter uint     MAX_NUM_ENDPOINTS = 7;
-  parameter string   LIST_OF_ALERTS[]  = {"recov_alert","fatal_alert"};
-  parameter uint     NUM_ALERTS        = 2;
+  parameter uint     CMD_STS_SIZE      = 3;
+  parameter uint     CMD_TYPE_SIZE     = 4;
 
   // types
   typedef enum int {
@@ -36,8 +38,17 @@ package edn_env_pkg;
 
   typedef enum int {
     AutoReqMode = 1,
-    BootReqMode = 2
+    BootReqMode = 2,
+    SwMode      = 3
   } hw_req_mode_e;
+
+  typedef enum int {
+    BootIns = 1,
+    BootGen = 2,
+    AutoGen = 3,
+    AutoRes = 4,
+    Sw      = 5
+  } cmd_type_e;
 
   typedef enum int {
     invalid_edn_enable    = 0,
@@ -76,7 +87,6 @@ package edn_env_pkg;
   typedef enum int {
     EdnSfifoRescmdErrTest = 0,
     EdnSfifoGencmdErrTest = 1,
-    EdnErrTest            = 2, // TODO: issue #16218
     EdnAckSmErrTest       = 20,
     EdnMainSmErrTest      = 21,
     EdnCntrErrTest        = 22,
@@ -84,6 +94,15 @@ package edn_env_pkg;
     EdnFifoReadErrTest    = 29,
     EdnFifoStateErrTest   = 30
   } err_code_test_e;
+
+  typedef enum int {
+    edn_enable_field_alert    = 0,
+    boot_req_mode_field_alert = 1,
+    auto_req_mode_field_alert = 2,
+    cmd_fifo_rst_field_alert  = 3,
+    edn_bus_cmp_alert         = 12,
+    csrng_ack_err             = 13
+  } recov_alert_bit_e;
 
   typedef enum int {
     sfifo_rescmd = 0,
@@ -95,6 +114,30 @@ package edn_env_pkg;
     fifo_read_error  = 1,
     fifo_state_error = 2
   } which_fifo_err_e;
+
+  typedef enum logic [8:0] {
+    Disabled      = 9'b100110010, // Disabled
+    EndPointClear = 9'b110001110, // Clear out end point before beginning
+    AckIdle       = 9'b001011100, // idle
+    DataWait      = 9'b011101011, // wait for data to return
+    AckPls        = 9'b000100101, // signal ack to endpoint
+    AckError      = 9'b111010001  // illegal state reached and hang
+  } state_ack_e;
+
+  typedef enum int {
+    sw_cmd_reg_rdy = 0,
+    sw_cmd_rdy     = 1,
+    sw_cmd_ack     = 2,
+    sw_cmd_sts     = 3
+  } sw_cmd_sts_e;
+
+  typedef enum int {
+    hw_cmd_boot_mode = 0,
+    hw_cmd_auto_mode = 1,
+    hw_cmd_type      = 2,
+    hw_cmd_ack       = 6,
+    hw_cmd_sts       = 7
+  } hw_cmd_sts_e;
 
   // package sources
   `include "edn_env_cfg.sv"

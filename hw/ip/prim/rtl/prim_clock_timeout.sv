@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -6,8 +6,6 @@
 // has stopped ticking as measured by the reference clock.
 //
 // If both clocks are stopped for whatever reason, this module is effectively dead.
-
-`include "prim_assert.sv"
 
 module prim_clock_timeout #(
   parameter int TimeOutCnt = 16,

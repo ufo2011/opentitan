@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,11 @@ class edn_alert_test extends edn_base_test;
 
     cfg.en_scb            = 0;
     cfg.enable_pct        = 100;
-    cfg.boot_req_mode_pct = 0;
+    // This test needs to modify the CTRL register so we want REGWEN to stay enabled.
+    cfg.disable_regwen_pct = 0;
+    // For test_edn_cs_sts_alert() only hardware controlled modes can be tested.
+    cfg.boot_req_mode_pct = 50;
+    cfg.auto_req_mode_pct = 50;
     cfg.cmd_fifo_rst_pct  = 100;
     cfg.use_invalid_mubi  = 1;
     cfg.num_endpoints     = MIN_NUM_ENDPOINTS;

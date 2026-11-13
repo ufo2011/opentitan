@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 
 /**
  * @file
- * @brief <a href="/hw/ip/kmac/doc/">KMAC</a> Device Interface Functions
+ * @brief <a href="/book/hw/ip/kmac/">KMAC</a> Device Interface Functions
  */
 
 #include <stdint.h>
@@ -57,7 +57,7 @@ extern "C" {
  *
  * Please see the following documentation for more information about the KMAC
  * hardware:
- * https://docs.opentitan.org/hw/ip/kmac/doc/
+ * https://opentitan.org/book/hw/ip/kmac/
  *
  * References:
  * [1] - NIST FIPS 202
@@ -134,7 +134,15 @@ enum {
    *
    * The length is in 32-bit words.
    */
-  kDifKmacEntropySeedWords = 5,
+  kDifKmacEntropySeedWords = 6,
+  /**
+   * The offset of the second share within the output state register.
+   */
+  kDifKmacStateShareOffset = 0x100,
+  /**
+   * The size of the Keccak state in words (i.e. 1600 bits).
+   */
+  kDifKmacStateWords = 1600 / 8 / sizeof(uint32_t),
 };
 
 /**
@@ -243,6 +251,35 @@ typedef struct dif_kmac_operation_state {
    */
   size_t d;
 } dif_kmac_operation_state_t;
+
+/**
+ * A saved KMAC context.
+ *
+ * Holds the internal state of a paused hashing operation so that it can be
+ * resumed later on. The secret key is not part of it, as it has been absorbed
+ * into the Keccak state when the operation was started.
+ *
+ * The context is therefore equivalent to the secret key. The Keccak function is
+ * public and invertible, so anyone holding the context can compute the key from
+ * it. It must be protected like the key itself.
+ */
+typedef struct dif_kmac_context {
+  /**
+   * The first share of the Keccak state.
+   */
+  uint32_t share0[kDifKmacStateWords];
+
+  /**
+   * The second share of the Keccak state. Reads as zero if masking is disabled
+   * in hardware.
+   */
+  uint32_t share1[kDifKmacStateWords];
+
+  /**
+   * The operation state that belongs to the saved Keccak state.
+   */
+  dif_kmac_operation_state_t operation_state;
+} dif_kmac_context_t;
 
 /**
  * Supported SHA-3 modes of operation.
@@ -356,41 +393,53 @@ typedef struct dif_kmac_function_name {
  */
 typedef enum dif_kmac_error {
   /**
-   * No error has occured.
+   * No error has occurred.
    */
-  kDifErrorNone,
+  kDifErrorNone = 0,
 
   /**
    * The Key Manager has raised an error because the secret key is not valid.
    */
-  kDifErrorKeyNotValid,
+  kDifErrorKeyNotValid = 1,
 
   /**
    * An attempt was made to write data into the message FIFO but the KMAC unit
    * was not in the correct state to receive the data.
    */
-  kDifErrorSoftwarePushedMessageFifo,
+  kDifErrorSoftwarePushedMessageFifo = 2,
 
   /**
-   * An invalid state transition was attempted (e.g. idle -> run without
-   * intermediate process state).
+   * SW issued a command while a HW application interface was using KMAC.
    */
-  kDifErrorSoftwarePushedWrongCommand,
+  kDifErrorSoftwareIssuedCommandWhileAppInterfaceActive = 3,
 
   /**
    * The entropy wait timer has expired.
    */
-  kDifErrorEntropyWaitTimerExpired = 0x04000000,
+  kDifErrorEntropyWaitTimerExpired = 4,
 
   /**
    * Incorrect entropy mode when entropy is ready.
    */
-  kDifErrorEntropyModeIncorrect,
+  kDifErrorEntropyModeIncorrect = 5,
 
-  /**
-   * An error was encountered but the cause is unknown.
-   */
-  kDifErrorUnknownError,
+  kDifErrorUnexpectedModeStrength = 6,
+
+  kDifErrorIncorrectFunctionName = 7,
+
+  kDifErrorSoftwareCommandSequence = 8,
+
+  kDifErrorSoftwareHashingWithoutEntropyReady = 9,
+
+  kDifErrorStopNotBlockAligned = 0xA,
+
+  kDifErrorSaveRestoreSideload = 0xB,
+
+  kDifErrorFatalError = 0xC1,
+
+  kDifErrorPackerIntegrity = 0xC2,
+
+  kDifErrorMsgFifoIntegrity = 0xC3,
 } dif_kmac_error_t;
 
 /**
@@ -426,6 +475,12 @@ typedef enum dif_kmac_sha3_state {
    * the hashing engine.
    */
   kDifKmacSha3StateSqueezing = 1 << 2,
+
+  /**
+   * SHA3 stopped the sponge absorbing stage to save a context. In this stage,
+   * SW can read the state to save the context.
+   */
+  kDifKmacSha3StateStopped = 1 << 3,
 } dif_kmac_sha3_state_t;
 
 /**
@@ -648,18 +703,31 @@ dif_result_t dif_kmac_absorb(const dif_kmac_t *kmac,
  * If `processed` is not provided then this function will block until `len`
  * bytes have been written to `out` or an error occurs.
  *
+ * Normally, the capacity part of Keccak state is and should not be read
+ * as part of a regular cryptographic operation. However, this function
+ * can also read the capacity for testing purposes.
+ * When `capacity` is a non-NULL pointer, at the end of the operation, the
+ * capacity part of the Keccak state is also read and written into this buffer.
+ * The capacity is read for each output round, meaning that if the requested
+ * digest is larger than a single Keccak round can provide (i.e. the rate), then
+ * the additional rounds also update this buffer. Hence it should be large
+ * enough to accommodate `ceil(digest_len/rate_len) * capacity_len`.
+ * `capacity` can be set to NULL to skip reading the capacity.
+ *
  * @param kmac A KMAC handle.
  * @param operation_state A KMAC operation state context.
  * @param[out] out Pointer to output buffer.
  * @param[out] len Number of 32-bit words to write to output buffer.
  * @param[out] processed Number of 32-bit words written to output buffer
  * (optional).
+ * @param[out] capacity Optional buffer to read capacity along with the digest.
  * @preturn The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
 dif_result_t dif_kmac_squeeze(const dif_kmac_t *kmac,
                               dif_kmac_operation_state_t *operation_state,
-                              uint32_t *out, size_t len, size_t *processed);
+                              uint32_t *out, size_t len, size_t *processed,
+                              uint32_t *capacity);
 
 /**
  * Ends a squeeze operation and resets the hardware so it is ready for a new
@@ -674,6 +742,72 @@ dif_result_t dif_kmac_end(const dif_kmac_t *kmac,
                           dif_kmac_operation_state_t *operation_state);
 
 /**
+ * Saves the context of an absorbing operation.
+ *
+ * The message absorbed since the operation was started or restored must be a
+ * multiple of the Keccak rate. This is not checked. Otherwise the hardware
+ * reports `kDifErrorStopNotBlockAligned`, the saved context is invalid and the
+ * operation has to be started again.
+ *
+ * If an error is returned, the hardware may be left in the stopped state. The
+ * caller must then release it with `dif_kmac_context_release()`.
+ *
+ * Not available if a sideloaded key is used.
+ *
+ * @param kmac A KMAC handle.
+ * @param operation_state A KMAC operation state context.
+ * @param[out] context The saved context.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_kmac_context_save(const dif_kmac_t *kmac,
+                                   dif_kmac_operation_state_t *operation_state,
+                                   dif_kmac_context_t *context);
+
+/**
+ * Restores a previously saved context and resumes the absorbing operation.
+ *
+ * The KMAC HWIP must hold the same configuration in `CFG_SHADOWED` as when the
+ * context was saved, i.e. the same mode, strength, KMAC enable and endianness.
+ * This is not checked, and a mismatch silently produces a wrong digest. In KMAC
+ * mode with masking enabled, the entropy must be configured as for starting an
+ * operation.
+ *
+ * Claims the block before writing the context, so that no application interface
+ * can take it over while the context is being restored. Returns `kDifError` if
+ * the block was granted to an application interface instead, in which case
+ * nothing has been written.
+ *
+ * Application interfaces are stalled while the block is claimed. If an error is
+ * returned after the block has been claimed, the caller must release it with
+ * `dif_kmac_context_release()`.
+ *
+ * Not available if a sideloaded key is used.
+ *
+ * @param kmac A KMAC handle.
+ * @param context The context to restore.
+ * @param[out] operation_state A KMAC operation state context.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_kmac_context_restore(
+    const dif_kmac_t *kmac, const dif_kmac_context_t *context,
+    dif_kmac_operation_state_t *operation_state);
+
+/**
+ * Releases the KMAC HWIP after a failed context save or restore.
+ *
+ * Issues the done command, which clears the Keccak state and returns the
+ * hardware to the idle state when it has been stopped by
+ * `dif_kmac_context_save()` or claimed by `dif_kmac_context_restore()`.
+ *
+ * @param kmac A KMAC handle.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_kmac_context_release(const dif_kmac_t *kmac);
+
+/**
  * Read the kmac error register to get the error code indicated the interrupt
  * state.
  *
@@ -682,11 +816,12 @@ dif_result_t dif_kmac_end(const dif_kmac_t *kmac,
  *
  * @param kmac A KMAC handle.
  * @param[out] error The current error code.
+ * @param[out] info Optional additional error information.
  * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
-dif_result_t dif_kmac_get_error(const dif_kmac_t *kmac,
-                                dif_kmac_error_t *error);
+dif_result_t dif_kmac_get_error(const dif_kmac_t *kmac, dif_kmac_error_t *error,
+                                uint32_t *info);
 
 /**
  * Clear the current error code and reset the state machine to the idle state
@@ -702,6 +837,34 @@ dif_result_t dif_kmac_get_error(const dif_kmac_t *kmac,
 OT_WARN_UNUSED_RESULT
 dif_result_t dif_kmac_reset(const dif_kmac_t *kmac,
                             dif_kmac_operation_state_t *operation_state);
+
+/**
+ * Let the KMAC HW know that SW has processed the errors the HW has flagged.
+ *
+ * @param kmac A KMAC handle
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_kmac_err_processed(const dif_kmac_t *kmac);
+
+/**
+ * Report whether the hardware currently indicates an error.
+ *
+ * @param kmac A KMAC handle.
+ * @param[out] error Whether hardware currently indicates an error.
+ * @returns The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_kmac_has_error_occurred(const dif_kmac_t *kmac, bool *error);
+
+/**
+ * Clear the `kmac_err` IRQ.
+ *
+ * @param kmac A KMAC handle.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_kmac_clear_err_irq(const dif_kmac_t *kmac);
 
 /**
  * Fetch the current status of the message FIFO used to buffer absorbed data.
@@ -739,6 +902,16 @@ dif_result_t dif_kmac_get_hash_counter(const dif_kmac_t *kmac,
  */
 OT_WARN_UNUSED_RESULT
 dif_result_t dif_kmac_config_is_locked(const dif_kmac_t *kmac, bool *is_locked);
+
+/**
+ * Poll until a given flag in the status register is set.
+ *
+ * @param kmac A KMAC handle.
+ * @param flag the
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_kmac_poll_status(const dif_kmac_t *kmac, uint32_t flag);
 
 #ifdef __cplusplus
 }  // extern "C"

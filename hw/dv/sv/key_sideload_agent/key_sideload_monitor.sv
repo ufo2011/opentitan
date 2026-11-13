@@ -1,15 +1,15 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 class key_sideload_monitor #(
-    parameter type KEY_T = keymgr_pkg::hw_key_req_t
+    parameter type KEY_T = keymgr_dpe_pkg::hw_key_req_t
 ) extends dv_base_monitor #(
     .ITEM_T (key_sideload_item#(KEY_T)),
     .CFG_T  (key_sideload_agent_cfg#(KEY_T)),
     .COV_T  (key_sideload_agent_cov#(KEY_T))
   );
-  `uvm_component_utils(key_sideload_monitor#(KEY_T))
+  `uvm_component_param_utils(key_sideload_monitor#(KEY_T))
 
   // the base class provides the following handles for use:
   // key_sideload_agent_cfg: cfg
@@ -27,7 +27,7 @@ class key_sideload_monitor #(
   endtask
 
   // collect transactions forever - already forked in dv_base_monitor::run_phase
-  virtual protected task collect_trans(uvm_phase phase);
+  virtual protected task collect_trans();
     key_sideload_item#(KEY_T) prev_item;
     key_sideload_item#(KEY_T) curr_item;
     prev_item = key_sideload_item#(KEY_T)::type_id::create("prev_item");

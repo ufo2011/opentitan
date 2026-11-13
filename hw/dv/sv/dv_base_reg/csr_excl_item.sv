@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -83,7 +83,7 @@ class csr_excl_item extends uvm_object;
       end else begin
         if (has_excl(csr_or_fld.csr.`gfn, csr_excl_type, csr_test_type, is_excl)) return is_excl;
       end
-      `downcast(blk, csr_or_fld.csr.get_parent(), , , msg_id)
+      `downcast(blk, csr_or_fld.csr.get_parent(), , , `gfn)
     end
 
     // Recurse through block's ancestors.

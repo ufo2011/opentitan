@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,10 +19,21 @@ class spi_host_env_cfg extends cip_base_env_cfg #(.RAL_T(spi_host_reg_block));
   rand int    num_dummy;
   int         max_dummy_cycles = 16;
   int         min_dummy_cycles = 0;
+  // Setting this variable = 1'b1 makes the scoreboard commit the expected transaction
+  // to the queue for checking when writing to the TXFIFO instead of the COMMAND csr.
+  // This allow checking of the stretching behaviour.
   bit         tx_stall_check = 1'b0;
 
   // bumber of address bytes
   rand int    num_cmd_bytes;
+
+  // TB heavily relies on csr_spinwait, which causes timeouts when the clock divider is FF-ish or
+  // higher values
+  uint csr_spinwait_timeout_ns = csr_utils_pkg::default_spinwait_timeout_ns;
+
+  // Used to provide a faster decrement via forcing internal RTL signals, so simulations
+  // finish more quickly.
+  virtual interface spi_host_fsm_if force_spi_fsm_vif;
 
   constraint dummy_c {
     num_dummy inside { [min_dummy_cycles:max_dummy_cycles]};
@@ -35,15 +46,15 @@ class spi_host_env_cfg extends cip_base_env_cfg #(.RAL_T(spi_host_reg_block));
 
 
 
-  `uvm_object_param_utils_begin(spi_host_env_cfg)
+  `uvm_object_utils_begin(spi_host_env_cfg)
     `uvm_field_object(m_spi_agent_cfg, UVM_DEFAULT)
   `uvm_object_utils_end
   `uvm_object_new
 
 
-  virtual function void initialize(bit [31:0] csr_base_addr = '1);
+  virtual function void initialize(bit inherit_ral_models = 1'b0);
     list_of_alerts = spi_host_env_pkg::LIST_OF_ALERTS;
-    super.initialize(csr_base_addr);
+    super.initialize(inherit_ral_models);
 
     // create spi_host agent config obj
     m_spi_agent_cfg = spi_agent_cfg::type_id::create("m_spi_agent_cfg");
@@ -62,13 +73,14 @@ class spi_host_env_cfg extends cip_base_env_cfg #(.RAL_T(spi_host_reg_block));
     // create the seq_cfg
     seq_cfg = spi_host_seq_cfg::type_id::create("seq_cfg");
 
+    set_default_csr_timeout();
+
     // set num_interrupts & num_alerts
-    begin
-      uvm_reg rg = ral.get_reg_by_name("intr_state");
-      if (rg != null) begin
-        num_interrupts = ral.intr_state.get_n_used_bits();
-      end
-    end
+    num_interrupts = ral.intr_state.get_n_used_bits();
+  endfunction
+
+  function void set_default_csr_timeout();
+    csr_spinwait_timeout_ns = csr_utils_pkg::default_spinwait_timeout_ns;
   endfunction
 
   // clk_core_freq_mhz is set by

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,7 @@ pub enum ParseBigIntError {
 ///     e.g. SHA-256 digests (at most 256 bits) or RSA-3072 signatures (at most 3072 bits),
 ///   - When `EXACT_LEN` is `true`, the number of bits required to represent the integer must be
 ///     exactly `BIT_LEN` bits, e.g. RSA-3072 moduli (exactly 3072 bits).
+///
 /// Note that while the type encapsulates the size information, the actual check is performed at
 /// runtime when an instance is created (see `check_len()`).
 ///
@@ -89,7 +90,7 @@ impl<const BIT_LEN: usize, const EXACT_LEN: bool> FixedSizeBigInt<BIT_LEN, EXACT
         let mut v = self.0.to_bytes_be();
         assert!(Self::BYTE_LEN >= v.len());
         // Prepend since `v` is big-endian.
-        v.splice(0..0, iter::repeat(0).take(Self::BYTE_LEN - v.len()));
+        v.splice(0..0, iter::repeat_n(0, Self::BYTE_LEN - v.len()));
         v
     }
 

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ class chip_sw_lc_walkthrough_vseq extends chip_sw_base_vseq;
   lc_ctrl_state_pkg::dec_lc_state_e dest_dec_state = lc_ctrl_state_pkg::DecLcStProdEnd;
 
   virtual task pre_start();
-    `DV_GET_ENUM_PLUSARG(lc_ctrl_state_pkg::dec_lc_state_e, dest_dec_state, dest_dec_state)
+    `DV_GET_ENUM_PLUSARG(lc_ctrl_state_pkg::dec_lc_state_e, dest_dec_state, "dest_dec_state")
     `uvm_info(`gfn, $sformatf("Destination state is %0s", dest_dec_state.name), UVM_MEDIUM)
     cfg.chip_vif.tap_straps_if.drive(JtagTapLc);
     super.pre_start();
@@ -29,6 +29,10 @@ class chip_sw_lc_walkthrough_vseq extends chip_sw_base_vseq;
 
   virtual task apply_reset(string kind = "HARD");
     super.apply_reset();
+    // Wait for `rom_ctrl` to complete the ROM check. This will give the dut
+    // enough time to configure the TAP interface before any JTAG agents send
+    // any commands.
+    wait_rom_check_done();
     set_otp_creator_sw_cfg_rom_exec_en(1);
   endtask
 
@@ -59,33 +63,49 @@ class chip_sw_lc_walkthrough_vseq extends chip_sw_base_vseq;
     selected_dest_state = {dest_dec_state};
     sw_symbol_backdoor_overwrite("kDestState", selected_dest_state);
 
-    wait_lc_ready(1);
+    switch_to_external_clock();
     jtag_lc_state_transition(DecLcStRaw, DecLcStTestUnlocked0);
     apply_reset();
 
-    `DV_WAIT(cfg.sw_logger_vif.printed_log == "Waiting for LC transition done and reboot.")
+    `DV_WAIT(cfg.sw_logger_vif.printed_log == "Waiting for LC transition done and reboot.",,
+             50_000_000)
     // Wait for a large number of cycles to transit to RMA state.
-    wait_lc_status(LcTransitionSuccessful, 50_000);
+    if (dest_dec_state == DecLcStRma) begin
+      if (cfg.en_small_rma) begin
+        `uvm_info(`gfn, "small_rma mode is enabled", UVM_LOW)
+        enable_small_rma();
+      end
+    end
+
+    wait_lc_status(LcTransitionSuccessful, 20_000_000);
     apply_reset();
 
     if (dest_dec_state == DecLcStRma) reload_flash_after_rma_transfer();
 
     // The following states will transfer twice to make sure LC_EXIT and RMA tokens are used.
     if (dest_dec_state inside {DecLcStProd, DecLcStDev}) begin
-      `DV_WAIT(cfg.sw_logger_vif.printed_log == "Waiting for LC RMA transition done and reboot.")
+      `DV_WAIT(cfg.sw_logger_vif.printed_log == "Waiting for LC RMA transition done and reboot.",,
+               50_000_000)
+
+      // If small_rma enabled
+      if (cfg.en_small_rma) begin
+        `uvm_info(`gfn, "small_rma mode is enabled", UVM_LOW)
+        enable_small_rma();
+      end
+
       // Wait for a large number of cycles to transit to RMA state.
-      wait_lc_status(LcTransitionSuccessful, 50_000);
+      wait_lc_status(LcTransitionSuccessful, 20_000_000);
       apply_reset();
       reload_flash_after_rma_transfer();
     end
   endtask
 
-  // Reload flash bootstrap and reforce the sw symbols because RMA state wiped out flash.
+  // Reload flash bootstrap and reinforce the sw symbols because RMA state wiped out flash.
   virtual task reload_flash_after_rma_transfer();
     bit [7:0] selected_dest_state[];
     selected_dest_state = {dest_dec_state};
-    cfg.mem_bkdr_util_h[FlashBank0Data].load_mem_from_file(
-        {cfg.sw_images[SwTypeTestSlotA], ".64.scr.vmem"});
+    cfg.mem_bkdr_util_h[RramData].load_mem_from_file(
+        {cfg.sw_images[SwTypeTestSlotA], ".128.scr.vmem"});
     sw_symbol_backdoor_overwrite("kDestState", selected_dest_state);
   endtask
 endclass

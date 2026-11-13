@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,14 @@ class tpm_read_hw_reg_cg_wrap;
   endfunction : sample
 endclass
 
+covergroup busy_blocks_command_cg with function sample (bit command_blocked);
+  option.per_instance = 1;
+  cp_blocked_or_allowed: coverpoint command_blocked {
+    bins allowed = {0};
+    bins blocked = {1};
+  }
+endgroup
+
 class spi_device_env_cov extends cip_base_env_cov #(.CFG_T(spi_device_env_cfg));
   `uvm_component_utils(spi_device_env_cov)
   tpm_read_hw_reg_cg_wrap tpm_read_hw_reg_cg_wraps[string];
@@ -31,34 +39,14 @@ class spi_device_env_cov extends cip_base_env_cov #(.CFG_T(spi_device_env_cfg));
     cp_mode: coverpoint mode;
     cp_tpm_enabled: coverpoint tpm_enabled;
     cr_all: cross cp_mode, cp_tpm_enabled {
-      // FW mode can't run with TPM enabled
-      // but if we turn the mode on without realling sending transactions, it's fine.
-      ignore_bins invalid = binsof(cp_mode) intersect { GenericMode } &&
-                             binsof(cp_tpm_enabled) intersect { 1 };
     }
   endgroup
 
-  covergroup bit_order_clk_cfg_cg with function sample(bit tx_order, bit rx_order,
-                                                       bit cpol, bit cpha);
-    cp_bit_order: coverpoint tx_order;
+  covergroup cfg_settings_cg with function sample(bit mailbox_en, bit tx_order, bit rx_order);
+    cp_mailbox_en: coverpoint mailbox_en;
+    cp_tx_order: coverpoint tx_order;
     cp_rx_order: coverpoint rx_order;
-    cp_cpol: coverpoint cpol;
-    cp_cpha: coverpoint cpha;
-    cr_all: cross tx_order, rx_order, cp_cpol, cp_cpha;
-  endgroup
-
-  covergroup fw_tx_fifo_size_cg with function sample(int tx_size);
-    cp_tx_size: coverpoint tx_size {
-      bins sizes[5] = {[0:SRAM_SIZE]};
-      bins specific_sizes[] = {SRAM_WORD_SIZE, SRAM_SIZE / 2, SRAM_SIZE - SRAM_WORD_SIZE};
-    }
-  endgroup
-
-  covergroup fw_rx_fifo_size_cg with function sample(int rx_size);
-    cp_rx_size: coverpoint rx_size {
-      bins sizes[5] = {[0:SRAM_SIZE]};
-      bins specific_sizes[] = {SRAM_WORD_SIZE, SRAM_SIZE / 2, SRAM_SIZE - SRAM_WORD_SIZE};
-    }
+    cr_order: cross tx_order, rx_order;
   endgroup
 
   // TPM related
@@ -119,7 +107,10 @@ class spi_device_env_cov extends cip_base_env_cov #(.CFG_T(spi_device_env_cfg));
     cp_opcode: coverpoint opcode {
       bins internal_process_ops[]   = {`ALL_INTERNAL_PROCESS_CMDS};
     }
-    cp_is_write:        coverpoint is_write;
+    cp_is_write:        coverpoint is_write {
+      bins write = {1};
+      bins read = {0};
+    }
     cp_addr_mode:       coverpoint addr_mode;
     cp_addr_swap_en:    coverpoint addr_swap_en;
     cp_payload_swap_en: coverpoint payload_swap_en;
@@ -134,8 +125,20 @@ class spi_device_env_cov extends cip_base_env_cov #(.CFG_T(spi_device_env_cfg));
     }
 
     cr_modeXdirXaddrXswap: cross cp_is_flash, cp_is_write, cp_addr_mode, cp_addr_swap_en,
-                                 cp_payload_swap_en;
+                                 cp_payload_swap_en {
+      // > payload_swap_en only works with write data
+      ignore_bins payload_swap_writes = binsof(cp_is_write.read) &&
+                                        binsof(cp_payload_swap_en) intersect {1};
+    }
     cr_modeXdummyXnum_lanes: cross cp_is_flash, cp_dummy_cycles, cp_num_lanes;
+  endgroup
+
+  covergroup en4b_flash_cmd_clash_with_addr_mode_write_cg with function sample(bit en4b_clash);
+    en4b_clash_cp: coverpoint en4b_clash { bins overwritten = {1}; }
+  endgroup
+
+  covergroup ex4b_flash_cmd_clash_with_addr_mode_write_cg with function sample(bit ex4b_clash);
+    ex4b_clash_cp: coverpoint ex4b_clash { bins overwritten = {1}; }
   endgroup
 
   covergroup passthrough_addr_swap_cg with function sample(
@@ -191,13 +194,22 @@ class spi_device_env_cov extends cip_base_env_cov #(.CFG_T(spi_device_env_cfg));
 
   covergroup flash_upload_payload_size_cg with function sample(
       bit is_write, int payload_size);
-    cp_is_write: coverpoint is_write;
+    cp_is_write: coverpoint is_write {
+      bins write = {1};
+      bins read = {0};
+    }
     cp_payload_size: coverpoint payload_size {
       bins frequent_use_values[] = {[0:4], 256};
       bins excess_fifo           = {[257:$]};
     }
-
-    cr_all: cross cp_is_write, cp_payload_size;
+    cr_all: cross cp_is_write, cp_payload_size {
+      // In upstream host seq_items, reads don't have a payload
+      // - The read payload is captured in the upstream device seq_item.
+      // - See read_size/payload_q.size() in spi_host_flash_seq.sv for the randomization
+      //   constraints that create this.
+      illegal_bins read_w_nonzero_payload = binsof(cp_is_write.read) &&
+                                            !binsof(cp_payload_size) intersect {0};
+    }
   endgroup
 
   // sample this when receiving a command while busy bit is set
@@ -272,6 +284,12 @@ class spi_device_env_cov extends cip_base_env_cov #(.CFG_T(spi_device_env_cfg));
     }
   endgroup
 
+  busy_blocks_command_cg en4b_block_cmd_cg;
+  busy_blocks_command_cg ex4b_block_cmd_cg;
+  busy_blocks_command_cg wren_block_cmd_cg;
+  busy_blocks_command_cg wrdi_block_cmd_cg;
+  busy_blocks_command_cg upload_block_cmd_cg;
+
   function new(string name, uvm_component parent);
     super.new(name, parent);
     // add more covergroup here
@@ -279,9 +297,7 @@ class spi_device_env_cov extends cip_base_env_cov #(.CFG_T(spi_device_env_cfg));
       tpm_read_hw_reg_cg_wraps[ALL_TPM_HW_REG_NAMES[i]] = new(ALL_TPM_HW_REG_NAMES[i]);
     end
     all_modes_cg = new();
-    bit_order_clk_cfg_cg = new();
-    fw_tx_fifo_size_cg = new();
-    fw_rx_fifo_size_cg = new();
+    cfg_settings_cg = new();
     // tpm
     tpm_cfg_cg = new();
     tpm_transfer_size_cg = new();
@@ -302,6 +318,16 @@ class spi_device_env_cov extends cip_base_env_cov #(.CFG_T(spi_device_env_cfg));
     spi_device_write_enable_disable_cg = new();
     spi_device_buffer_boundary_cg = new();
     tpm_interleave_with_flash_item_cg = new();
+    en4b_flash_cmd_clash_with_addr_mode_write_cg = new();
+    ex4b_flash_cmd_clash_with_addr_mode_write_cg = new();
+
+
+    en4b_block_cmd_cg = new();
+    ex4b_block_cmd_cg = new();
+    wren_block_cmd_cg = new();
+    wrdi_block_cmd_cg = new();
+    upload_block_cmd_cg = new();
+
   endfunction : new
 
 endclass

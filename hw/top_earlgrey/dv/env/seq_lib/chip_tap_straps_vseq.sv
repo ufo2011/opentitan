@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,16 +8,14 @@
 // Verify in PROD state, only the LC tap can be selected.
 // Verify in DEV state, only the LC tap and RISC-V taps can be selected.
 // Verify DFT test mode straps are sampled and output to AST via
-// top_earlgrey.dft_strap_test_o in TEST_UNLOCKED* and RMA states.
-// Verify pimux.dft_strap_test_o is always 0 in the states other than TEST_UNLOCKED* and
+// top_earlgrey.earlgrey_pd_aon.u_pinmux.dft_strap_test_o in TEST_UNLOCKED* and RMA states.
+// Verify pinmux.dft_strap_test_o is always 0 in the states other than TEST_UNLOCKED* and
 // RMA, regardless of the value on DFT SW straps.
 
-// TODO: This test is broken. Drive functional JTAG traffic as opposed to pin connectivity.
-
 class chip_tap_straps_vseq extends chip_sw_base_vseq;
-  string path_dft_strap_test_o = "tb.dut.top_earlgrey.dft_strap_test_o";
-  string path_dft_tap_req = "tb.dut.top_earlgrey.u_dft_tap_breakout.req_i";
-  string path_dft_tap_rsp = "tb.dut.top_earlgrey.u_dft_tap_breakout.rsp_o";
+  string path_dft_strap_test = "tb.dut.top_earlgrey.earlgrey_pd_aon.u_pinmux.dft_strap_test_o";
+  string path_dft_tap_req = "tb.dut.top_earlgrey.earlgrey_pd_aon.u_dft_tap_breakout.req_i";
+  string path_dft_tap_rsp = "tb.dut.top_earlgrey.earlgrey_pd_aon.u_dft_tap_breakout.rsp_o";
   string path_tb_jtag_tck = "tb.dut.chip_if.jtag_if.tck";
   string path_tb_jtag_tms = "tb.dut.chip_if.jtag_if.tms";
   string path_tb_jtag_trst_n = "tb.dut.chip_if.jtag_if.trst_n";
@@ -25,8 +23,8 @@ class chip_tap_straps_vseq extends chip_sw_base_vseq;
 
   lc_ctrl_state_pkg::lc_state_e cur_lc_state;
 
-  local uvm_reg lc_csrs[$];
-  chip_jtag_tap_e select_jtag;
+  local uvm_reg         lc_csrs[$];
+  local chip_jtag_tap_e select_jtag;
 
   `uvm_object_utils(chip_tap_straps_vseq)
 
@@ -34,7 +32,7 @@ class chip_tap_straps_vseq extends chip_sw_base_vseq;
 
   virtual task pre_start();
     // path check
-    `DV_CHECK_FATAL(uvm_hdl_check_path(path_dft_strap_test_o))
+    `DV_CHECK_FATAL(uvm_hdl_check_path(path_dft_strap_test))
     `DV_CHECK_FATAL(uvm_hdl_check_path(path_dft_tap_req))
     `DV_CHECK_FATAL(uvm_hdl_check_path(path_tb_jtag_tck))
     `DV_CHECK_FATAL(uvm_hdl_check_path(path_tb_jtag_tms))
@@ -51,19 +49,29 @@ class chip_tap_straps_vseq extends chip_sw_base_vseq;
   virtual task dut_init(string reset_kind = "HARD");
     bit lc_at_prod;
 
-    randomize_dft_straps();
+    // Release DFT straps after they are sampled
+    fork
+        begin randomize_dft_straps(); end
+        begin
+
+           wait (cfg.sw_test_status_vif.sw_test_status == SwTestStatusInTest)
+           cfg.chip_vif.dft_straps_if.disconnect();
+           `uvm_info(`gfn, "DICONNECTED DFT STRAPS", UVM_NONE)
+        end
+    join_none
+
     `DV_CHECK_STD_RANDOMIZE_FATAL(select_jtag)
     cfg.chip_vif.tap_straps_if.drive(select_jtag);
     cfg.chip_vif.set_tdo_pull(0);
 
     super.dut_init(reset_kind);
 
-    cur_lc_state = cfg.mem_bkdr_util_h[Otp].otp_read_lc_partition_state();
+    cur_lc_state = otp_read_lc_partition_state(cfg.mem_bkdr_util_h[Otp]);
 
     // in LcStProd, we can only select LC tap at boot.
     // If it's not LC tap, effectively, no tap is selected.
     if (cur_lc_state == LcStProd) begin
-      cfg.mem_bkdr_util_h[Otp].otp_write_lc_partition_state(LcStProd);
+      otp_write_lc_partition_state(cfg.mem_bkdr_util_h[Otp], LcStProd);
       // In Dev state, only pin0 of select_jtag is sampled. When it's set, select LC tap
       if (select_jtag[0] == 0) select_jtag = JtagTapNone;
       else                     select_jtag = JtagTapLc;
@@ -77,7 +85,7 @@ class chip_tap_straps_vseq extends chip_sw_base_vseq;
     bit dft_straps_en = 1;
     chip_jtag_tap_e allowed_taps_q[$];
 
-    ral.lc_ctrl.get_registers(lc_csrs);
+    ral.lc_ctrl_regs.get_registers(lc_csrs);
 
     // load rom/flash and wait for rom_check to complete
     cpu_init();
@@ -180,10 +188,10 @@ class chip_tap_straps_vseq extends chip_sw_base_vseq;
   endtask
 
   virtual task test_lc_access_via_jtag();
-    foreach (ral.lc_ctrl.device_id[i]) begin
+    foreach (ral.lc_ctrl_regs.device_id[i]) begin
       bit [31:0] act_device_id, exp_device_id;
-      csr_peek(ral.lc_ctrl.device_id[i], exp_device_id);
-      jtag_riscv_agent_pkg::jtag_read_csr(ral.lc_ctrl.device_id[i].get_offset(),
+      exp_device_id = csr_peek(ral.lc_ctrl_regs.device_id[i]);
+      jtag_riscv_agent_pkg::jtag_read_csr(ral.lc_ctrl_regs.device_id[i].get_offset(),
                                           p_sequencer.jtag_sequencer_h,
                                           act_device_id);
       `DV_CHECK_EQ(act_device_id, exp_device_id, $sformatf("device_id index: %0d", i))
@@ -208,8 +216,8 @@ class chip_tap_straps_vseq extends chip_sw_base_vseq;
       `DV_CHECK_FATAL(uvm_hdl_force(path_tb_jtag_tdi,    exp_jtag_req.tdi))
       `DV_CHECK_FATAL(uvm_hdl_force(path_dft_tap_rsp,    exp_jtag_rsp))
 
-      // avoid race condition
-      #1ps;
+      // Wait for jtag signals to be driven
+      cfg.clk_rst_vif.wait_clks(10);
 
       // check jtag
       `DV_CHECK_FATAL(uvm_hdl_read(path_dft_tap_req, act_jtag_req))
@@ -262,24 +270,30 @@ class chip_tap_straps_vseq extends chip_sw_base_vseq;
     end
   endtask
 
+  // Randomize DFT straps for rma and unlock between (0,2,3) for dev and prod (0,1,2,3).
+  // It is problematic to run the test with some DFT values, for some vendors.
+  bit [1:0] dft_straps_val;
+  bit partner;
   virtual function void randomize_dft_straps();
-    bit [1:0] val = $urandom;
+    if ($value$plusargs("PARTNER_N=%b", partner)) begin
+      `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(dft_straps_val, dft_straps_val inside {0,2,3};)
+    end else begin
+      `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(dft_straps_val, dft_straps_val inside {0,1,2,3};)
+    end
 
-    `uvm_info(`gfn, $sformatf("Drive dft straps to %0d", val), UVM_LOW)
-    cfg.chip_vif.dft_straps_if.drive(val);
+    `uvm_info(`gfn, $sformatf("LC state is = %0s, DFT straps = %2b\n",
+              cur_lc_state.name(),dft_straps_val), UVM_LOW)
+    cfg.chip_vif.dft_straps_if.drive(dft_straps_val);
   endfunction
 
+  // Compare DFT strap to driven values, interface is disconnected and loses actual value.
   virtual function void check_dft_straps();
-    bit [1:0] exp_val, act_val;
-
-    if (is_lc_in_unlocked_or_rma()) begin
-      exp_val = cfg.chip_vif.dft_straps_if.sample();
-    end else begin
-      exp_val = 0;
+    bit [1:0] act_val;
+    if (!is_lc_in_unlocked_or_rma()) begin
+      dft_straps_val = 0;
     end
-    `DV_CHECK_FATAL(uvm_hdl_read(path_dft_strap_test_o, act_val))
-
-    `DV_CHECK_EQ(act_val, exp_val)
+    `DV_CHECK_FATAL(uvm_hdl_read(path_dft_strap_test, act_val))
+    `DV_CHECK_EQ(act_val, dft_straps_val)
   endfunction
 
   virtual function bit is_lc_in_unlocked_or_rma();
@@ -287,4 +301,5 @@ class chip_tap_straps_vseq extends chip_sw_base_vseq;
         LcStTestUnlocked0, LcStTestUnlocked1, LcStTestUnlocked2, LcStTestUnlocked3,
         LcStTestUnlocked4, LcStTestUnlocked5, LcStTestUnlocked6, LcStTestUnlocked7};
   endfunction
+
 endclass

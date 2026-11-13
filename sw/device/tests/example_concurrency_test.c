@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,8 +32,7 @@
 #include "sw/device/lib/testing/test_framework/ottf_macros.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-OTTF_DEFINE_TEST_CONFIG(.enable_concurrency = true,
-                        .can_clobber_uart = false, );
+OTTF_DEFINE_TEST_CONFIG(.enable_concurrency = true);
 
 static void task_1(void *task_parameters) {
   // ***************************************************************************

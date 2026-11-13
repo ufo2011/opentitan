@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -52,7 +52,7 @@
 // 6) NMI handler executes and checks that NMI is not due to Wdog, due to alert
 // handler escalation. Since we do not clear the escalation, the NMI handler may
 // execute several times, which will be reflected by a > 1 NMI count in the
-// flash counters.
+// retention sram counters.
 //
 // 7) Alert handler moves on to the next escalation phase and asserts
 // lc_escalate_en, which renders the chip inert. The Wdog should stop running,
@@ -62,7 +62,7 @@
 // 8) Alert handler moves on to the last excalation phase and resets the chip.
 //
 // 9) The chip reboots, and the test checks the alert handler state and the
-// various interrupt counts maintained in flash.
+// various interrupt counts maintained in retention sram.
 //
 // Throughout the entire test, we do not expect any Wdog bark or bite events.
 
@@ -73,7 +73,6 @@
 
 #include "sw/device/lib/dif/dif_alert_handler.h"
 #include "sw/device/lib/dif/dif_aon_timer.h"
-#include "sw/device/lib/dif/dif_flash_ctrl.h"
 #include "sw/device/lib/dif/dif_rstmgr.h"
 #include "sw/device/lib/dif/dif_rv_core_ibex.h"
 #include "sw/device/lib/dif/dif_rv_plic.h"
@@ -82,8 +81,9 @@
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/alert_handler_testutils.h"
 #include "sw/device/lib/testing/aon_timer_testutils.h"
-#include "sw/device/lib/testing/flash_ctrl_testutils.h"
+#include "sw/device/lib/testing/nvm_testutils.h"
 #include "sw/device/lib/testing/rand_testutils.h"
+#include "sw/device/lib/testing/ret_sram_testutils.h"
 #include "sw/device/lib/testing/rstmgr_testutils.h"
 #include "sw/device/lib/testing/rv_plic_testutils.h"
 #include "sw/device/lib/testing/test_framework/FreeRTOSConfig.h"
@@ -108,8 +108,6 @@ static const uint32_t kExpectedAlertNumber =
 
 // Alert class to use for the test. Will be chosen randomly by the test SW.
 static volatile dif_alert_handler_class_t alert_class_to_use;
-
-static volatile uint32_t reset_count;
 
 enum {
   // Counter for resets.
@@ -144,9 +142,9 @@ enum {
   // is noted with @ below.
   // @0 us -> in this phase we will not do anything so that the exception
   // handlers have time to execute.
-  kEscalationPhase0Micros = 200,
+  kEscalationPhase0Micros = 400,
   // @200 us -> in this phase we will raise an NMI
-  kEscalationPhase1Micros = 200,
+  kEscalationPhase1Micros = 400,
   // @400 us -> in this phase we will assert lc_escalate_en
   kEscalationPhase2Micros = 200,
   // @600 us -> in this phase we will reset the chip
@@ -155,16 +153,15 @@ enum {
   // protocol, which asserts lc_escalate_en. That should prevent the Wdog
   // from running and sending out an NMI on its own (we check in the NMI
   // handler below that this does not happen).
-  kWdogBarkMicros = 450,
-  kWdogBiteMicros = 500,
+  kWdogBarkMicros = 850,
+  kWdogBiteMicros = 900,
   // We expect exactly one reset
   kMaxResets = 1,
-  kMaxInterrupts = 30,
 };
 
 static_assert(
-    kWdogBarkMicros < kWdogBiteMicros &&
-        kWdogBarkMicros > (kEscalationPhase0Micros + kEscalationPhase1Micros),
+    (kWdogBarkMicros < kWdogBiteMicros) &&
+        (kWdogBarkMicros > (kEscalationPhase0Micros + kEscalationPhase1Micros)),
     "The wdog bite shall after the NMI phase when lc_escalate_en is asserted.");
 /**
  * Main SRAM addresses used in the sram_function_test.
@@ -173,7 +170,7 @@ enum {
   kSramStart = TOP_EARLGREY_SRAM_CTRL_MAIN_RAM_BASE_ADDR,
   kSramEnd = TOP_EARLGREY_SRAM_CTRL_MAIN_RAM_BASE_ADDR +
              TOP_EARLGREY_SRAM_CTRL_MAIN_RAM_SIZE_BYTES,
-  kSramRetStart = TOP_EARLGREY_SRAM_CTRL_RET_AON_RAM_BASE_ADDR,
+  kSramRetStart = TOP_EARLGREY_SRAM_CTRL_RET_RAM_BASE_ADDR,
 };
 
 /**
@@ -187,7 +184,6 @@ OT_SECTION(".data.sram_function_test")
 OT_NOINLINE
 static void sram_function_test(void) {
   uint32_t pc = 0;
-  uint32_t accum = 0;
   asm("auipc %[pc], 0;" : [pc] "=r"(pc));
   LOG_INFO("PC: %p, SRAM: [%p, %p)", pc, kSramStart, kSramEnd);
   CHECK(pc >= kSramStart && pc < kSramEnd, "PC is outside the main SRAM");
@@ -203,12 +199,9 @@ volatile static const uint32_t kSramFunctionTestAddress =
 static const uint32_t kPlicTarget = kTopEarlgreyPlicTargetIbex0;
 static dif_alert_handler_t alert_handler;
 static dif_aon_timer_t aon_timer;
-static dif_flash_ctrl_state_t flash_ctrl_state;
 static dif_rstmgr_t rstmgr;
 static dif_rv_core_ibex_t rv_core_ibex;
 static dif_rv_plic_t plic;
-
-static const char *we_check = "prim_reg_we_check";
 
 static void rv_core_ibex_fault_checker(bool enable) {
   dif_rv_core_ibex_error_status_t codes;
@@ -225,44 +218,34 @@ static void rv_core_ibex_fault_checker(bool enable) {
  * line to the CPU, which results in a call to this OTTF ISR. This ISR
  * overrides the default OTTF implementation.
  */
-void ottf_external_isr(void) {
+void ottf_external_isr(uint32_t *exc_info) {
   dif_rv_plic_irq_id_t irq_id;
 
   LOG_INFO("At regular external ISR");
 
   // There may be multiple interrupts due to the alert firing, so this keeps an
   // interrupt counter and errors-out if there are too many interrupts.
-
-  // Increment the interrupt count and detect overflows.
-  uint32_t interrupt_count =
-      flash_ctrl_testutils_counter_get(kCounterInterrupt);
-  if (interrupt_count > kMaxInterrupts) {
-    CHECK(false, "Reset count %d got too many interrupts (%d)", reset_count,
-          interrupt_count);
-  }
-  flash_ctrl_testutils_counter_set_at_least(
-      &flash_ctrl_state, kCounterInterrupt, interrupt_count + 1);
+  CHECK_STATUS_OK(ret_sram_testutils_counter_increment(kCounterInterrupt));
 
   CHECK_DIF_OK(dif_rv_plic_irq_claim(&plic, kPlicTarget, &irq_id));
-
-  LOG_INFO("Got irq_id 0x%x (%d)", irq_id, irq_id);
 
   top_earlgrey_plic_peripheral_t peripheral = (top_earlgrey_plic_peripheral_t)
       top_earlgrey_plic_interrupt_for_peripheral[irq_id];
 
-  if (peripheral == kTopEarlgreyPlicPeripheralAonTimerAon) {
+  if (peripheral == kTopEarlgreyPlicPeripheralAonTimer) {
     uint32_t irq =
-        (irq_id - (dif_rv_plic_irq_id_t)
-                      kTopEarlgreyPlicIrqIdAonTimerAonWkupTimerExpired);
+        (irq_id -
+         (dif_rv_plic_irq_id_t)kTopEarlgreyPlicIrqIdAonTimerWkupTimerExpired);
 
     // We should not get aon timer interrupts since escalation suppresses them.
     CHECK(false, "Unexpected aon timer interrupt %d", irq);
   } else if (peripheral == kTopEarlgreyPlicPeripheralAlertHandler) {
     CHECK(
-        irq_id == kTopEarlgreyPlicIrqIdAlertHandlerClassa + alert_class_to_use,
+        irq_id == (uint32_t)kTopEarlgreyPlicIrqIdAlertHandlerClassa +
+                      alert_class_to_use,
         "Unexpected irq_id, expected %d, got %d",
-        kTopEarlgreyPlicIrqIdAlertHandlerClassa + alert_class_to_use, irq_id);
-    LOG_INFO("Got expected alert handler interrupt %d", irq_id);
+        (uint32_t)kTopEarlgreyPlicIrqIdAlertHandlerClassa + alert_class_to_use,
+        irq_id);
 
     // Disable these interrupts from alert_handler so they don't keep happening
     // until NMI.
@@ -289,7 +272,7 @@ void ottf_external_isr(void) {
  *
  * Handles load integrity error exceptions on Ibex.
  */
-void ottf_load_integrity_error_handler(void) {
+void ottf_load_integrity_error_handler(uint32_t *exc_info) {
   LOG_INFO("At load integrity error handler");
 
   CHECK(kFaultTarget != kFaultTargetMainSramInstr,
@@ -299,18 +282,9 @@ void ottf_load_integrity_error_handler(void) {
   CHECK(mtval == kErrorRamAddress, "Unexpected mtval: expected 0x%x, got 0x%x",
         kErrorRamAddress, mtval);
 
-  // Increment the exception count.
-  uint32_t exception_count =
-      flash_ctrl_testutils_counter_get(kCounterException);
-  if (exception_count > kMaxInterrupts) {
-    LOG_INFO("Saturating exception counter at %d", exception_count);
-  } else {
-    flash_ctrl_testutils_counter_set_at_least(
-        &flash_ctrl_state, kCounterException, exception_count + 1);
-  }
+  CHECK_STATUS_OK(ret_sram_testutils_counter_increment(kCounterException));
 
   rv_core_ibex_fault_checker(true);
-
   LOG_INFO("Load integrity error handler exiting");
 }
 
@@ -319,24 +293,14 @@ void ottf_load_integrity_error_handler(void) {
  *
  * Handles instruction access faults on Ibex.
  */
-void ottf_instr_access_fault_handler(void) {
+void ottf_instr_access_fault_handler(uint32_t *exc_info) {
   LOG_INFO("At instr access fault handler");
 
   CHECK(kFaultTargetMainSramInstr == 2, "Expected fault target 2, got %d",
         kFaultTarget);
-
-  // Increment the nmi interrupt count.
-  uint32_t exception_count =
-      flash_ctrl_testutils_counter_get(kCounterException);
-  if (exception_count > kMaxInterrupts) {
-    LOG_INFO("Saturating exception counter at %d", exception_count);
-  } else {
-    flash_ctrl_testutils_counter_set_at_least(
-        &flash_ctrl_state, kCounterException, exception_count + 1);
-  }
+  CHECK_STATUS_OK(ret_sram_testutils_counter_increment(kCounterException));
 
   rv_core_ibex_fault_checker(true);
-
   LOG_INFO("Instr access fault handler exiting");
 }
 
@@ -345,18 +309,11 @@ void ottf_instr_access_fault_handler(void) {
  *
  * Handles NMI interrupts on Ibex for either escalation or watchdog.
  */
-void ottf_external_nmi_handler(void) {
+void ottf_external_nmi_handler(uint32_t *exc_info) {
   dif_rv_core_ibex_nmi_state_t nmi_state = (dif_rv_core_ibex_nmi_state_t){0};
   LOG_INFO("At NMI handler");
 
-  // Increment the nmi interrupt count.
-  uint32_t nmi_count = flash_ctrl_testutils_counter_get(kCounterNmi);
-  if (nmi_count > kMaxInterrupts) {
-    LOG_INFO("Saturating nmi interrupts at %d", nmi_count);
-  } else {
-    flash_ctrl_testutils_counter_set_at_least(&flash_ctrl_state, kCounterNmi,
-                                              nmi_count + 1);
-  }
+  CHECK_STATUS_OK(ret_sram_testutils_counter_increment(kCounterNmi));
 
   // Check that this NMI was due to an alert handler escalation, and not due
   // to a watchdog bark, since escalation suppresses the watchdog.
@@ -398,14 +355,10 @@ static void init_peripherals(void) {
       &alert_handler));
 
   CHECK_DIF_OK(dif_aon_timer_init(
-      mmio_region_from_addr(TOP_EARLGREY_AON_TIMER_AON_BASE_ADDR), &aon_timer));
-
-  CHECK_DIF_OK(dif_flash_ctrl_init_state(
-      &flash_ctrl_state,
-      mmio_region_from_addr(TOP_EARLGREY_FLASH_CTRL_CORE_BASE_ADDR)));
+      mmio_region_from_addr(TOP_EARLGREY_AON_TIMER_BASE_ADDR), &aon_timer));
 
   CHECK_DIF_OK(dif_rstmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR), &rstmgr));
+      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_BASE_ADDR), &rstmgr));
 
   CHECK_DIF_OK(dif_rv_core_ibex_init(
       mmio_region_from_addr(TOP_EARLGREY_RV_CORE_IBEX_CFG_BASE_ADDR),
@@ -425,29 +378,35 @@ static void alert_handler_config(void) {
   dif_alert_handler_alert_t alerts[] = {kExpectedAlertNumber};
   dif_alert_handler_class_t alert_classes[] = {alert_class_to_use};
 
+  uint32_t cycles[4] = {0};
+  CHECK_STATUS_OK(alert_handler_testutils_get_cycles_from_us(
+      kEscalationPhase0Micros, &cycles[0]));
+  CHECK_STATUS_OK(alert_handler_testutils_get_cycles_from_us(
+      kEscalationPhase1Micros, &cycles[1]));
+  CHECK_STATUS_OK(alert_handler_testutils_get_cycles_from_us(
+      kEscalationPhase2Micros, &cycles[2]));
+  CHECK_STATUS_OK(alert_handler_testutils_get_cycles_from_us(
+      kEscalationPhase3Micros, &cycles[3]));
+
   dif_alert_handler_escalation_phase_t esc_phases[] = {
       {.phase = kDifAlertHandlerClassStatePhase0,
        .signal = 0xFFFFFFFF,  // do not trigger any signal, just wait.
-       .duration_cycles =
-           alert_handler_testutils_get_cycles_from_us(kEscalationPhase0Micros)},
+       .duration_cycles = cycles[0]},
       {.phase = kDifAlertHandlerClassStatePhase1,
        .signal = 0,  // NMI
-       .duration_cycles =
-           alert_handler_testutils_get_cycles_from_us(kEscalationPhase1Micros)},
+       .duration_cycles = cycles[1]},
       {.phase = kDifAlertHandlerClassStatePhase2,
        .signal = 1,  // lc_escalate_en
-       .duration_cycles =
-           alert_handler_testutils_get_cycles_from_us(kEscalationPhase2Micros)},
+       .duration_cycles = cycles[2]},
       {.phase = kDifAlertHandlerClassStatePhase3,
        .signal = 3,  // reset
-       .duration_cycles = alert_handler_testutils_get_cycles_from_us(
-           kEscalationPhase3Micros)}};
+       .duration_cycles = cycles[3]}};
 
   // This test does not leverage the IRQ timeout feature of the alert
   // handler, hence deadline_cycles is set to zero. Rather, it triggers
   // escalation right away if an alert event is seen, hence threshold = 0;
   uint32_t deadline_cycles = 0;
-  uint32_t threshold = 0;
+  uint16_t threshold = 0;
   LOG_INFO("Configuring class %d with %d cycles and %d occurrences",
            alert_class_to_use, deadline_cycles, threshold);
   dif_alert_handler_class_config_t class_config[] = {{
@@ -467,11 +426,11 @@ static void alert_handler_config(void) {
       .classes = classes,
       .class_configs = class_config,
       .classes_len = ARRAYSIZE(class_config),
-      .ping_timeout = 0,
+      .ping_timeout = kAlertHandlerTestutilsDefaultPingTimeout,
   };
 
-  alert_handler_testutils_configure_all(&alert_handler, config,
-                                        kDifToggleEnabled);
+  CHECK_STATUS_OK(alert_handler_testutils_configure_all(&alert_handler, config,
+                                                        kDifToggleEnabled));
 
   // Enables all alert handler irqs. This allows us to implicitly check that
   // we do not get spurious IRQs from the classes that are unused.
@@ -485,11 +444,13 @@ static void alert_handler_config(void) {
       &alert_handler, kDifAlertHandlerIrqClassd, kDifToggleEnabled));
 }
 
-static void set_aon_timers() {
-  uint32_t bark_cycles =
-      aon_timer_testutils_get_aon_cycles_from_us(kWdogBarkMicros);
-  uint32_t bite_cycles =
-      aon_timer_testutils_get_aon_cycles_from_us(kWdogBiteMicros);
+static void set_aon_timers(void) {
+  uint32_t bark_cycles = 0;
+  CHECK_STATUS_OK(aon_timer_testutils_get_aon_cycles_32_from_us(kWdogBarkMicros,
+                                                                &bark_cycles));
+  uint32_t bite_cycles = 0;
+  CHECK_STATUS_OK(aon_timer_testutils_get_aon_cycles_32_from_us(kWdogBiteMicros,
+                                                                &bite_cycles));
 
   LOG_INFO(
       "Wdog will bark after %u us (%u cycles) and bite after %u us (%u cycles)",
@@ -497,8 +458,9 @@ static void set_aon_timers() {
       bite_cycles);
 
   // Setup the wdog bark and bite timeouts.
-  aon_timer_testutils_watchdog_config(&aon_timer, bark_cycles, bite_cycles,
-                                      /*pause_in_sleep=*/false);
+  CHECK_STATUS_OK(
+      aon_timer_testutils_watchdog_config(&aon_timer, bark_cycles, bite_cycles,
+                                          /*pause_in_sleep=*/false));
 }
 
 /**
@@ -507,7 +469,7 @@ static void set_aon_timers() {
  * The aon timers should never trigger actions because escalation should take
  * precedence.
  */
-static void execute_test() {
+static void execute_test(void) {
   alert_handler_config();
 
   // Make sure we can receive both the watchdog and alert NMIs.
@@ -558,34 +520,22 @@ bool test_main(void) {
 
   init_peripherals();
 
+  ret_sram_testutils_init();
+
   // Enable all the interrupts used in this test.
   rv_plic_testutils_irq_range_enable(
-      &plic, kPlicTarget, kTopEarlgreyPlicIrqIdAonTimerAonWkupTimerExpired,
-      kTopEarlgreyPlicIrqIdAonTimerAonWdogTimerBark);
+      &plic, kPlicTarget, kTopEarlgreyPlicIrqIdAonTimerWkupTimerExpired,
+      kTopEarlgreyPlicIrqIdAonTimerWdogTimerBark);
   rv_plic_testutils_irq_range_enable(&plic, kPlicTarget,
                                      kTopEarlgreyPlicIrqIdAlertHandlerClassa,
                                      kTopEarlgreyPlicIrqIdAlertHandlerClassd);
-
-  // Enable access to flash for storing info across resets.
+  // Enable access to NVM for storing info across resets.
   LOG_INFO("Setting default region accesses");
-  flash_ctrl_testutils_default_region_access(&flash_ctrl_state,
-                                             /*rd_en*/ true,
-                                             /*prog_en*/ true,
-                                             /*erase_en*/ true,
-                                             /*scramble_en*/ false,
-                                             /*ecc_en*/ false,
-                                             /*he_en*/ false);
-
-  // Get the flash maintained reset counter.
-  reset_count = flash_ctrl_testutils_counter_get(kCounterReset);
-  LOG_INFO("Reset counter value: %u", reset_count);
-  if (reset_count > kMaxResets) {
-    CHECK(false, "Got too many resets (%d)", reset_count);
-  }
-
-  // Increment reset counter to know where we are.
-  flash_ctrl_testutils_counter_set_at_least(&flash_ctrl_state, kCounterReset,
-                                            reset_count + 1);
+  nvm_page_cfg_t default_cfg = {.scrambling = kMultiBitBool4False,
+                                .ecc = kMultiBitBool4False,
+                                .he = kMultiBitBool4False};
+  CHECK_STATUS_OK(
+      nvm_testutils_default_region_setup(kPageReadWrite, default_cfg));
 
   // Check if there was a HW reset caused by the escalation.
   dif_rstmgr_reset_info_bitfield_t rst_info;
@@ -598,30 +548,44 @@ bool test_main(void) {
 
   if (rst_info == kDifRstmgrResetInfoPor) {
     LOG_INFO("Booting for the first time, starting test");
+    CHECK_STATUS_OK(ret_sram_testutils_counter_clear(kCounterException));
+    CHECK_STATUS_OK(ret_sram_testutils_counter_clear(kCounterInterrupt));
+    CHECK_STATUS_OK(ret_sram_testutils_counter_clear(kCounterNmi));
+    CHECK_STATUS_OK(ret_sram_testutils_counter_clear(kCounterReset));
     execute_test();
   } else if (rst_info == kDifRstmgrResetInfoEscalation) {
+    uint32_t reset_count;
     LOG_INFO("Booting for the second time due to escalation reset");
+    CHECK_STATUS_OK(ret_sram_testutils_counter_get(kCounterReset,
+                                                   (uint32_t *)&reset_count));
+    LOG_INFO("Reset counter value: %u", reset_count);
+    if (reset_count > kMaxResets) {
+      CHECK(false, "Got too many resets (%d)", reset_count);
+    }
 
-    // Get the counts from flash.
-    int interrupt_count = flash_ctrl_testutils_counter_get(kCounterInterrupt);
-    int nmi_count = flash_ctrl_testutils_counter_get(kCounterNmi);
-    int exception_count = flash_ctrl_testutils_counter_get(kCounterException);
+    // Increment reset counter to know where we are.
+    CHECK_STATUS_OK(ret_sram_testutils_counter_increment(kCounterReset));
+
+    // Get the counts from retention SRAM.
+    uint32_t interrupt_count = 0;
+    CHECK_STATUS_OK(
+        ret_sram_testutils_counter_get(kCounterInterrupt, &interrupt_count));
+    uint32_t nmi_count = 0;
+    CHECK_STATUS_OK(ret_sram_testutils_counter_get(kCounterNmi, &nmi_count));
+    uint32_t exception_count = 0;
+    CHECK_STATUS_OK(
+        ret_sram_testutils_counter_get(kCounterException, &exception_count));
 
     LOG_INFO("Interrupt count %d", interrupt_count);
     LOG_INFO("NMI count %d", nmi_count);
     LOG_INFO("Exception count %d", exception_count);
 
-    CHECK(interrupt_count == 1, "Expected exactly one regular interrupt");
+    CHECK(interrupt_count > 0, "Expected at least one regular interrupt");
     // The NMI handler may execute multiple times during the corresponding
     // escalation phase since we do not clear/stop the escalation.
     CHECK(nmi_count > 0, "Expected at least one nmi");
-    if (kFaultTarget == kFaultTargetMainSramInstr) {
-      // The instruction access fault keeps on triggering the ISR, hence
-      // the count can be greater thn 1 (similar to the NMI above).
-      CHECK(exception_count > 0, "Expected at least one exception");
-    } else {
-      CHECK(exception_count == 1, "Expected exactly one exception");
-    }
+    CHECK(exception_count > 0, "Expected at least one exception");
+
     // Check the alert handler cause is cleared.
     bool is_cause = true;
     CHECK_DIF_OK(dif_alert_handler_alert_is_cause(

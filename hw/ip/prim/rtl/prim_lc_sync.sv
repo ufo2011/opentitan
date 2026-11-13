@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -6,7 +6,7 @@
 // output buffers and life-cycle specific assertions.
 //
 // Should be used exactly as recommended in the life cycle controller spec:
-// https://docs.opentitan.org/hw/ip/lc_ctrl/doc/index.html#control-signal-propagation
+// https://opentitan.org/book/hw/ip/lc_ctrl/doc/interfaces.html#control-signal-propagation
 
 `include "prim_assert.sv"
 

@@ -1,9 +1,9 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 class lc_ctrl_base_vseq extends cip_base_vseq #(
-  .RAL_T              (lc_ctrl_reg_block),
+  .RAL_T              (lc_ctrl_regs_reg_block),
   .CFG_T              (lc_ctrl_env_cfg),
   .COV_T              (lc_ctrl_env_cov),
   .VIRTUAL_SEQUENCER_T(lc_ctrl_virtual_sequencer)
@@ -55,11 +55,6 @@ class lc_ctrl_base_vseq extends cip_base_vseq #(
     if (do_lc_ctrl_init) lc_ctrl_init();
   endtask
 
-  virtual task dut_shutdown();
-    // check for pending lc_ctrl operations and wait for them to complete
-    // TODO
-  endtask
-
   // Drive OTP input `lc_state` and `lc_cnt`.
   virtual task drive_otp_i(bit rand_otp_i = 1);
     if (rand_otp_i) begin
@@ -82,7 +77,8 @@ class lc_ctrl_base_vseq extends cip_base_vseq #(
     foreach (ral.device_id[i]) csr_rd(ral.device_id[i], val);
     foreach (ral.manuf_state[i]) csr_rd(ral.manuf_state[i], val);
     // Hardware revision reg
-    csr_rd(ral.hw_rev, val);
+    csr_rd(ral.hw_revision0, val);
+    csr_rd(ral.hw_revision1, val);
   endtask
 
 
@@ -100,7 +96,7 @@ class lc_ctrl_base_vseq extends cip_base_vseq #(
   endtask
 
   // some registers won't set to default value until otp_init is done
-  virtual task read_and_check_all_csrs_after_reset();
+  virtual protected task read_and_check_all_csrs_after_reset();
     lc_ctrl_init();
     super.read_and_check_all_csrs_after_reset();
   endtask
@@ -122,20 +118,25 @@ class lc_ctrl_base_vseq extends cip_base_vseq #(
     end
   endtask
 
-  virtual task run_flash_rma_rsp(bit has_err = 0);
-    forever begin
-      lc_ctrl_pkg::lc_tx_t rsp;
-      wait(cfg.lc_ctrl_vif.flash_rma_req_o == lc_ctrl_pkg::On);
-      rsp = (has_err) ? ($urandom_range(0, 1) ? lc_ctrl_pkg::On : lc_ctrl_pkg::Off) :
-          lc_ctrl_pkg::On;
-      cfg.clk_rst_vif.wait_clks($urandom_range(0, 20));
-      cfg.lc_ctrl_vif.set_flash_rma_ack(rsp);
+  virtual task set_nvm_rma_ack(lc_ctrl_pkg::lc_tx_t val, int unsigned max_delay_cycles = 10);
+    int delay_lens[lc_ctrl_dv_utils_pkg::NUM_RMA_ACK_SIGS];
+    if (cfg.lc_ctrl_vif.nvm_rma_ack_i != {lc_ctrl_dv_utils_pkg::NUM_RMA_ACK_SIGS{val}}) begin
+      for (int i = 0; i < lc_ctrl_dv_utils_pkg::NUM_RMA_ACK_SIGS; i++) begin
+        delay_lens[i] = $urandom_range(0, max_delay_cycles);
+      end
+    end
+    cfg.lc_ctrl_vif.set_nvm_rma_ack(val, delay_lens);
+  endtask
 
-      wait(cfg.lc_ctrl_vif.flash_rma_req_o != lc_ctrl_pkg::On);
-      rsp = (has_err) ? ($urandom_range(0, 1) ? lc_ctrl_pkg::On : lc_ctrl_pkg::Off) :
-          lc_ctrl_pkg::Off;
+  virtual task run_nvm_rma_rsp(bit has_err = 0);
+    forever begin
+      wait(cfg.lc_ctrl_vif.nvm_rma_req_o == lc_ctrl_pkg::On);
       cfg.clk_rst_vif.wait_clks($urandom_range(0, 20));
-      cfg.lc_ctrl_vif.set_flash_rma_ack(rsp);
+      set_nvm_rma_ack((has_err && ($urandom & 1)) ? lc_ctrl_pkg::Off : lc_ctrl_pkg::On);
+
+      wait(cfg.lc_ctrl_vif.nvm_rma_req_o != lc_ctrl_pkg::On);
+      cfg.clk_rst_vif.wait_clks($urandom_range(0, 20));
+      set_nvm_rma_ack((has_err && ($urandom & 1)) ? lc_ctrl_pkg::On : lc_ctrl_pkg::Off);
     end
   endtask
 
@@ -218,8 +219,8 @@ class lc_ctrl_base_vseq extends cip_base_vseq #(
 
   // Clear kmac agent digest data
   virtual function void clear_kmac_user_digest_share();
-    while (cfg.m_kmac_app_agent_cfg.has_user_digest_share()) begin
-      void'(cfg.m_kmac_app_agent_cfg.get_user_digest_share());
+    while (cfg.m_kmac_app_agent_cfg.has_user_digest()) begin
+      void'(cfg.m_kmac_app_agent_cfg.pop_user_digest());
     end
   endfunction
 

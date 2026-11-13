@@ -1,5 +1,5 @@
 CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 name: "lowrisc:tlul:lc_gate:0.1"
@@ -8,11 +8,12 @@ description: "TL-UL Lifecycle Gate"
 filesets:
   files_rtl:
     depend:
-      - lowrisc:prim:assert
-      - lowrisc:tlul:common
       - lowrisc:ip:lc_ctrl_pkg
+      - lowrisc:prim:assert
       - lowrisc:prim:blanker
+      - lowrisc:prim:lc_sync
       - lowrisc:prim:sparse_fsm
+      - lowrisc:tlul:common
     files:
       - rtl/tlul_lc_gate.sv
     file_type: systemVerilogSource
@@ -29,11 +30,14 @@ filesets:
     depend:
       # common waivers
       - lowrisc:lint:common
-    files:
-      #- lint/tlul_lc_gate.waiver
     file_type: waiver
 
   files_veriblelint_waiver:
+    depend:
+      # common waivers
+      - lowrisc:lint:common
+
+  files_slang_waiver:
     depend:
       # common waivers
       - lowrisc:lint:common
@@ -50,6 +54,7 @@ targets:
       - tool_verilator   ? (files_verilator_waiver)
       - tool_ascentlint  ? (files_ascentlint_waiver)
       - tool_veriblelint ? (files_veriblelint_waiver)
+      - tool_slang       ? (files_slang_waiver)
       - files_rtl
     toplevel: tlul_lc_gate
 

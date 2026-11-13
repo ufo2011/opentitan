@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@ class edn_smoke_vseq extends edn_base_vseq;
 
   `uvm_object_new
 
-  push_pull_host_seq#(edn_pkg::FIPS_ENDPOINT_BUS_WIDTH)   m_endpoint_pull_seq[MAX_NUM_ENDPOINTS];
+  push_pull_host_seq#(edn_pkg::FIPS_ENDPOINT_BUS_WIDTH)   m_endpoint_pull_seq[`NUM_END_POINTS];
 
   task body();
     super.body();
@@ -17,7 +17,8 @@ class edn_smoke_vseq extends edn_base_vseq;
         create("m_endpoint_pull_seq[0]");
 
     // Send instantiate cmd
-    wr_cmd(.cmd_type("sw"), .acmd(csrng_pkg::INS), .clen(0), .flags(MuBi4False), .glen(0));
+    wr_cmd(.cmd_type(edn_env_pkg::Sw), .acmd(csrng_pkg::INS), .clen(0), .flags(MuBi4False),
+           .glen(0), .mode(edn_env_pkg::SwMode));
 
     // Request data
     m_endpoint_pull_seq[0] = push_pull_host_seq#(edn_pkg::FIPS_ENDPOINT_BUS_WIDTH)::type_id::
@@ -28,11 +29,13 @@ class edn_smoke_vseq extends edn_base_vseq;
     join_none
 
     // Send generate cmd
-    wr_cmd(.cmd_type("sw"), .acmd(csrng_pkg::GEN), .clen(0), .flags(MuBi4False), .glen(1));
+    wr_cmd(.cmd_type(edn_env_pkg::Sw), .acmd(csrng_pkg::GEN), .clen(0), .flags(MuBi4False),
+           .glen(1), .mode(edn_env_pkg::SwMode));
 
     // Send uninstantiate cmd
     `DV_CHECK_STD_RANDOMIZE_FATAL(flags)
-    wr_cmd(.cmd_type("sw"), .acmd(csrng_pkg::UNI), .clen(0), .flags(flags), .glen(0));
+    wr_cmd(.cmd_type(edn_env_pkg::Sw), .acmd(csrng_pkg::UNI), .clen(0), .flags(flags),
+           .glen(0), .mode(edn_env_pkg::SwMode));
   endtask
 
 endclass

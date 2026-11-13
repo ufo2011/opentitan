@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -10,7 +10,9 @@ module sensor_ctrl
   import sensor_ctrl_pkg::*;
   import sensor_ctrl_reg_pkg::*;
 #(
-  parameter logic [NumAlerts-1:0] AlertAsyncOn = {NumAlerts{1'b1}}
+  parameter logic [NumAlerts-1:0] AlertAsyncOn = {NumAlerts{1'b1}},
+  // Number of cycles a differential skew is tolerated on the alert signal
+  parameter int unsigned AlertSkewCycles = 1
 ) (
   // Primary module clocks
   input clk_i,
@@ -42,8 +44,15 @@ module sensor_ctrl
   output prim_alert_pkg::alert_tx_t [NumAlerts-1:0] alert_tx_o,
 
   // wakeup to power manager
-  output logic wkup_req_o
+  output logic wkup_req_o,
+
+  // Attributes for manual pads
+  output prim_pad_wrapper_pkg::pad_attr_t [NumAttrPads-1:0] manual_pad_attr_o
 );
+
+  import prim_mubi_pkg::mubi4_t;
+  import prim_mubi_pkg::mubi4_test_true_loose;
+
 
   // The reg_pkg number of alerts and ast alerts must always match
   `ASSERT_INIT(NumAlertsMatch_A, ast_pkg::NumAlerts == NumAlertEvents)
@@ -100,8 +109,7 @@ module sensor_ctrl
     .tl_o,
     .reg2hw,
     .hw2reg,
-    .intg_err_o(intg_err),
-    .devmode_i(1'b1)
+    .intg_err_o(intg_err)
   );
 
   ///////////////////////////
@@ -186,13 +194,31 @@ module sensor_ctrl
   // triggered, there is thus not a need to ever acknowledge the source.
   // For recoverable alerts, the ack is only sent once the alert is captured into software readable
   // registers
+  logic [NumAlertEvents-1:0] alert_en, alert_en_buf;
   logic [NumAlertEvents-1:0] recov_event;
   logic [NumAlertEvents-1:0] fatal_event;
+
+  prim_sec_anchor_buf #(
+    .Width(NumAlertEvents)
+  ) u_prim_sec_anchor_buf (
+    .in_i(alert_en),
+    .out_o(alert_en_buf)
+  );
+
   for (genvar i = 0; i < NumAlertEvents; i++) begin : gen_ast_alert_events
 
+    // We're using the "loose" check so that alerts are only disabled iff they are equal to the
+    // false value. This ensures that even a value glitched to an incorrect encoding will enable
+    // the alert.
+    assign alert_en[i] = mubi4_test_true_loose(mubi4_t'(reg2hw.alert_en[i]));
+
     // when there is a valid alert, set the alert state
-    assign recov_event[i] = event_vld[i] & ~reg2hw.fatal_alert_en[i];
-    assign fatal_event[i] = event_vld[i] & reg2hw.fatal_alert_en[i];
+    assign recov_event[i] = alert_en_buf[i] &&
+                            event_vld[i] &&
+                            !reg2hw.fatal_alert_en[i];
+    assign fatal_event[i] = alert_en_buf[i] &&
+                            event_vld[i] &&
+                            reg2hw.fatal_alert_en[i];
 
     assign hw2reg.recov_alert[i].d  = 1'b1;
     assign hw2reg.recov_alert[i].de = recov_event[i];
@@ -202,7 +228,6 @@ module sensor_ctrl
 
     // only recoverable alerts ack
     assign event_clr[i] = recov_event[i] & reg2hw.recov_alert[i].q;
-
   end
 
   // handle internal alert events, currently only have fatals
@@ -242,6 +267,7 @@ module sensor_ctrl
 
   prim_alert_sender #(
     .AsyncOn(AlertAsyncOn[RecovAlert]),
+    .SkewCycles(AlertSkewCycles),
     .IsFatal(0)
   ) u_prim_recov_alert_sender (
     .clk_i,
@@ -288,16 +314,16 @@ module sensor_ctrl
   // be used to trigger wake from low power.
   // Fatal alerts are not used here because they do not ever ack, meaning
   // the originating event can never disappear.
-  assign async_wake = (|async_alert_event_p)  |
-                      (~&async_alert_event_n) |
+  assign async_wake = (|(async_alert_event_p & alert_en_buf))  |
+                      (~&(async_alert_event_n | ~alert_en_buf)) |
                       (|reg2hw.recov_alert);
 
   prim_flop_2sync #(
     .Width(1),
     .ResetValue('0)
   ) u_wake_sync (
-    .clk_i,
-    .rst_ni,
+    .clk_i(clk_aon_i),
+    .rst_ni(rst_aon_ni),
     .d_i(async_wake),
     .q_o(unstable_wake_req)
   );
@@ -320,6 +346,45 @@ module sensor_ctrl
     end else begin
       wkup_req_o <= &wake_req_filter;
     end
+  end
+
+  ///////////////////////////
+  // Attributes for manual pads
+  ///////////////////////////
+  logic [NumAttrPads-1:0] manual_pad_pull_en_q,
+                          manual_pad_pull_select_q,
+                          manual_pad_input_disable_q;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      manual_pad_pull_en_q       <= '0;
+      manual_pad_pull_select_q   <= '0;
+      manual_pad_input_disable_q <= '0;
+    end else begin
+      for (int kk = 0; kk < NumAttrPads; kk++) begin
+        if (reg2hw.manual_pad_attr[kk].pull_en.qe) begin
+          manual_pad_pull_en_q[kk]       <= reg2hw.manual_pad_attr[kk].pull_en.q;
+        end
+        if (reg2hw.manual_pad_attr[kk].pull_select.qe) begin
+          manual_pad_pull_select_q[kk]   <= reg2hw.manual_pad_attr[kk].pull_select.q;
+        end
+        if (reg2hw.manual_pad_attr[kk].input_disable.qe) begin
+          manual_pad_input_disable_q[kk] <= reg2hw.manual_pad_attr[kk].input_disable.q;
+        end
+      end
+    end
+  end
+
+  for (genvar k = 0; k < NumAttrPads; k++) begin : gen_manual_pad_attr
+    assign hw2reg.manual_pad_attr[k].pull_en.d       = manual_pad_pull_en_q[k];
+    assign hw2reg.manual_pad_attr[k].pull_select.d   = manual_pad_pull_select_q[k];
+    assign hw2reg.manual_pad_attr[k].input_disable.d = manual_pad_input_disable_q[k];
+    assign manual_pad_attr_o[k] = '{
+      pull_en:       manual_pad_pull_en_q[k],
+      pull_select:   manual_pad_pull_select_q[k],
+      input_disable: manual_pad_input_disable_q[k],
+      default: '0
+    };
   end
 
   ///////////////////////////

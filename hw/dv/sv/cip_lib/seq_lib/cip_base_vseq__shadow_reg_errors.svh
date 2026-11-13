@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,14 +47,25 @@ virtual task run_shadow_reg_errors(int num_times, bit en_csr_rw_seq = 0);
   end
 
   for (int trans = 1; trans <= num_times; trans++) begin
-    `uvm_info(`gfn, $sformatf("Running shadow reg error test iteration %0d/%0d", trans,
-                              num_times), UVM_LOW)
+    // Iterate over shadowed CSRs, corrupting them in turn and checking that we get errors. The
+    // easiest thing to write would be a loop over all the CSRs, but that takes longer if you have
+    // lots of CSRs (obviously) and we don't want to time out on a single test run.
+    //
+    // Instead, we do the first 50 (if there are that many) in the shuffled list. If there are lots
+    // of CSRs, we can run more seeds to ensure we try them all.
+    int max_idx = shadowed_csrs.size() - 1;
+    if (max_idx > 49)
+      max_idx = 49;
+
+    `uvm_info(`gfn, $sformatf("Running shadow reg error test iteration %0d/%0d. max_idx=%0d",
+                              trans, num_times, max_idx), UVM_LOW)
 
     shadowed_csrs.shuffle();
 
-    foreach (shadowed_csrs[i]) begin
+    for (int i = 0; i <= max_idx; ++i) begin
+      if (cfg.stop_transaction_generators()) break;
       `uvm_info(`gfn, $sformatf("mycsr: %s    en_csr_rw_seq:%d",
-                shadowed_csrs[i].get_name(), en_csr_rw_seq), UVM_HIGH);
+                                shadowed_csrs[i].get_name(), en_csr_rw_seq), UVM_HIGH)
 
       repeat(5) begin
         bit ready_to_trigger_csr_rw = 0;
@@ -72,10 +83,12 @@ virtual task run_shadow_reg_errors(int num_times, bit en_csr_rw_seq = 0);
               end
               1: begin
                 ready_to_trigger_csr_rw = 1;
+                shadow_reg_err_ctrl_svas(.enable(0));
                 poke_and_check_storage_error(shadowed_csrs[i]);
                 has_fatal_alert = 1;
               end
               1: begin
+                shadow_reg_err_ctrl_svas(.enable(0));
                 glitch_shadowed_reset(shadowed_csrs, ready_to_trigger_csr_rw, has_fatal_alert);
               end
             endcase
@@ -89,12 +102,13 @@ virtual task run_shadow_reg_errors(int num_times, bit en_csr_rw_seq = 0);
               run_csr_vseq("rw");
             end
           end
-       join
+        join
+        shadow_reg_err_ctrl_svas(.enable(1));
 
-       if (has_fatal_alert) begin
-         dut_init();
-         read_and_check_all_csrs_after_reset();
-       end
+        if (has_fatal_alert) begin
+          dut_init();
+          read_and_check_all_csrs_after_reset();
+        end
       end // repeat(5)
     end
   end
@@ -116,7 +130,7 @@ virtual task write_and_check_update_error(dv_base_reg shadowed_csr);
   // trigger update error. So we trigger dv_base_reg function to double check.
   predict_shadow_reg_status(.predict_update_err(shadowed_csr.get_shadow_update_err()));
   `uvm_info(`gfn, $sformatf("write %0s with first value %0h second value %0h",
-            shadowed_csr.get_name(), wdata, err_wdata), UVM_HIGH);
+                            shadowed_csr.get_name(), wdata, err_wdata), UVM_HIGH)
 
   read_check_shadow_reg_status("Write_and_check_update_error task");
   csr_rd_check(.ptr(shadowed_csr), .compare_vs_ral(1));
@@ -134,7 +148,7 @@ virtual task check_csr_read_clear_staged_val(dv_base_reg shadowed_csr);
   string         alert_name = shadowed_csr.get_update_err_alert_name();
   `DV_CHECK_STD_RANDOMIZE_FATAL(wdata);
 
-  `uvm_info(`gfn, $sformatf("%0s check csr read clear", shadowed_csr.get_name()), UVM_HIGH);
+  `uvm_info(`gfn, $sformatf("%0s check csr read clear", shadowed_csr.get_name()), UVM_HIGH)
   shadow_reg_wr(.csr(shadowed_csr), .wdata(wdata), .en_shadow_wr(0));
   csr_rd_check(.ptr(shadowed_csr), .compare_vs_ral(1));
   wdata = get_shadow_reg_diff_val(shadowed_csr, wdata);
@@ -154,6 +168,9 @@ endtask
 virtual task shadow_reg_errors_check_fatal_alert_nonblocking(dv_base_reg shadowed_csr,
                                                              string alert_name);
   if (cfg.m_alert_agent_cfgs.exists(alert_name)) begin
+    // If the monitor is sampling a ping wait until is finished, so the alert can
+    // be detected afterwards
+    wait (cfg.m_alert_agent_cfgs[alert_name].active_ping==0);
     // add clock cycle delay in case of alert coming out 1 cycle later.
     cfg.clk_rst_vif.wait_clks(2);
     check_fatal_alert_nonblocking(alert_name);
@@ -172,13 +189,13 @@ virtual task poke_and_check_storage_error(dv_base_reg shadowed_csr);
 
   `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(
       kind, kind inside {BkdrRegPathRtl, BkdrRegPathRtlShadow};)
-  csr_peek(.ptr(shadowed_csr), .value(origin_val), .kind(kind));
+  origin_val = csr_peek(.ptr(shadowed_csr), .kind(kind));
   err_val = get_shadow_reg_diff_val(shadowed_csr, origin_val);
 
   csr_poke(.ptr(shadowed_csr), .value(err_val), .kind(kind), .predict(1));
   predict_shadow_reg_status(.predict_storage_err(shadowed_csr.get_shadow_storage_err()));
   `uvm_info(`gfn, $sformatf("backdoor write %s through %s with value 0x%0h",
-            shadowed_csr.`gfn, kind.name, err_val), UVM_HIGH);
+                            shadowed_csr.`gfn, kind.name, err_val), UVM_HIGH)
 
    shadow_reg_errors_check_fatal_alert_nonblocking(shadowed_csr, alert_name);
   // Wait random clock cycles and ensure the fatal alert is continuously firing.
@@ -309,19 +326,21 @@ virtual task shadow_reg_wr(dv_base_reg    csr,
       string alert_name = csr.get_update_err_alert_name();
       // This logic gates alert_handler testbench because it does not have outgoing alert.
       if (cfg.m_alert_agent_cfgs.exists(alert_name)) begin
-        fork
-          begin
-            `DV_SPINWAIT(while (!cfg.m_alert_agent_cfgs[alert_name].vif.get_alert()) begin
-                           cfg.clk_rst_vif.wait_clks(1);
-                         end
-                         cfg.m_alert_agent_cfgs[alert_name].vif.wait_ack_complete();,
-                         $sformatf("%0s update_err alert timeout", csr.get_name()))
-          end
-          begin
-            wait (exp_update_err_alert == 0);
-          end
-        join_any
-        disable fork;
+        fork begin : isolation_fork
+          fork
+            begin
+              `DV_SPINWAIT(while (!cfg.m_alert_agent_cfgs[alert_name].vif.get_alert()) begin
+                             cfg.clk_rst_vif.wait_clks(1);
+                           end
+                           cfg.m_alert_agent_cfgs[alert_name].vif.wait_ack_complete();,
+                           $sformatf("%0s update_err alert timeout", csr.get_name()))
+            end
+            begin
+              wait (exp_update_err_alert == 0);
+            end
+          join_any
+          disable fork;
+        end join
       end
     end
   join
@@ -352,9 +371,23 @@ virtual task read_check_shadow_reg_status(string msg_id);
   foreach (cfg.shadow_update_err_status_fields[status_field]) begin
     csr_rd_check(.ptr(status_field), .compare_vs_ral(1),
                  .err_msg($sformatf(" %0s: check update_err status", msg_id)));
+
+    // If status_field is RC then reading it will have caused it to become zero again. You might
+    // expect the scoreboard to predict it appropriately, but the shadow_reg_errors sequence gets
+    // run with en_scb=0 (from a plusarg). Update the prediction manually.
+    if (status_field.get_access() == "RC") begin
+      if (!status_field.predict(.value(0), .kind(UVM_PREDICT_DIRECT)))
+        `uvm_error(`gfn,
+                   $sformatf("Failed to predict clear of %0s after read.",
+                             status_field.get_full_name()))
+    end
   end
   foreach (cfg.shadow_storage_err_status_fields[status_field]) begin
     csr_rd_check(.ptr(status_field), .compare_vs_ral(1),
                  .err_msg($sformatf(" %0s: check storage_err status", msg_id)));
   end
 endtask
+
+// enable/disable shadow reg error assertions.
+virtual function void shadow_reg_err_ctrl_svas(bit enable, string path = "*");
+endfunction

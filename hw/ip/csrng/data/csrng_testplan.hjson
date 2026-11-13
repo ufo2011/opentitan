@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -35,10 +35,6 @@
       tests: ["csrng_intr"]
     }
     {
-      //TODO For the following untested features add it to the test or create explicit coverpoints in csrng_cmd_cg:
-      //TODO - Invalid MuBi values for flag0 are currently untested.
-      //TODO - Illegal commands are currently untested.
-      //TODO - Fatal alerts are currently untested.
       name: alerts
       desc: '''
             Verify recov_alert asserts when recov_alert_sts becomes non-zero.
@@ -61,6 +57,7 @@
       desc: '''
             Verify err_code register bits assert when:
             - An error has been detected in any of the internal fifos and the corresponding write/read/state bits.
+            - A word is written to CMD_REQ while SW_CMD_STS.CMD_RDY is low.
             - An illegal state is reached in any of the 6 state machines.
             - An error is detected in the generate command counter.
             Verify that the err_code register clears all bits after reset.
@@ -69,9 +66,6 @@
       tests: ["csrng_err"]
     }
     {
-      //TODO For the following untested features add it to the test or create explicit coverpoints in csrng_cmd_cg:
-      //TODO - Verification of otp_en_csrng_sw_app_read is currently untested.
-      //TODO - FIPS bit going low from entropy source is currently untested.
       name: cmds
       desc: '''
             Verify all csrng commands req/status behave as predicted on all applications: HW0, HW1 and SW.
@@ -81,8 +75,7 @@
             Verify main_sm_state for sw/hw apps.
             Verify that genbits generates the amount specified by glen.
             Verify fips bit is set to the inverse of flag0 that was used on the last initialize or reseed.
-            Verify that if otp_en_csrng_sw_app_read is set, genbits and int_state_value registers are readable, and unreadable otherwise.
-            Verify that when AES_HALT is set during a generate command that no request is sent to the AES block.
+            Verify that if CTRL.SW_APP_ENABLE and CTRL.READ_INT_STATE are set, genbits and int_state_value registers are readable, respectively, and unreadable otherwise.
             Verify commands with continuous/non-continuous valid.
             Verify that if FIPS bit drops at input from entropy source that the generated block also has FIPS low.
             '''
@@ -110,12 +103,10 @@
 
   covergroups: [
     {
-      //TODO Configuration for enable is currently not covered.
       name: csrng_cfg_cg
       desc: '''
             Covers that all csrng configuration options have been tested.
             Individual config settings that will be covered include:
-            - otp_en_cs_sw_app_read
             - sw_app_enable
             - read_int_state
             - enable
@@ -159,6 +150,12 @@
             '''
     }
     {
+      name: csrng_sw_cmd_drop_cg
+      desc: '''
+            Covers that a word written to CMD_REQ while SW_CMD_STS.CMD_RDY is low has been dropped.
+            '''
+    }
+    {
       name: csrng_err_code_test_cg
       desc: '''
             Covers ERR_CODE_TEST register values for setting up fatal errors.
@@ -171,16 +168,41 @@
             '''
     }
     {
-      name: csrng_sfifo_cg
+      name: csrng_app_sfifo_cg
       desc: '''
-            Covers each app's stage FIFO statuses.
-            - cp_hw0_cmd_depth, cp_hw1_cmd_depth, cp_sw_cmd_depth : Covers current number of commands in FIFO
-            - cp_hw0_genbits_depth, cp_hw1_genbits_depth, cp_sw_genbits_depth : Covers current number of genbit responses in FIFO
+            Covers the stage FIFO statuses of a single app. One instance of this covergroup exists per app.
+            - cp_cmd_depth : Covers current number of commands in FIFO
+            - cp_genbits_depth : Covers current number of genbit responses in FIFO
+            - cmd_push_cross : command FIFO fill status x command FIFO write valid x command FIFO write ready
+            - cmd_pop_cross : command FIFO fill status x command FIFO read ready
+            - genbits_pop_cross : genbits FIFO fill status x genbits FIFO read valid x genbits FIFO read ready
+            '''
+    }
+    {
+      name: csrng_sfifo_depth_cross_cg
+      desc: '''
+            Covers the stage FIFO statuses of the apps against each other. A cross has a fixed
+            number of items, so this covergroup names individual apps and is only instantiated for
+            a design with two HW apps and one SW app.
             - cmd_depth_cross : Cross for checking each command FIFO status in different apps
             - genbits_depth_cross : Cross for checking genbits FIFO status in different apps
-            - hw0_cmd_push_cross, hw1_cmd_push_cross, sw_cmd_push_cross : command FIFO fill status x command FIFO write valid x command FIFO write ready
-            - hw0_cmd_pop_cross, hw1_cmd_pop_cross, sw_cmd_pop_cross : command FIFO fill status x command FIFO read ready
-            - hw0_genbits_pop_cross, hw1_genbits_pop_cross, sw_genbits_pop_cross : genbits FIFO fill status x genbits FIFO read valid x genbits FIFO read ready
+            '''
+    }
+    {
+      name: csrng_sw_app_read_cg
+      desc: '''
+            Covers SW reads of the GENBITS and INT_STATE_VAL registers
+            - cp_read_int_state_val : Covers read of INT_STATE_VAL register
+            - cp_read_genbits_reg : Covers read of GENBITS register
+            - cp_sw_app_read : Covers values of CTRL.SW_APP_ENABLE
+            - cp_read_int_state : Covers values of CTRL.READ_INT_STATE
+            '''
+    }
+    {
+      name: csrng_genbits_cg
+      desc: '''
+            Covers FIPS/CC bit in genbits_vld register
+            genbits_fips_cp: Covers GENBITS_FIPS in GENBITS_VLD register
             '''
     }
   ]

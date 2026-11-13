@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,8 @@
 #define OPENTITAN_SW_DEVICE_SILICON_CREATOR_LIB_SIGVERIFY_RSA_KEY_H_
 
 #include <stdint.h>
+
+#include "sw/device/lib/base/macros.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,6 +65,7 @@ typedef struct sigverify_rsa_key {
  * @param key An RSA public key.
  * @return ID of the key.
  */
+OT_WARN_UNUSED_RESULT
 inline uint32_t sigverify_rsa_key_id_get(
     const sigverify_rsa_buffer_t *modulus) {
   return modulus->data[0];

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,21 +27,28 @@ class entropy_src_base_test extends cip_base_test #(
   // Overrides should happen in the specific testcase.
 
   virtual function void configure_env();
-    // seed_cnt only used by smoke test
-    // so there is no need to randomize it.
-    cfg.seed_cnt                       = 1;
+    // Take plusargs into account.
+    int rng_max_delay;
+    bit xht_only_default_rsp;
+    if ($value$plusargs("rng_max_delay=%0d", rng_max_delay)) begin
+      `uvm_info(`gfn, $sformatf("+rng_max_delay specified"), UVM_MEDIUM)
+      cfg.rng_max_delay = rng_max_delay;
+    end
+    if ($value$plusargs("xht_only_default_rsp=%0b", xht_only_default_rsp)) begin
+      `uvm_info(`gfn, $sformatf("+xht_only_default_rsp specified"), UVM_MEDIUM)
+      cfg.xht_only_default_rsp = xht_only_default_rsp;
+    end
+
     cfg.rng_ignores_backpressure       = 0;
-    cfg.otp_en_es_fw_read_pct          = 100;
-    cfg.otp_en_es_fw_read_inval_pct    = 0;
-    cfg.otp_en_es_fw_over_pct          = 100;
-    cfg.otp_en_es_fw_over_inval_pct    = 0;
     cfg.dut_cfg.en_intr_pct            = 75;
-    cfg.dut_cfg.me_regwen_pct          = 100;
     cfg.dut_cfg.sw_regupd_pct          = 100;
 
     cfg.dut_cfg.module_enable_pct      = 100;
     cfg.dut_cfg.type_bypass_pct        = 100;
+    cfg.dut_cfg.esfinal_clr_while_dsbld_pct = 50;
     cfg.dut_cfg.preconfig_disable_pct  = 100;
+    cfg.dut_cfg.fips_flag_pct          = 75;
+    cfg.dut_cfg.rng_fips_pct           = 75;
     // Unless testing bad MuBi's the initial value for fw_ov_insert_start should always be false
     cfg.dut_cfg.fw_ov_insert_start_pct = 0;
 
@@ -58,6 +65,8 @@ class entropy_src_base_test extends cip_base_test #(
     cfg.induce_targeted_transition_pct = 0;
     cfg.dut_cfg.tight_thresholds_pct   = 0;
 
+    // Set the maximum threshold for the observe FIFO threshold randomization to ObserveFifoDepth.
+    cfg.dut_cfg.max_observe_fifo_threshold = entropy_src_reg_pkg::ObserveFifoDepth;
 
   endfunction
 

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -50,7 +50,7 @@
       name: long_msg_and_output
       desc: '''
             Same as the smoke test, except with a message of up to 100KB.
-            Max firmware input size for KMAX is around 392KB, but this is too large for a DV
+            Max firmware input size for KMAC is around 392KB, but this is too large for a DV
             simulation.
             Average input size from firmware would be around 60-100KB, so we use 100KB as a max
             input size for DV, but will enable easy extensibility for emulation testing where we can
@@ -114,7 +114,7 @@
     {
       name: app_with_partial_data
       desc: '''
-            Basd on the kmac_app test, this test will send partial data from application interface
+            Based on the kmac_app test, this test will send partial data from application interface
             by sending `strb` with values other than `8'hFF`.
             Because the scoreboard is cycle accurate and does not support this feature, this test
             will not check `status` and `intr_state` registers, but will check other registers and
@@ -161,10 +161,6 @@
               - If squeezing data, issue Start/Process after issuing Run
             - Incorrect KMAC configurations (e.g. set KMAC strength as 512).
             - Provide software inputs during operation of the application interface
-
-            // TODO: Not all of these errors have been supported yet, and more errors might be
-            //       added later.
-            //       So this might be split into several error tests later on.
             '''
       stage: V2
       tests: ["{name}_error"]
@@ -187,6 +183,24 @@
             '''
       stage: V2
       tests: ["{name}_key_error"]
+    }
+    {
+      name: sideload_invalid
+      desc: ''' Test kmac responses correctly sideloaded key is invalidated.
+            **Stimulus**:
+            - Configure kmac and send keymgr request.
+            - Wait until random FSM app state is entered.
+            - Invalidate the sideloaded key by forcing the .valid signal to 0.
+            - Repeat the above sequence a few times to try different configurations.
+
+            **Check**:
+            - Check error related registers including `err_code`.
+            - Check keymgr interface have responses where all digests are zero and the error
+              bit is set.
+            - Check kmac can resume normal functionalities after processing this error case.
+            '''
+      stage: V2
+      tests: ["{name}_sideload_invalid"]
     }
     {
       name: edn_timeout_error
@@ -385,13 +399,6 @@
             '''
    }
    {
-      name: edn_cg
-      desc: '''
-            Covers that EDN entropy can be received by KMAC while keccak rounds are active/inactive,
-            crossed with a few entropy configuration values (fast entropy, etc...).
-            '''
-    }
-    {
       name: error_cg
       desc: '''
             Covers all error scenarios:

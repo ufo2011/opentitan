@@ -1,4 +1,4 @@
-/* Copyright lowRISC contributors. */
+/* Copyright lowRISC contributors (OpenTitan project). */
 /* Licensed under the Apache License, Version 2.0, see LICENSE for details. */
 /* SPDX-License-Identifier: Apache-2.0 */
 
@@ -15,7 +15,7 @@ OUTPUT_ARCH(riscv)
  */
 __DYNAMIC = 0;
 
-INCLUDE hw/top_earlgrey/sw/autogen/top_earlgrey_memory.ld
+INCLUDE OPENTITAN_TOP_MEMORY_LD
 
 /**
  * The boot address, which indicates the location of the initial interrupt
@@ -24,12 +24,24 @@ INCLUDE hw/top_earlgrey/sw/autogen/top_earlgrey_memory.ld
 _rom_boot_address = ORIGIN(rom);
 
 /**
- * Symbols to be used in the setup of the address translation for ROM_EXT.
+ * Symbols to be used in the setup of the address translation for ROM_EXT and
+ * for checking virtual flash address ranges in `flash_exc_handler.S`.
  */
 _rom_ext_virtual_start_address = ORIGIN(rom_ext_virtual);
 _rom_ext_virtual_size = LENGTH(rom_ext_virtual);
-ASSERT((_rom_ext_virtual_size <= (LENGTH(eflash) / 2)),
-  "Error: rom ext flash is bigger than slot.");
+/*
+ * Sanity check that the remap window topgen computed doesn't exceed the
+ * physical slot it gets mapped into. Compared against the unreduced slot
+ * size -- unlike rom_ext_slot_virtual.ld's placement region, this window's
+ * own size must stay a power of two for ibex_addr_remap_set()'s NAPOT-style
+ * alignment masking, so it is not shrunk by `_nvm_slot_reserved_bytes`.
+ */
+ASSERT((_rom_ext_virtual_size <= (LENGTH(nvm) / 2)),
+  "Error: rom ext NVM is bigger than slot.");
+_owner_virtual_start_address = ORIGIN(owner_virtual);
+_owner_virtual_size = LENGTH(owner_virtual);
+ASSERT((_owner_virtual_size <= (LENGTH(nvm) / 2)),
+  "Error: owner NVM is bigger than slot.");
 
 /* DV Log offset (has to be different to other boot stages). */
 _dv_log_offset = 0x0;
@@ -90,7 +102,6 @@ SECTIONS {
     ASSERT(
         SIZEOF(.vectors) + SIZEOF(.crt) <= _epmp_reset_rx_size,
         "Error: .crt overflows reset ePMP region");
-    . = MAX(., _epmp_reset_rx_size - SIZEOF(.vectors));
   } > rom
 
   /**
@@ -100,6 +111,20 @@ SECTIONS {
     *(.text)
     *(.text.*)
 
+
+    /* Ensure section end is word-aligned. */
+    . = ALIGN(4);
+  } > rom
+
+  /**
+   * ROM ISRs text section, containing the exception handler entry/exit logic
+   * used for handling load access faults due to NVM ECC errors during boot.
+   *
+   * This is placed next to the ".shutdown" section.
+   */
+  .isrs : ALIGN(4) {
+    *(.isrs)
+    *(.isrs.*)
 
     /* Ensure section end is word-aligned. */
     . = ALIGN(4);
@@ -185,8 +210,8 @@ SECTIONS {
    *
    * This is the last thing in rom.
    */
-  .chip_info _chip_info_start : ALIGN(4) {
-    KEEP(*(.chip_info))
+  .chip_info _rom_chip_info_start : ALIGN(4) {
+    KEEP(*(.build_info))
   } > rom
 
   INCLUDE sw/device/info_sections.ld

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,7 @@ class spi_host_overflow_underflow_vseq extends spi_host_tx_rx_vseq;
      fork
       begin : isolation_fork
         fork
-          start_reactive_seq();
+          start_agent_reactive_seqs();
         join_none
         begin
           wait_ready_for_command();
@@ -47,7 +47,7 @@ class spi_host_overflow_underflow_vseq extends spi_host_tx_rx_vseq;
     access_data_fifo(read_q, RxFifo, 1'b0); // attempting empty read error underflow
     check_error(ral.error_status.underflow,1);
 
-    csr_wr(.ptr(ral.configopts[0].clkdiv), .value(16'h28)); // clk div set to 20
+    csr_wr(.ptr(ral.configopts.clkdiv), .value(16'h28)); // clk div set to 20
 
     while (segms_words <= (SPI_HOST_TX_DEPTH + 1))  begin
       check_error(ral.error_status.overflow,0);
@@ -58,7 +58,6 @@ class spi_host_overflow_underflow_vseq extends spi_host_tx_rx_vseq;
 
   virtual task gen_trans();
     generate_transaction();
-    segment = new();
     while (transaction.segments.size() > 0) begin
       segment = transaction.segments.pop_back();
       if (segment.command_reg.direction != RxOnly) begin

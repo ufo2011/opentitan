@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,8 +12,8 @@
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
+#include "hw/top/sensor_ctrl_regs.h"  // Generated.
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "sensor_ctrl_regs.h"  // Generated.
 #include "sw/device/lib/testing/autogen/isr_testutils.h"
 
 OTTF_DEFINE_TEST_CONFIG();
@@ -41,7 +41,7 @@ static sensor_ctrl_isr_ctx_t sensor_ctrl_isr_ctx = {
 /**
  * External interrupt handler.
  */
-void ottf_external_isr(void) {
+void ottf_external_isr(uint32_t *exc_info) {
   dif_sensor_ctrl_irq_t irq_id;
   top_earlgrey_plic_peripheral_t peripheral;
 
@@ -85,7 +85,7 @@ bool test_main(void) {
   CHECK_DIF_OK(dif_sensor_ctrl_irq_set_enabled(
       &sensor_ctrl, kDifSensorCtrlIrqIoStatusChange, kDifToggleEnabled));
 
-  last_io_status = -1 & io_mask;
+  last_io_status = io_mask;
   for (uint32_t i = 0; i < iterations; ++i) {
     LOG_INFO("Waiting for IO change");
     wait_for_interrupt();

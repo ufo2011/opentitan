@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,14 @@
 
 /**
  * @file
- * @brief <a href="/hw/ip/uart/doc/">UART</a> Device Interface Functions
+ * @brief <a href="/book/hw/ip/uart/">UART</a> Device Interface Functions
  */
 
 #include <stdint.h>
 
 #include "sw/device/lib/base/mmio.h"
 
+#include "hw/top/uart_regs.h"
 #include "sw/device/lib/dif/autogen/dif_uart_autogen.h"
 
 #ifdef __cplusplus
@@ -33,6 +34,17 @@ typedef enum dif_uart_parity {
    */
   kDifUartParityEven,
 } dif_uart_parity_t;
+
+/**
+ * Number of characters that the UART RX line should be held low for to trigger
+ * a line break error.
+ */
+typedef enum dif_uart_rx_break_level {
+  kDifUartRxBreakLevel2 = UART_CTRL_RXBLVL_VALUE_BREAK2,
+  kDifUartRxBreakLevel4 = UART_CTRL_RXBLVL_VALUE_BREAK4,
+  kDifUartRxBreakLevel8 = UART_CTRL_RXBLVL_VALUE_BREAK8,
+  kDifUartRxBreakLevel16 = UART_CTRL_RXBLVL_VALUE_BREAK16,
+} dif_uart_rx_break_level_t;
 
 /**
  * Runtime configuration for UART.
@@ -65,6 +77,10 @@ typedef struct dif_uart_config {
    * Whether to enable RX datapath.
    */
   dif_toggle_t rx_enable;
+  /**
+   * Number of characters at which the RX line break error is triggered.
+   */
+  dif_uart_rx_break_level_t rx_break_level;
 } dif_uart_config_t;
 
 /**
@@ -75,6 +91,10 @@ typedef enum dif_uart_watermark {
    * Indicates a one-byte watermark.
    */
   kDifUartWatermarkByte1 = 0,
+  /**
+   * Indicates a two-byte watermark.
+   */
+  kDifUartWatermarkByte2,
   /**
    * Indicates a four-byte watermark.
    */
@@ -88,9 +108,13 @@ typedef enum dif_uart_watermark {
    */
   kDifUartWatermarkByte16,
   /**
-   * Indicates a thirty-byte watermark.
+   * Indicates a thirty-two-byte watermark.
    */
-  kDifUartWatermarkByte30,
+  kDifUartWatermarkByte32,
+  /**
+   * Indicates a sixty-four-byte watermark.
+   */
+  kDifUartWatermarkByte62,
 } dif_uart_watermark_t;
 
 /**
@@ -116,7 +140,7 @@ typedef enum dif_uart_datapath {
  */
 typedef enum dif_uart_loopback {
   /**
-   * Indicates that outgoing TX bits should be recieved through RX.
+   * Indicates that outgoing TX bits should be received through RX.
    */
   kDifUartLoopbackSystem = 0,
   /**
@@ -142,6 +166,20 @@ extern const uint32_t kDifUartFifoSizeBytes;
 OT_WARN_UNUSED_RESULT
 dif_result_t dif_uart_configure(const dif_uart_t *uart,
                                 dif_uart_config_t config);
+
+/**
+ * Set the RX break level.
+ *
+ * This is the number of characters that the RX line must be held low for to
+ * trigger the RX break error.
+ *
+ * @param uart A UART handle.
+ * @param rx_break_level The level to configure.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_uart_rx_break_level_set(
+    const dif_uart_t *uart, dif_uart_rx_break_level_t rx_break_level);
 
 /**
  * Sets the RX FIFO watermark.

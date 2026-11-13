@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,12 +19,11 @@ class chip_sw_exit_test_unlocked_bootstrap_vseq extends chip_sw_base_vseq;
     super.dut_init(reset_kind);
 
     // make sure we are in one of the unlocked states
-    cfg.mem_bkdr_util_h[Otp].otp_write_lc_partition_state(UnlockedStates[unlocked_idx].lc_state);
+    otp_write_lc_partition_state(cfg.mem_bkdr_util_h[Otp], UnlockedStates[unlocked_idx].lc_state);
 
     // backdoorload the otp tokens and associated digest
     otp_exit_token_bits = dec_otp_token_from_lc_csrs(lc_exit_token);
-    cfg.mem_bkdr_util_h[Otp].otp_write_secret0_partition(
-      '0, otp_exit_token_bits);
+    otp_write_secret0_partition(cfg.mem_bkdr_util_h[Otp], '0, otp_exit_token_bits);
 
     //ensure rom_exec_en is 0, so that flash is never reached
     cfg.mem_bkdr_util_h[Otp].write32(otp_ctrl_reg_pkg::CreatorSwCfgRomExecEnOffset, 0);
@@ -51,6 +50,8 @@ class chip_sw_exit_test_unlocked_bootstrap_vseq extends chip_sw_base_vseq;
     // Now program ROM_EXEC_EN for next power cycle.
     cfg.chip_vif.tap_straps_if.drive(JtagTapRvDm);
 
+    // Add delay before drive jtag after strap switch.
+    cfg.clk_rst_vif.wait_clks(5);
     jtag_dm_activation_seq.start(p_sequencer.jtag_sequencer_h);
     `uvm_info(`gfn, $sformatf("rv_dm_activated: %0d", cfg.m_jtag_riscv_agent_cfg.rv_dm_activated),
               UVM_LOW)
@@ -81,21 +82,14 @@ class chip_sw_exit_test_unlocked_bootstrap_vseq extends chip_sw_base_vseq;
     apply_reset();
 
     // setup triggers to bootstrap during the second run
-    cfg.chip_vif.sw_straps_if.drive({3{1'b1}});
+    cfg.use_spi_load_bootstrap = 1'b1;
     `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInBootRom)
 
     // bootstrap the same image
-    spi_device_load_bootstrap({cfg.sw_images[SwTypeTestSlotA], ".64.vmem"});
+    spi_device_load_bootstrap({cfg.sw_images[SwTypeTestSlotA], ".128.vmem"});
 
+    // Disable bootstrap for subsequent boots.
+    cfg.use_spi_load_bootstrap = 1'b0;
   endtask : body
-
-  task post_start();
-    // Disconnect straps driving so that subsequent tests can make use of this interface
-    // without any assumptions.
-    cfg.chip_vif.sw_straps_if.disconnect();
-  endtask : post_start
-
-
-
 
 endclass : chip_sw_exit_test_unlocked_bootstrap_vseq

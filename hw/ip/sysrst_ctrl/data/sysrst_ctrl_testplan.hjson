@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -87,6 +87,26 @@
     }
 
     {
+      name: combo_detect_with_pre_cond
+      desc: '''
+            Verify the combo detection with random action and precondition.
+
+            * Randomly set the input keys combination as precondition by configuring COM_PRE_SEL_CTL_0-3 register.
+            * Randomly set the input keys combination for combo detection by configuring COM_SEL_CTL_0-3 register.
+            * Set the random combo precondition duration via the COM_PRE_DET_CTL_0-3 register.
+            * Set the random combo duration via the COM_DET_CTL_0-3 register.
+            * Randomly select the action to be taken by configuring COM_OUT_CTL_0-3 register.
+            * Set the pulse width via EC_RST_CTL register.
+            * Randomly set the input keys, such that precondition and subsequent combo detection logic are activated randomly.
+            * Read the COMBO_INTR_STATUS register to check whether an interrupt is correctly raised for all the combinations.
+              Clear the interrupt in case it was raised.
+            * Check for bat_disable, rst_req or wake_up_o assertion depending on COM_OUT_CTL_0-3 register
+            '''
+      stage: V2
+      tests: ["sysrst_ctrl_combo_detect_with_pre_cond"]
+    }
+
+    {
       name: auto_block_key_outputs
       desc: '''
             Verify the auto block key output feature.
@@ -132,7 +152,7 @@
     {
       name: pin_input_value_accessibility
       desc: '''
-            Verify the pin input value accessibilty.
+            Verify the pin input value accessibility.
 
             * Trigger the key[0,1,2], ac_present_in, pwrb_in, ec_rst_in_l input pins with random values.
             * Read the PIN_IN_VALUE register and check if the read value is same as input value.
@@ -179,11 +199,24 @@
             * Disable the bus clock to check detection logic works in sleep mode.
             * Trigger the ac_present_i, lid_open_in and ec_rst_l_i input keys.
             * Turn on the bus clock to read the status register.
-            * Read the WKUP_STATUS register to check if the event has occured.
+            * Read the WKUP_STATUS register to check if the event has occurred.
             * Read the ULP_STATUS register and check if the ultra low power wakeup event is detected.
             '''
       stage: V2
       tests: ["sysrst_ctrl_ultra_low_pwr"]
+    }
+
+    {
+      name: sysrst_ctrl_feature_disable
+      desc: '''
+            Verify the feature disable and debounce to idle state transitions
+
+            * Configure COM_DET_CTL, COM_PRE_DET_CTL, ULP_*_DEBOUNCE_CTL
+            * Assert input signals to trigger debounce timer and deassert before debounce timer expires
+            * Check for output and interrupts to make sure design doesn't detected the transitions
+            '''
+      stage: V2
+      tests: ["sysrst_ctrl_feature_disable"]
     }
 
     {

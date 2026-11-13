@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -34,7 +34,7 @@ from mubi import prim_mubi
   // This is a prerequisite for the multibit functions below to work.
   `ASSERT_STATIC_IN_PACKAGE(CheckMuBi${nbits}ValsComplementary_A, MuBi${nbits}True == ~MuBi${nbits}False)
 
-  // Test whether the value is supplied is one of the valid enumerations
+  // Test whether the multibit value is one of the valid enumerations
   function automatic logic mubi${nbits}_test_invalid(mubi${nbits}_t val);
     return ~(val inside {MuBi${nbits}True, MuBi${nbits}False});
   endfunction : mubi${nbits}_test_invalid
@@ -44,12 +44,19 @@ from mubi import prim_mubi
     return (val ? MuBi${nbits}True : MuBi${nbits}False);
   endfunction : mubi${nbits}_bool_to_mubi
 
-  // Test whether the multibit value signals an "enabled" condition.
+  // Test whether the multibit value of type "mubi${nbits}_t" signals an "enabled" condition.
   // The strict version of this function requires
   // the multibit value to equal True.
   function automatic logic mubi${nbits}_test_true_strict(mubi${nbits}_t val);
     return MuBi${nbits}True == val;
   endfunction : mubi${nbits}_test_true_strict
+
+  // Test whether the multibit value of type "logic vector" signals an "enabled" condition.
+  // The strict version of this function requires
+  // the multibit value to equal True.
+  function automatic logic mubi${nbits}_logic_test_true_strict(logic [${nbits-1}:0] val);
+    return MuBi${nbits}True == val;
+  endfunction : mubi${nbits}_logic_test_true_strict
 
   // Test whether the multibit value signals a "disabled" condition.
   // The strict version of this function requires
@@ -147,7 +154,7 @@ from mubi import prim_mubi
   endfunction : mubi${nbits}_or_lo
 
   // Performs a logical AND operation between two multibit values.
-  // Tlos treats "False" as logical 1, and all other values are
+  // This treats "False" as logical 1, and all other values are
   // treated as 0.
   function automatic mubi${nbits}_t mubi${nbits}_and_lo(mubi${nbits}_t a, mubi${nbits}_t b);
     return mubi${nbits}_and(a, b, MuBi${nbits}False);

@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -62,9 +62,9 @@ set_rule_status -rule {E_RST_METASTABILITY} -status {Waived} \
 # Ibex Clock Gating
 set_rule_status -rule E_RST_METASTABILITY -status Waived \
   -expression { \
-    (ResetFlop=~"*.u_rv_core_ibex.u_core.g_clock_en_secure.u_prim_core_busy_flop.gen_generic.u_impl_generic.q_o[0]") && \
-    (MetaStableFlop=~"*.u_rv_core_ibex.u_core.core_clock_gate_i.gen_generic.u_impl_generic.en_latch")} \
-  -comment {If clockgating enble is reset, it affects the gating cell when \
+    (ResetFlop=~"*.u_rv_core_ibex.u_core.g_clock_en_secure.u_prim_core_busy_flop.q_o[0]") && \
+    (MetaStableFlop=~"*.u_rv_core_ibex.u_core.core_clock_gate_i.en_latch")} \
+  -comment {If clockgating enable is reset, it affects the gating cell when \
     CLK is 0 value.}
 
 # PINMUX CSR to SPI_DEV PADs
@@ -124,6 +124,10 @@ set_rule_status -rule E_RST_METASTABILITY -status Waived \
     (MetaStableFlop=~"*.u_clk_io_peri_cg.*")}
 set_rule_status -rule E_RST_METASTABILITY -status Waived \
   -expression {(SourceReset=="POR_N") && \
+    (ResetFlop=~"*.u_clkmgr_aon.*io_spi_host1_sw_en_sync*") && \
+    (MetaStableFlop=~"*.u_clk_io_spi_host1_cg.*")}
+set_rule_status -rule E_RST_METASTABILITY -status Waived \
+  -expression {(SourceReset=="POR_N") && \
     (ResetFlop=~"*.u_clkmgr_aon.*io_div4_peri_sw_en_sync*") && \
     (MetaStableFlop=~"*.u_clk_io_div4_peri_cg.*")}
 set_rule_status -rule E_RST_METASTABILITY -status Waived \
@@ -149,3 +153,30 @@ set_rule_status -rule W_ASYNC_RST_FLOPS -status Waived \
   -expression {(DrivingSignal=~"*.u_rv_dm.u_pm_en_sync.*")} \
   -comment {LifeCycle HW Debug Enable signal is static and determined \
     at boot time.}
+
+# EN sync to EN Latch in CG
+# (io_div4|io_div2|io|usb)_root_ctrl
+create_view_criteria -name PorNRootCtrlCg -rule E_RST_METASTABILITY \
+  -criteria {(SourceReset=="POR_N") && \
+    (ResetFlop=~"*.u_clkmgr_aon.*root_ctrl*") && \
+    (MetaStableFlop=~"*.u_*_root_ctrl.u_cg*")}
+set_rule_status -rule E_RST_METASTABILITY -status Waived \
+  -expression {(SourceReset=="POR_N") && \
+    (ResetFlop=~"*.u_clkmgr_aon.u_main_root_ctrl.u_cg*") && \
+    (MetaStableFlop=~"*.u_clkmgr_aon.u_main_root_ctrl.u_cg*")}
+set_rule_status -rule E_RST_METASTABILITY -status Waived \
+  -expression {(SourceReset=="POR_N") && \
+    (ResetFlop=~"*.u_clkmgr_aon.u_io_div4_root_ctrl.u_cg*") && \
+    (MetaStableFlop=~"*.u_clkmgr_aon.u_io_div4_root_ctrl.u_cg*")}
+set_rule_status -rule E_RST_METASTABILITY -status Waived \
+  -expression {(SourceReset=="POR_N") && \
+    (ResetFlop=~"*.u_clkmgr_aon.u_io_div2_root_ctrl.u_cg*") && \
+    (MetaStableFlop=~"*.u_clkmgr_aon.u_io_div2_root_ctrl.u_cg*")}
+set_rule_status -rule E_RST_METASTABILITY -status Waived \
+  -expression {(SourceReset=="POR_N") && \
+    (ResetFlop=~"*.u_clkmgr_aon.u_io_root_ctrl.u_cg*") && \
+    (MetaStableFlop=~"*.u_clkmgr_aon.u_io_root_ctrl.u_cg*")}
+set_rule_status -rule E_RST_METASTABILITY -status Waived \
+  -expression {(SourceReset=="POR_N") && \
+    (ResetFlop=~"*.u_clkmgr_aon.u_usb_root_ctrl.u_cg*") && \
+    (MetaStableFlop=~"*.u_clkmgr_aon.u_usb_root_ctrl.u_cg*")}

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@
 `include "kmac_burst_write_vseq.sv"
 `include "kmac_app_vseq.sv"
 `include "kmac_app_with_partial_data_vseq.sv"
+`include "kmac_sideload_invalid_vseq.sv"
 `include "kmac_mubi_vseq.sv"
 `include "kmac_entropy_refresh_vseq.sv"
 `include "kmac_error_vseq.sv"

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -64,7 +64,8 @@ static volatile const uint8_t kLcExitToken[LC_TOKEN_SIZE] = {
 bool execute_lc_ctrl_transition_test(bool use_ext_clk) {
   LOG_INFO("Start LC_CTRL transition test.");
 
-  mmio_region_t lc_reg = mmio_region_from_addr(TOP_EARLGREY_LC_CTRL_BASE_ADDR);
+  mmio_region_t lc_reg =
+      mmio_region_from_addr(TOP_EARLGREY_LC_CTRL_REGS_BASE_ADDR);
   CHECK_DIF_OK(dif_lc_ctrl_init(lc_reg, &lc));
 
   LOG_INFO("Read and check LC state.");
@@ -80,20 +81,23 @@ bool execute_lc_ctrl_transition_test(bool use_ext_clk) {
   if (curr_state == kDifLcCtrlStateTestUnlocked2) {
     // LC TestUnlocked2 is the intial test state for this sequence.
     // The sequence will check if lc_count matches the preload value.
-    lc_ctrl_testutils_check_transition_count(&lc, kLcStateTransitionCount);
+    CHECK_STATUS_OK(
+        lc_ctrl_testutils_check_transition_count(&lc, kLcStateTransitionCount));
 
     // Request lc_state transfer to Dev state.
     dif_lc_ctrl_token_t token;
     for (int i = 0; i < LC_TOKEN_SIZE; i++) {
       token.data[i] = kLcExitToken[i];
     }
+    // Acquire the mutex, and release it after triggering the transition.
     CHECK_DIF_OK(dif_lc_ctrl_mutex_try_acquire(&lc));
+    LOG_INFO("Acquired lc_ctrl mutex by software");
     CHECK_DIF_OK(
         dif_lc_ctrl_configure(&lc, kDifLcCtrlStateDev, use_ext_clk, &token),
         "LC transition configuration failed!");
     CHECK_DIF_OK(dif_lc_ctrl_transition(&lc), "LC transition failed!");
-
-    LOG_INFO("Waiting for LC transtition done and reboot.");
+    CHECK_DIF_OK(dif_lc_ctrl_mutex_release(&lc));
+    LOG_INFO("Waiting for LC transition done and reboot.");
     wait_for_interrupt();
 
   } else {
@@ -101,7 +105,8 @@ bool execute_lc_ctrl_transition_test(bool use_ext_clk) {
     // Once the sequence checks current state and count via CSRs, the test can
     // exit successfully.
     CHECK(curr_state == kDifLcCtrlStateDev, "State transition failed!");
-    lc_ctrl_testutils_check_transition_count(&lc, kLcStateTransitionCount + 1);
+    CHECK_STATUS_OK(lc_ctrl_testutils_check_transition_count(
+        &lc, kLcStateTransitionCount + 1));
     return true;
   }
 

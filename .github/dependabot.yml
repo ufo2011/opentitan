@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,10 +17,5 @@ updates:
       prefix: "[dependabot]"
       reviewers:
         - "lowRISC/ot-python-reviewers"
-    # Ignore packages fetched from GitHub URLs.
-    ignore:
-      - dependency-name: "*fusesoc*"
-      - dependency-name: "*edalize*"
-      - dependency-name: "*chipwhisperer*"
     reviewers:
       - "timothytrippel"

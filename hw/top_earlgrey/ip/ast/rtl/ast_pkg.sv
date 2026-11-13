@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //############################################################################
@@ -8,6 +8,16 @@
 `ifdef __AST_PKG_SV
 `else
 `define __AST_PKG_SV
+
+`define PAD2AST_WIRES     \
+{ mio_in_raw[MioPadIoc3], \
+  mio_in_raw[MioPadIoc2], \
+  mio_in_raw[MioPadIoc1], \
+  mio_in_raw[MioPadIob2], \
+  mio_in_raw[MioPadIob1], \
+  mio_in_raw[MioPadIob0], \
+  mio_in_raw[MioPadIoa5], \
+  mio_in_raw[MioPadIoa4] }
 
 package ast_pkg;
 
@@ -26,34 +36,146 @@ parameter int unsigned Ot3Sel     = 8;
 parameter int unsigned Ot4Sel     = 9;
 parameter int unsigned Ot5Sel     = 10;
 //
-parameter int unsigned Lc2HcTrCyc = 102;  // ((99+1)+(3+1))x5 = 520 us
-parameter int unsigned Hc2LcTrCyc = 38;   // ((35+1)+(3+1))x5 = 200 us
+parameter int unsigned Lc2HcTrCyc = 112;  // ((109+1)+(3+1))x5 = 570 us
+parameter int unsigned Hc2LcTrCyc = 142;  // ((139+1)+(3+1))x5 = 720 us
 //
 parameter int unsigned EntropyStreams   = 4;
 parameter int unsigned AdcChannels      = 2;
 parameter int unsigned AdcDataWidth     = 10;
 parameter int unsigned UsbCalibWidth    = 20;
 parameter int unsigned Ast2PadOutWidth  = 9;
-parameter int unsigned Pad2AstInWidth   = 9;
+parameter int unsigned Pad2AstInWidth   = 8;
 //
 // AstRegsNum is the number of AST registers programmed during initialization. It includes
 // the register that marks the finalization of init, which asserts the ast_init_done_o.
 // The offset of this register is represented with the AstLastRegOffset parameter.
-parameter int unsigned AstRegsNum       = 39;
+parameter int unsigned AstRegsNum       = 54;
 parameter int unsigned AstLastRegOffset = (AstRegsNum-1)*4;
+
+// Number of physical RAM macros behind each sram_ctrl instance.
+parameter int unsigned SramCtrlMainNumRamInst = 1;
+parameter int unsigned SramCtrlSecNumRamInst  = 1;
+parameter int unsigned SramCtrlRetNumRamInst  = 1;
+parameter int unsigned SramCtrlMetaNumRamInst = 1;
 
 // Memories Read-Write Margin Interface
 typedef struct packed {
-  logic          marg_en_a;
-  logic [4-1:0]  marg_a;
-  logic          marg_en_b;
-  logic [4-1:0]  marg_b;
-} dpm_rm_t;
+  logic [10-1:0] cfg;
+} tpm_rm_t;
 
 typedef struct packed {
-  logic          marg_en;
-  logic [4-1:0]  marg;
+  logic [13-1:0] cfg;
 } spm_rm_t;
+
+typedef struct packed {
+  logic [4-1:0] cfg;
+} rom_rm_t;
+
+// Aggregated memory configuration interface per partition.
+
+// Full structure. TODO: delete once ast.sv is no longer required.
+typedef struct packed {
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              otbn_imem;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              otbn_dmem;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i2c0;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i2c1;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i2c2;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c0_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c0_dat;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c0_dct;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c1_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c1_dat;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c1_dct;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              usbdev_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [ibex_pkg::IC_NUM_WAYS-1:0]  rv_core_ibex_icache_tag;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [ibex_pkg::IC_NUM_WAYS-1:0]  rv_core_ibex_icache_data;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [SramCtrlMainNumRamInst-1:0] sram_ctrl_main;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [SramCtrlSecNumRamInst-1:0]  sram_ctrl_sec;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [SramCtrlRetNumRamInst-1:0]  sram_ctrl_ret;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [SramCtrlMetaNumRamInst-1:0] sram_ctrl_meta;
+  prim_ram_1r1w_pkg::ram_1r1w_cfg_req_t                          spi_device_sys2spi;
+  prim_ram_1r1w_pkg::ram_1r1w_cfg_req_t                          spi_device_spi2sys;
+  prim_rom_pkg::rom_cfg_req_t                                    rom_ctrl_rom;
+} ast_mem_cfg_req_t;
+
+typedef struct packed {
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              otbn_imem;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              otbn_dmem;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i2c0;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i2c1;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i2c2;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c0_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c0_dat;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c0_dct;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c1_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c1_dat;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              i3c1_dct;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t                              usbdev_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [ibex_pkg::IC_NUM_WAYS-1:0]  rv_core_ibex_icache_tag;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [ibex_pkg::IC_NUM_WAYS-1:0]  rv_core_ibex_icache_data;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [SramCtrlMainNumRamInst-1:0] sram_ctrl_main;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [SramCtrlSecNumRamInst-1:0]  sram_ctrl_sec;
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [SramCtrlMetaNumRamInst-1:0] sram_ctrl_meta;
+  prim_ram_1r1w_pkg::ram_1r1w_cfg_req_t                          spi_device_sys2spi;
+  prim_ram_1r1w_pkg::ram_1r1w_cfg_req_t                          spi_device_spi2sys;
+  prim_rom_pkg::rom_cfg_req_t                                    rom_ctrl_rom;
+} ast_mem_cfg_primary_req_t;
+
+typedef struct packed {
+  prim_ram_1p_pkg::ram_1p_cfg_req_t [SramCtrlRetNumRamInst-1:0]  sram_ctrl_ret;
+} ast_mem_cfg_secondary_req_t;
+
+// Full structure. TODO: delete once ast.sv is no longer required.
+typedef struct packed {
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              otbn_imem;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              otbn_dmem;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i2c0;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i2c1;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i2c2;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c0_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c0_dat;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c0_dct;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c1_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c1_dat;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c1_dct;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              usbdev_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [ibex_pkg::IC_NUM_WAYS-1:0]  rv_core_ibex_icache_tag;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [ibex_pkg::IC_NUM_WAYS-1:0]  rv_core_ibex_icache_data;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [SramCtrlMainNumRamInst-1:0] sram_ctrl_main;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [SramCtrlSecNumRamInst-1:0]  sram_ctrl_sec;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [SramCtrlRetNumRamInst-1:0]  sram_ctrl_ret;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [SramCtrlMetaNumRamInst-1:0] sram_ctrl_meta;
+  prim_ram_1r1w_pkg::ram_1r1w_cfg_rsp_t                          spi_device_sys2spi;
+  prim_ram_1r1w_pkg::ram_1r1w_cfg_rsp_t                          spi_device_spi2sys;
+  prim_rom_pkg::rom_cfg_rsp_t                                    rom_ctrl_rom;
+} ast_mem_cfg_rsp_t;
+
+typedef struct packed {
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              otbn_imem;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              otbn_dmem;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i2c0;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i2c1;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i2c2;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c0_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c0_dat;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c0_dct;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c1_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c1_dat;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              i3c1_dct;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t                              usbdev_ram;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [ibex_pkg::IC_NUM_WAYS-1:0]  rv_core_ibex_icache_tag;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [ibex_pkg::IC_NUM_WAYS-1:0]  rv_core_ibex_icache_data;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [SramCtrlMainNumRamInst-1:0] sram_ctrl_main;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [SramCtrlSecNumRamInst-1:0]  sram_ctrl_sec;
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [SramCtrlMetaNumRamInst-1:0] sram_ctrl_meta;
+  prim_ram_1r1w_pkg::ram_1r1w_cfg_rsp_t                          spi_device_sys2spi;
+  prim_ram_1r1w_pkg::ram_1r1w_cfg_rsp_t                          spi_device_spi2sys;
+  prim_rom_pkg::rom_cfg_rsp_t                                    rom_ctrl_rom;
+} ast_mem_cfg_primary_rsp_t;
+
+typedef struct packed {
+  prim_ram_1p_pkg::ram_1p_cfg_rsp_t [SramCtrlRetNumRamInst-1:0]  sram_ctrl_ret;
+} ast_mem_cfg_secondary_rsp_t;
 
 // ADC Interface
 typedef struct packed {
@@ -100,6 +222,14 @@ typedef struct packed {
   logic [NumIoRails-1:0] io_pok;
 } ast_pwst_t;
 
+typedef struct packed {
+  logic vcc;    // VCC Supply Test for OS FPGA
+  logic vcaon;  // VCAON Supply Test for OS FPGA
+  logic vcmain; // VCMAIN Supply Test for OS FPGA
+  logic vioa;   // VIOA Rail Supply Test for OS FPGA
+  logic viob;   // VIOB Rail Supply Test for OS FPGA
+} ast_vx_supp_t;
+
 // Alerts Interface
 typedef struct packed {
   logic        p;
@@ -121,7 +251,7 @@ typedef enum logic {
   SwAck  = 1
 } ast_ack_mode_e;
 
-// Clocks Oschillator Bypass
+// Clocks Oscillator Bypass
 typedef struct packed {
   logic     usb;
   logic     sys;
@@ -153,6 +283,13 @@ typedef struct packed {
   ast_omdl_e             obmsl;
   prim_mubi_pkg::mubi4_t obmen;
 } ast_obs_ctrl_t;
+
+typedef struct packed {
+  logic [8-1:0] fla_obs; // FLASH Observe Bus
+  logic [8-1:0] otp_obs; // OTP Observe Bus
+  logic [8-1:0] otm_obs; // OT Modules Observe Bus
+  logic usb_obs;         // USB DIFF RX Observe
+} ast_obs_bus_t;
 
 endpackage  // of ast_pkg
 `endif  // of __AST_PKG_SV

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,8 @@
 
 /**
  * @file
- * @brief <a href="/hw/ip/alert_handler/doc/">Alert handler</a> Device Interface
- * Functions
+ * @brief <a href="/book/hw/ip/alert_handler/">Alert handler</a> Device
+ * Interface Functions
  */
 
 #include <stdint.h>
@@ -133,6 +133,18 @@ typedef enum dif_alert_handler_class_state {
   kDifAlertHandlerClassStateTimeout,
 
   /**
+   * The "fsm_error" state. This is a terminal state indicating the FSM
+   * has been glitched.
+   */
+  kDifAlertHandlerClassStateFsmError,
+  /**
+   * The terminal state. Most configurations will never reach this state, since
+   * one of the previous phases will use an escalation signal to reset the
+   * device.
+   */
+  kDifAlertHandlerClassStateTerminal,
+
+  /**
    * The zeroth escalation phase.
    */
   kDifAlertHandlerClassStatePhase0,
@@ -148,13 +160,6 @@ typedef enum dif_alert_handler_class_state {
    * The third escalation phase.
    */
   kDifAlertHandlerClassStatePhase3,
-
-  /**
-   * The terminal state. Most configurations will never reach this state, since
-   * one of the previous phases will use an escalation signal to reset the
-   * device.
-   */
-  kDifAlertHandlerClassStateTerminal,
 } dif_alert_handler_class_state_t;
 
 /**
@@ -373,6 +378,21 @@ dif_result_t dif_alert_handler_configure_class(
     dif_alert_handler_class_t alert_class,
     dif_alert_handler_class_config_t config, dif_toggle_t enabled,
     dif_toggle_t locked);
+
+/**
+ * Configures the crash dump trigger for an alert class in the alert
+ * handler.
+ *
+ * @param alert_handler An alert handler handle.
+ * @param alert_class The class to be configured.
+ * @param crashdump_phase The crash dump trigger phase.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_alert_handler_crash_dump_trigger_set(
+    const dif_alert_handler_t *alert_handler,
+    dif_alert_handler_class_t alert_class,
+    dif_alert_handler_class_state_t crashdump_phase);
 
 /**
  * Configures the ping timer in the alert handler.
@@ -674,6 +694,19 @@ dif_result_t dif_alert_handler_get_escalation_counter(
     dif_alert_handler_class_t alert_class, uint32_t *cycles);
 
 /**
+ * Checks whether this class is enabled.
+ *
+ * @param alert_handler An alert handler handle.
+ * @param alert_class The class to check.
+ * @param[out] is_enabled Out-param for the enablement state.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_alert_handler_is_class_enabled(
+    const dif_alert_handler_t *alert_handler,
+    dif_alert_handler_class_t alert_class, bool *is_enabled);
+
+/**
  * Gets the current state of this class.
  *
  * See `dif_alert_handler_class_state_t` for potential states.
@@ -688,6 +721,32 @@ dif_result_t dif_alert_handler_get_class_state(
     const dif_alert_handler_t *alert_handler,
     dif_alert_handler_class_t alert_class,
     dif_alert_handler_class_state_t *state);
+
+/**
+ * Check whether an alert is currently enabled.
+ *
+ * @param alert_handler An alert handler handle.
+ * @param alert The alert to check enablement for.
+ * @param[out] is_enabled Out-param for the enabled state.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_alert_handler_alert_is_enabled(
+    const dif_alert_handler_t *alert_handler, dif_alert_handler_alert_t alert,
+    dif_toggle_t *is_enabled);
+
+/**
+ * Enable or disable a specific alert.
+ *
+ * @param alert_handler An alert handler handle.
+ * @param alert The alert to set enablement for.
+ * @param[out] enabled The enablement state to set.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_alert_handler_alert_set_enabled(
+    const dif_alert_handler_t *alert_handler, dif_alert_handler_alert_t alert,
+    dif_toggle_t enabled);
 
 #ifdef __cplusplus
 }  // extern "C"

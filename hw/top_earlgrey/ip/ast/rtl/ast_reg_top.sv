@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -16,10 +16,7 @@ module ast_reg_top (
   input  ast_reg_pkg::ast_hw2reg_t hw2reg, // Read
 
   // Integrity check errors
-  output logic intg_err_o,
-
-  // Config
-  input devmode_i // If 1, explicit error return for unmapped register access
+  output logic intg_err_o
 );
 
   import ast_reg_pkg::* ;
@@ -55,9 +52,9 @@ module ast_reg_top (
 
   // also check for spurious write enables
   logic reg_we_err;
-  logic [43:0] reg_we_check;
+  logic [58:0] reg_we_check;
   prim_reg_we_check #(
-    .OneHotWidth(44)
+    .OneHotWidth(59)
   ) u_prim_reg_we_check (
     .clk_i(clk_i),
     .rst_ni(rst_ni),
@@ -119,7 +116,7 @@ module ast_reg_top (
   // cdc oversampling signals
 
   assign reg_rdata = reg_rdata_next ;
-  assign reg_error = (devmode_i & addrmiss) | wr_err | intg_err;
+  assign reg_error = addrmiss | wr_err | intg_err;
 
   // Define SW related signals
   // Format: <reg>_<field>_{wd|we|qs}
@@ -232,6 +229,51 @@ module ast_reg_top (
   logic rega37_we;
   logic [31:0] rega37_qs;
   logic [31:0] rega37_wd;
+  logic rega38_we;
+  logic [31:0] rega38_qs;
+  logic [31:0] rega38_wd;
+  logic rega39_we;
+  logic [31:0] rega39_qs;
+  logic [31:0] rega39_wd;
+  logic rega40_we;
+  logic [31:0] rega40_qs;
+  logic [31:0] rega40_wd;
+  logic rega41_we;
+  logic [31:0] rega41_qs;
+  logic [31:0] rega41_wd;
+  logic rega42_we;
+  logic [31:0] rega42_qs;
+  logic [31:0] rega42_wd;
+  logic rega43_we;
+  logic [31:0] rega43_qs;
+  logic [31:0] rega43_wd;
+  logic rega44_we;
+  logic [31:0] rega44_qs;
+  logic [31:0] rega44_wd;
+  logic rega45_we;
+  logic [31:0] rega45_qs;
+  logic [31:0] rega45_wd;
+  logic rega46_we;
+  logic [31:0] rega46_qs;
+  logic [31:0] rega46_wd;
+  logic rega47_we;
+  logic [31:0] rega47_qs;
+  logic [31:0] rega47_wd;
+  logic rega48_we;
+  logic [31:0] rega48_qs;
+  logic [31:0] rega48_wd;
+  logic rega49_we;
+  logic [31:0] rega49_qs;
+  logic [31:0] rega49_wd;
+  logic rega50_we;
+  logic [31:0] rega50_qs;
+  logic [31:0] rega50_wd;
+  logic rega51_we;
+  logic [31:0] rega51_qs;
+  logic [31:0] rega51_wd;
+  logic rega52_we;
+  logic [31:0] rega52_qs;
+  logic [31:0] rega52_wd;
   logic regal_we;
   logic [31:0] regal_wd;
   logic regb_0_we;
@@ -255,10 +297,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_rega0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -282,10 +326,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (32'h1)
+    .RESVAL  (32'h1),
+    .Mubi    (1'b0)
   ) u_rega1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -309,10 +355,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h2)
+    .RESVAL  (32'h2),
+    .Mubi    (1'b0)
   ) u_rega2 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega2_we),
@@ -336,10 +384,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h3)
+    .RESVAL  (32'h3),
+    .Mubi    (1'b0)
   ) u_rega3 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega3_we),
@@ -363,10 +413,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h4)
+    .RESVAL  (32'h4),
+    .Mubi    (1'b0)
   ) u_rega4 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega4_we),
@@ -390,10 +442,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h5)
+    .RESVAL  (32'h5),
+    .Mubi    (1'b0)
   ) u_rega5 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega5_we),
@@ -417,10 +471,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h6)
+    .RESVAL  (32'h6),
+    .Mubi    (1'b0)
   ) u_rega6 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega6_we),
@@ -444,10 +500,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h7)
+    .RESVAL  (32'h7),
+    .Mubi    (1'b0)
   ) u_rega7 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega7_we),
@@ -471,10 +529,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h8)
+    .RESVAL  (32'h8),
+    .Mubi    (1'b0)
   ) u_rega8 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega8_we),
@@ -498,10 +558,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h9)
+    .RESVAL  (32'h9),
+    .Mubi    (1'b0)
   ) u_rega9 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega9_we),
@@ -525,10 +587,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'ha)
+    .RESVAL  (32'ha),
+    .Mubi    (1'b0)
   ) u_rega10 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega10_we),
@@ -552,10 +616,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'hb)
+    .RESVAL  (32'hb),
+    .Mubi    (1'b0)
   ) u_rega11 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega11_we),
@@ -579,10 +645,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'hc)
+    .RESVAL  (32'hc),
+    .Mubi    (1'b0)
   ) u_rega12 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega12_we),
@@ -606,10 +674,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'hd)
+    .RESVAL  (32'hd),
+    .Mubi    (1'b0)
   ) u_rega13 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega13_we),
@@ -633,10 +703,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'he)
+    .RESVAL  (32'he),
+    .Mubi    (1'b0)
   ) u_rega14 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega14_we),
@@ -660,10 +732,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'hf)
+    .RESVAL  (32'hf),
+    .Mubi    (1'b0)
   ) u_rega15 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega15_we),
@@ -687,10 +761,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h10)
+    .RESVAL  (32'h10),
+    .Mubi    (1'b0)
   ) u_rega16 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega16_we),
@@ -714,10 +790,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h11)
+    .RESVAL  (32'h11),
+    .Mubi    (1'b0)
   ) u_rega17 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega17_we),
@@ -741,10 +819,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h12)
+    .RESVAL  (32'h12),
+    .Mubi    (1'b0)
   ) u_rega18 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega18_we),
@@ -768,10 +848,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h13)
+    .RESVAL  (32'h13),
+    .Mubi    (1'b0)
   ) u_rega19 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega19_we),
@@ -795,10 +877,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h14)
+    .RESVAL  (32'h14),
+    .Mubi    (1'b0)
   ) u_rega20 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega20_we),
@@ -822,10 +906,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h15)
+    .RESVAL  (32'h15),
+    .Mubi    (1'b0)
   ) u_rega21 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega21_we),
@@ -849,10 +935,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h16)
+    .RESVAL  (32'h16),
+    .Mubi    (1'b0)
   ) u_rega22 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega22_we),
@@ -876,10 +964,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h17)
+    .RESVAL  (32'h17),
+    .Mubi    (1'b0)
   ) u_rega23 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega23_we),
@@ -903,10 +993,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h18)
+    .RESVAL  (32'h18),
+    .Mubi    (1'b0)
   ) u_rega24 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega24_we),
@@ -930,10 +1022,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h19)
+    .RESVAL  (32'h19),
+    .Mubi    (1'b0)
   ) u_rega25 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega25_we),
@@ -957,10 +1051,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h1a)
+    .RESVAL  (32'h1a),
+    .Mubi    (1'b0)
   ) u_rega26 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega26_we),
@@ -984,10 +1080,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h1b)
+    .RESVAL  (32'h1b),
+    .Mubi    (1'b0)
   ) u_rega27 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega27_we),
@@ -1011,10 +1109,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (32'h1c)
+    .RESVAL  (32'h1c),
+    .Mubi    (1'b0)
   ) u_rega28 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -1038,10 +1138,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h1d)
+    .RESVAL  (32'h1d),
+    .Mubi    (1'b0)
   ) u_rega29 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega29_we),
@@ -1065,10 +1167,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h1e)
+    .RESVAL  (32'h1e),
+    .Mubi    (1'b0)
   ) u_rega30 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega30_we),
@@ -1092,10 +1196,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h1f)
+    .RESVAL  (32'h1f),
+    .Mubi    (1'b0)
   ) u_rega31 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega31_we),
@@ -1119,10 +1225,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h20)
+    .RESVAL  (32'h20),
+    .Mubi    (1'b0)
   ) u_rega32 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega32_we),
@@ -1146,10 +1254,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h21)
+    .RESVAL  (32'h21),
+    .Mubi    (1'b0)
   ) u_rega33 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega33_we),
@@ -1173,10 +1283,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h22)
+    .RESVAL  (32'h22),
+    .Mubi    (1'b0)
   ) u_rega34 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega34_we),
@@ -1200,10 +1312,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h23)
+    .RESVAL  (32'h23),
+    .Mubi    (1'b0)
   ) u_rega35 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega35_we),
@@ -1227,10 +1341,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h24)
+    .RESVAL  (32'h24),
+    .Mubi    (1'b0)
   ) u_rega36 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega36_we),
@@ -1254,10 +1370,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h25)
+    .RESVAL  (32'h25),
+    .Mubi    (1'b0)
   ) u_rega37 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (rega37_we),
@@ -1274,6 +1392,441 @@ module ast_reg_top (
 
     // to register interface (read)
     .qs     (rega37_qs)
+  );
+
+
+  // R[rega38]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h26),
+    .Mubi    (1'b0)
+  ) u_rega38 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega38_we),
+    .wd     (rega38_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega38.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega38_qs)
+  );
+
+
+  // R[rega39]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h27),
+    .Mubi    (1'b0)
+  ) u_rega39 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega39_we),
+    .wd     (rega39_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega39.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega39_qs)
+  );
+
+
+  // R[rega40]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h28),
+    .Mubi    (1'b0)
+  ) u_rega40 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega40_we),
+    .wd     (rega40_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega40.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega40_qs)
+  );
+
+
+  // R[rega41]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h29),
+    .Mubi    (1'b0)
+  ) u_rega41 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega41_we),
+    .wd     (rega41_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega41.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega41_qs)
+  );
+
+
+  // R[rega42]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h2a),
+    .Mubi    (1'b0)
+  ) u_rega42 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega42_we),
+    .wd     (rega42_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega42.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega42_qs)
+  );
+
+
+  // R[rega43]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h2b),
+    .Mubi    (1'b0)
+  ) u_rega43 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega43_we),
+    .wd     (rega43_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega43.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega43_qs)
+  );
+
+
+  // R[rega44]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h2c),
+    .Mubi    (1'b0)
+  ) u_rega44 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega44_we),
+    .wd     (rega44_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega44.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega44_qs)
+  );
+
+
+  // R[rega45]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h2d),
+    .Mubi    (1'b0)
+  ) u_rega45 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega45_we),
+    .wd     (rega45_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega45.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega45_qs)
+  );
+
+
+  // R[rega46]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h2e),
+    .Mubi    (1'b0)
+  ) u_rega46 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega46_we),
+    .wd     (rega46_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega46.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega46_qs)
+  );
+
+
+  // R[rega47]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h2f),
+    .Mubi    (1'b0)
+  ) u_rega47 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega47_we),
+    .wd     (rega47_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega47.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega47_qs)
+  );
+
+
+  // R[rega48]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h30),
+    .Mubi    (1'b0)
+  ) u_rega48 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega48_we),
+    .wd     (rega48_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega48.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega48_qs)
+  );
+
+
+  // R[rega49]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h31),
+    .Mubi    (1'b0)
+  ) u_rega49 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega49_we),
+    .wd     (rega49_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega49.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega49_qs)
+  );
+
+
+  // R[rega50]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h32),
+    .Mubi    (1'b0)
+  ) u_rega50 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega50_we),
+    .wd     (rega50_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega50.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega50_qs)
+  );
+
+
+  // R[rega51]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h33),
+    .Mubi    (1'b0)
+  ) u_rega51 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega51_we),
+    .wd     (rega51_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega51.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega51_qs)
+  );
+
+
+  // R[rega52]: V(False)
+  prim_subreg #(
+    .DW      (32),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (32'h34),
+    .Mubi    (1'b0)
+  ) u_rega52 (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (rega52_we),
+    .wd     (rega52_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.rega52.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (rega52_qs)
   );
 
 
@@ -1302,10 +1855,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_regb_0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (regb_0_we),
@@ -1330,10 +1885,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_regb_1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (regb_1_we),
@@ -1358,10 +1915,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_regb_2 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (regb_2_we),
@@ -1386,10 +1945,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_regb_3 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (regb_3_we),
@@ -1414,10 +1975,12 @@ module ast_reg_top (
   prim_subreg #(
     .DW      (32),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (32'h0),
+    .Mubi    (1'b0)
   ) u_regb_4 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (regb_4_we),
@@ -1438,9 +2001,8 @@ module ast_reg_top (
 
 
 
-  logic [43:0] addr_hit;
+  logic [58:0] addr_hit;
   always_comb begin
-    addr_hit = '0;
     addr_hit[ 0] = (reg_addr == AST_REGA0_OFFSET);
     addr_hit[ 1] = (reg_addr == AST_REGA1_OFFSET);
     addr_hit[ 2] = (reg_addr == AST_REGA2_OFFSET);
@@ -1479,12 +2041,27 @@ module ast_reg_top (
     addr_hit[35] = (reg_addr == AST_REGA35_OFFSET);
     addr_hit[36] = (reg_addr == AST_REGA36_OFFSET);
     addr_hit[37] = (reg_addr == AST_REGA37_OFFSET);
-    addr_hit[38] = (reg_addr == AST_REGAL_OFFSET);
-    addr_hit[39] = (reg_addr == AST_REGB_0_OFFSET);
-    addr_hit[40] = (reg_addr == AST_REGB_1_OFFSET);
-    addr_hit[41] = (reg_addr == AST_REGB_2_OFFSET);
-    addr_hit[42] = (reg_addr == AST_REGB_3_OFFSET);
-    addr_hit[43] = (reg_addr == AST_REGB_4_OFFSET);
+    addr_hit[38] = (reg_addr == AST_REGA38_OFFSET);
+    addr_hit[39] = (reg_addr == AST_REGA39_OFFSET);
+    addr_hit[40] = (reg_addr == AST_REGA40_OFFSET);
+    addr_hit[41] = (reg_addr == AST_REGA41_OFFSET);
+    addr_hit[42] = (reg_addr == AST_REGA42_OFFSET);
+    addr_hit[43] = (reg_addr == AST_REGA43_OFFSET);
+    addr_hit[44] = (reg_addr == AST_REGA44_OFFSET);
+    addr_hit[45] = (reg_addr == AST_REGA45_OFFSET);
+    addr_hit[46] = (reg_addr == AST_REGA46_OFFSET);
+    addr_hit[47] = (reg_addr == AST_REGA47_OFFSET);
+    addr_hit[48] = (reg_addr == AST_REGA48_OFFSET);
+    addr_hit[49] = (reg_addr == AST_REGA49_OFFSET);
+    addr_hit[50] = (reg_addr == AST_REGA50_OFFSET);
+    addr_hit[51] = (reg_addr == AST_REGA51_OFFSET);
+    addr_hit[52] = (reg_addr == AST_REGA52_OFFSET);
+    addr_hit[53] = (reg_addr == AST_REGAL_OFFSET);
+    addr_hit[54] = (reg_addr == AST_REGB_0_OFFSET);
+    addr_hit[55] = (reg_addr == AST_REGB_1_OFFSET);
+    addr_hit[56] = (reg_addr == AST_REGB_2_OFFSET);
+    addr_hit[57] = (reg_addr == AST_REGB_3_OFFSET);
+    addr_hit[58] = (reg_addr == AST_REGB_4_OFFSET);
   end
 
   assign addrmiss = (reg_re || reg_we) ? ~|addr_hit : 1'b0 ;
@@ -1535,7 +2112,22 @@ module ast_reg_top (
                (addr_hit[40] & (|(AST_PERMIT[40] & ~reg_be))) |
                (addr_hit[41] & (|(AST_PERMIT[41] & ~reg_be))) |
                (addr_hit[42] & (|(AST_PERMIT[42] & ~reg_be))) |
-               (addr_hit[43] & (|(AST_PERMIT[43] & ~reg_be)))));
+               (addr_hit[43] & (|(AST_PERMIT[43] & ~reg_be))) |
+               (addr_hit[44] & (|(AST_PERMIT[44] & ~reg_be))) |
+               (addr_hit[45] & (|(AST_PERMIT[45] & ~reg_be))) |
+               (addr_hit[46] & (|(AST_PERMIT[46] & ~reg_be))) |
+               (addr_hit[47] & (|(AST_PERMIT[47] & ~reg_be))) |
+               (addr_hit[48] & (|(AST_PERMIT[48] & ~reg_be))) |
+               (addr_hit[49] & (|(AST_PERMIT[49] & ~reg_be))) |
+               (addr_hit[50] & (|(AST_PERMIT[50] & ~reg_be))) |
+               (addr_hit[51] & (|(AST_PERMIT[51] & ~reg_be))) |
+               (addr_hit[52] & (|(AST_PERMIT[52] & ~reg_be))) |
+               (addr_hit[53] & (|(AST_PERMIT[53] & ~reg_be))) |
+               (addr_hit[54] & (|(AST_PERMIT[54] & ~reg_be))) |
+               (addr_hit[55] & (|(AST_PERMIT[55] & ~reg_be))) |
+               (addr_hit[56] & (|(AST_PERMIT[56] & ~reg_be))) |
+               (addr_hit[57] & (|(AST_PERMIT[57] & ~reg_be))) |
+               (addr_hit[58] & (|(AST_PERMIT[58] & ~reg_be)))));
   end
 
   // Generate write-enables
@@ -1644,28 +2236,72 @@ module ast_reg_top (
   assign rega37_we = addr_hit[37] & reg_we & !reg_error;
 
   assign rega37_wd = reg_wdata[31:0];
-  assign regal_we = addr_hit[38] & reg_we & !reg_error;
+  assign rega38_we = addr_hit[38] & reg_we & !reg_error;
+
+  assign rega38_wd = reg_wdata[31:0];
+  assign rega39_we = addr_hit[39] & reg_we & !reg_error;
+
+  assign rega39_wd = reg_wdata[31:0];
+  assign rega40_we = addr_hit[40] & reg_we & !reg_error;
+
+  assign rega40_wd = reg_wdata[31:0];
+  assign rega41_we = addr_hit[41] & reg_we & !reg_error;
+
+  assign rega41_wd = reg_wdata[31:0];
+  assign rega42_we = addr_hit[42] & reg_we & !reg_error;
+
+  assign rega42_wd = reg_wdata[31:0];
+  assign rega43_we = addr_hit[43] & reg_we & !reg_error;
+
+  assign rega43_wd = reg_wdata[31:0];
+  assign rega44_we = addr_hit[44] & reg_we & !reg_error;
+
+  assign rega44_wd = reg_wdata[31:0];
+  assign rega45_we = addr_hit[45] & reg_we & !reg_error;
+
+  assign rega45_wd = reg_wdata[31:0];
+  assign rega46_we = addr_hit[46] & reg_we & !reg_error;
+
+  assign rega46_wd = reg_wdata[31:0];
+  assign rega47_we = addr_hit[47] & reg_we & !reg_error;
+
+  assign rega47_wd = reg_wdata[31:0];
+  assign rega48_we = addr_hit[48] & reg_we & !reg_error;
+
+  assign rega48_wd = reg_wdata[31:0];
+  assign rega49_we = addr_hit[49] & reg_we & !reg_error;
+
+  assign rega49_wd = reg_wdata[31:0];
+  assign rega50_we = addr_hit[50] & reg_we & !reg_error;
+
+  assign rega50_wd = reg_wdata[31:0];
+  assign rega51_we = addr_hit[51] & reg_we & !reg_error;
+
+  assign rega51_wd = reg_wdata[31:0];
+  assign rega52_we = addr_hit[52] & reg_we & !reg_error;
+
+  assign rega52_wd = reg_wdata[31:0];
+  assign regal_we = addr_hit[53] & reg_we & !reg_error;
 
   assign regal_wd = reg_wdata[31:0];
-  assign regb_0_we = addr_hit[39] & reg_we & !reg_error;
+  assign regb_0_we = addr_hit[54] & reg_we & !reg_error;
 
   assign regb_0_wd = reg_wdata[31:0];
-  assign regb_1_we = addr_hit[40] & reg_we & !reg_error;
+  assign regb_1_we = addr_hit[55] & reg_we & !reg_error;
 
   assign regb_1_wd = reg_wdata[31:0];
-  assign regb_2_we = addr_hit[41] & reg_we & !reg_error;
+  assign regb_2_we = addr_hit[56] & reg_we & !reg_error;
 
   assign regb_2_wd = reg_wdata[31:0];
-  assign regb_3_we = addr_hit[42] & reg_we & !reg_error;
+  assign regb_3_we = addr_hit[57] & reg_we & !reg_error;
 
   assign regb_3_wd = reg_wdata[31:0];
-  assign regb_4_we = addr_hit[43] & reg_we & !reg_error;
+  assign regb_4_we = addr_hit[58] & reg_we & !reg_error;
 
   assign regb_4_wd = reg_wdata[31:0];
 
   // Assign write-enables to checker logic vector.
   always_comb begin
-    reg_we_check = '0;
     reg_we_check[0] = 1'b0;
     reg_we_check[1] = 1'b0;
     reg_we_check[2] = rega2_we;
@@ -1704,12 +2340,27 @@ module ast_reg_top (
     reg_we_check[35] = rega35_we;
     reg_we_check[36] = rega36_we;
     reg_we_check[37] = rega37_we;
-    reg_we_check[38] = regal_we;
-    reg_we_check[39] = regb_0_we;
-    reg_we_check[40] = regb_1_we;
-    reg_we_check[41] = regb_2_we;
-    reg_we_check[42] = regb_3_we;
-    reg_we_check[43] = regb_4_we;
+    reg_we_check[38] = rega38_we;
+    reg_we_check[39] = rega39_we;
+    reg_we_check[40] = rega40_we;
+    reg_we_check[41] = rega41_we;
+    reg_we_check[42] = rega42_we;
+    reg_we_check[43] = rega43_we;
+    reg_we_check[44] = rega44_we;
+    reg_we_check[45] = rega45_we;
+    reg_we_check[46] = rega46_we;
+    reg_we_check[47] = rega47_we;
+    reg_we_check[48] = rega48_we;
+    reg_we_check[49] = rega49_we;
+    reg_we_check[50] = rega50_we;
+    reg_we_check[51] = rega51_we;
+    reg_we_check[52] = rega52_we;
+    reg_we_check[53] = regal_we;
+    reg_we_check[54] = regb_0_we;
+    reg_we_check[55] = regb_1_we;
+    reg_we_check[56] = regb_2_we;
+    reg_we_check[57] = regb_3_we;
+    reg_we_check[58] = regb_4_we;
   end
 
   // Read data return
@@ -1869,26 +2520,86 @@ module ast_reg_top (
       end
 
       addr_hit[38]: begin
-        reg_rdata_next[31:0] = '0;
+        reg_rdata_next[31:0] = rega38_qs;
       end
 
       addr_hit[39]: begin
-        reg_rdata_next[31:0] = regb_0_qs;
+        reg_rdata_next[31:0] = rega39_qs;
       end
 
       addr_hit[40]: begin
-        reg_rdata_next[31:0] = regb_1_qs;
+        reg_rdata_next[31:0] = rega40_qs;
       end
 
       addr_hit[41]: begin
-        reg_rdata_next[31:0] = regb_2_qs;
+        reg_rdata_next[31:0] = rega41_qs;
       end
 
       addr_hit[42]: begin
-        reg_rdata_next[31:0] = regb_3_qs;
+        reg_rdata_next[31:0] = rega42_qs;
       end
 
       addr_hit[43]: begin
+        reg_rdata_next[31:0] = rega43_qs;
+      end
+
+      addr_hit[44]: begin
+        reg_rdata_next[31:0] = rega44_qs;
+      end
+
+      addr_hit[45]: begin
+        reg_rdata_next[31:0] = rega45_qs;
+      end
+
+      addr_hit[46]: begin
+        reg_rdata_next[31:0] = rega46_qs;
+      end
+
+      addr_hit[47]: begin
+        reg_rdata_next[31:0] = rega47_qs;
+      end
+
+      addr_hit[48]: begin
+        reg_rdata_next[31:0] = rega48_qs;
+      end
+
+      addr_hit[49]: begin
+        reg_rdata_next[31:0] = rega49_qs;
+      end
+
+      addr_hit[50]: begin
+        reg_rdata_next[31:0] = rega50_qs;
+      end
+
+      addr_hit[51]: begin
+        reg_rdata_next[31:0] = rega51_qs;
+      end
+
+      addr_hit[52]: begin
+        reg_rdata_next[31:0] = rega52_qs;
+      end
+
+      addr_hit[53]: begin
+        reg_rdata_next[31:0] = '0;
+      end
+
+      addr_hit[54]: begin
+        reg_rdata_next[31:0] = regb_0_qs;
+      end
+
+      addr_hit[55]: begin
+        reg_rdata_next[31:0] = regb_1_qs;
+      end
+
+      addr_hit[56]: begin
+        reg_rdata_next[31:0] = regb_2_qs;
+      end
+
+      addr_hit[57]: begin
+        reg_rdata_next[31:0] = regb_3_qs;
+      end
+
+      addr_hit[58]: begin
         reg_rdata_next[31:0] = regb_4_qs;
       end
 

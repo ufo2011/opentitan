@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -14,31 +14,30 @@ module tb;
   `include "dv_macros.svh"
 
   wire   clk, rst_n;
-  wire   devmode;
   wire   intr_edn_cmd_req_done, intr_edn_fatal_err;
   wire [NUM_MAX_INTERRUPTS-1:0]   interrupts;
   // This is used to notify the csrng_agent that the EDN is disabled, and will drop the current
   // CSRNG request.
   wire   edn_disable_o;
-  edn_pkg::edn_req_t [MAX_NUM_ENDPOINTS - 1:0] endpoint_req;
-  edn_pkg::edn_rsp_t [MAX_NUM_ENDPOINTS - 1:0] endpoint_rsp;
+  edn_pkg::edn_req_t [`NUM_END_POINTS - 1:0] endpoint_req;
+  edn_pkg::edn_rsp_t [`NUM_END_POINTS - 1:0] endpoint_rsp;
 
   // interfaces
   clk_rst_if clk_rst_if(.clk(clk), .rst_n(rst_n));
   pins_if #(NUM_MAX_INTERRUPTS) intr_if(interrupts);
-  pins_if #(1) devmode_if(devmode);
   tl_if tl_if(.clk(clk), .rst_n(rst_n));
   csrng_if csrng_if(.clk(clk), .rst_n(edn_disable_o === 1 ? ~edn_disable_o : rst_n));
   push_pull_if#(.HostDataWidth(edn_pkg::FIPS_ENDPOINT_BUS_WIDTH))
-       endpoint_if[MAX_NUM_ENDPOINTS](.clk(clk), .rst_n(rst_n));
+       endpoint_if[`NUM_END_POINTS](.clk(clk), .rst_n(rst_n));
   edn_if edn_if(.clk(clk), .rst_n(rst_n));
-  edn_assert_if edn_assert_if(.clk(clk), .rst_n(rst_n));
+
+  bind dut.u_edn_core edn_assert_if edn_assert_if ();
 
   `DV_ALERT_IF_CONNECT()
   assign edn_disable_o = edn_if.edn_disable_o;
 
   // dut
-  edn#(.NumEndPoints(MAX_NUM_ENDPOINTS)) dut (
+  edn#(.NumEndPoints(`NUM_END_POINTS)) dut (
     .clk_i                     (clk      ),
     .rst_ni                    (rst_n    ),
 
@@ -58,7 +57,7 @@ module tb;
     .intr_edn_fatal_err_o      (intr_edn_fatal_err)
   );
 
-  for (genvar i = 0; i < MAX_NUM_ENDPOINTS; i++) begin : gen_endpoint_if
+  for (genvar i = 0; i < `NUM_END_POINTS; i++) begin : gen_endpoint_if
     assign endpoint_req[i].edn_req = endpoint_if[i].req;
     assign endpoint_if[i].ack = endpoint_rsp[i].edn_ack;
     assign endpoint_if[i].d_data = {endpoint_rsp[i].edn_fips, endpoint_rsp[i].edn_bus};
@@ -77,11 +76,11 @@ module tb;
     clk_rst_if.set_active();
     uvm_config_db#(virtual clk_rst_if)::set(null, "*.env", "clk_rst_vif", clk_rst_if);
     uvm_config_db#(intr_vif)::set(null, "*.env", "intr_vif", intr_if);
-    uvm_config_db#(devmode_vif)::set(null, "*.env", "devmode_vif", devmode_if);
     uvm_config_db#(virtual tl_if)::set(null, "*.env.m_tl_agent*", "vif", tl_if);
     uvm_config_db#(virtual csrng_if)::set(null, "*.env.m_csrng_agent*", "vif", csrng_if);
     uvm_config_db#(virtual edn_cov_if)::set(null, "*.env", "edn_cov_if", dut.u_edn_cov_if);
-    uvm_config_db#(virtual edn_assert_if)::set(null, "*.env", "edn_assert_vif", edn_assert_if);
+    uvm_config_db#(virtual edn_assert_if)::set(null, "*.env", "edn_assert_vif",
+                                               dut.u_edn_core.edn_assert_if);
     uvm_config_db#(virtual edn_if)::set(null, "*.env", "edn_vif", edn_if);
     $timeformat(-12, 0, " ps", 12);
     run_test();

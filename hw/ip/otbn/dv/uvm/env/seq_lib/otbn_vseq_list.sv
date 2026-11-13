@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 `include "otbn_sequential_vseq.sv"
 `include "otbn_single_vseq.sv"
 `include "otbn_smoke_vseq.sv"
+`include "otbn_smoke_vectorized_vseq.sv"
 `include "otbn_imem_err_vseq.sv"
 `include "otbn_dmem_err_vseq.sv"
 `include "otbn_stress_all_vseq.sv"
@@ -30,3 +31,7 @@
 `include "otbn_sw_no_acc_vseq.sv"
 `include "otbn_mem_gnt_acc_err_vseq.sv"
 `include "otbn_stack_addr_integ_chk_vseq.sv"
+`include "otbn_partial_wipe_vseq.sv"
+`include "otbn_wfi_smoke_vseq.sv"
+`include "otbn_wfi_sec_wipe_vseq.sv"
+`include "otbn_wfi_back_to_back_vseq.sv"

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -16,7 +16,6 @@ module tb;
   wire clk, rst_n;
   wire clk_aon, rst_aon_n;
 
-  wire devmode;
   wire [NUM_MAX_INTERRUPTS-1:0] interrupts;
   wire intr_event_detected;
 
@@ -30,7 +29,6 @@ module tb;
     .rst_n(rst_aon_n)
   );
   pins_if #(NUM_MAX_INTERRUPTS) intr_if (interrupts);
-  pins_if #(1) devmode_if (devmode);
   tl_if tl_if (
     .clk  (clk),
     .rst_n(rst_n)
@@ -52,7 +50,6 @@ module tb;
     .tl_o                  (tl_if.d2h),
     .alert_rx_i            (alert_rx),
     .alert_tx_o            (alert_tx),
-    // TODO(#14041): wkup_req_o still needs to be checked in the scoreboard.
     .wkup_req_o            (sysrst_ctrl_if.wkup_req),
     .rst_req_o             (sysrst_ctrl_if.rst_req),
     .intr_event_detected_o (intr_event_detected),
@@ -93,7 +90,6 @@ module tb;
     uvm_config_db#(virtual clk_rst_if)::set(null, "*.env", "clk_rst_vif", clk_rst_if);
     uvm_config_db#(virtual clk_rst_if)::set(null, "*.env", "clk_aon_rst_vif", clk_aon_rst_if);
     uvm_config_db#(intr_vif)::set(null, "*.env", "intr_vif", intr_if);
-    uvm_config_db#(devmode_vif)::set(null, "*.env", "devmode_vif", devmode_if);
     uvm_config_db#(virtual tl_if)::set(null, "*.env.m_tl_agent*", "vif", tl_if);
     uvm_config_db#(virtual sysrst_ctrl_if)::set(null, "*.env", "vif", sysrst_ctrl_if);
     uvm_config_db#(virtual sysrst_ctrl_cov_if)::set(null, "*.env", "sysrst_ctrl_cov_if",

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@
 #include "sw/device/lib/testing/json/gpio.h"
 #include "sw/device/lib/testing/json/pinmux_config.h"
 #include "sw/device/lib/testing/test_framework/check.h"
-#include "sw/device/lib/testing/test_framework/ottf_flow_control.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 #include "sw/device/lib/testing/test_framework/ujson_ottf.h"
 #include "sw/device/lib/ujson/ujson.h"
@@ -22,7 +21,6 @@
 
 OTTF_DEFINE_TEST_CONFIG(.enable_uart_flow_control = true);
 
-static dif_gpio_t gpio;
 static dif_pinmux_t pinmux;
 
 status_t command_processor(ujson_t *uj) {
@@ -31,10 +29,10 @@ status_t command_processor(ujson_t *uj) {
     TRY(ujson_deserialize_test_command_t(uj, &command));
     switch (command) {
       case kTestCommandGpioSet:
-        RESP_ERR(uj, gpio_set(uj, &gpio));
+        RESP_ERR(uj, gpio_set(uj));
         break;
       case kTestCommandGpioGet:
-        RESP_ERR(uj, gpio_get(uj, &gpio));
+        RESP_ERR(uj, gpio_get(uj));
         break;
       case kTestCommandPinmuxConfig:
         RESP_ERR(uj, pinmux_config(uj, &pinmux));
@@ -50,9 +48,7 @@ status_t command_processor(ujson_t *uj) {
 
 bool test_main(void) {
   CHECK_DIF_OK(dif_pinmux_init(
-      mmio_region_from_addr(TOP_EARLGREY_PINMUX_AON_BASE_ADDR), &pinmux));
-  CHECK_DIF_OK(
-      dif_gpio_init(mmio_region_from_addr(TOP_EARLGREY_GPIO_BASE_ADDR), &gpio));
+      mmio_region_from_addr(TOP_EARLGREY_PINMUX_BASE_ADDR), &pinmux));
   ujson_t uj = ujson_ottf_console();
 
   status_t s = command_processor(&uj);

@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -823,7 +823,7 @@ class Model:
         if not exp_shape:
             raise RuntimeError('Unexpected shape for bn.lid')
 
-        grd, grs1, offset, grs1_inc, grd_inc = op_vals
+        grd, grs1, _offset, grs1_inc, grd_inc = op_vals
         grd_val = self.get_reg('gpr', grd)
         grs1_val = self.get_reg('gpr', grs1)
 
@@ -865,7 +865,7 @@ class Model:
         if not exp_shape:
             raise RuntimeError('Unexpected shape for bn.sid')
 
-        grs1, grs2, offset, grs1_inc, grs2_inc = op_vals
+        grs1, grs2, _offset, grs1_inc, grs2_inc = op_vals
         grs1_val = self.get_reg('gpr', grs1)
         grs2_val = self.get_reg('gpr', grs2)
 
@@ -1063,6 +1063,3 @@ class Model:
             self._generic_update_for_insn(prog_insn)
 
         self.consume_fuel()
-
-    def pick_bad_addr(self, mem_type: str) -> Optional[int]:
-        return self._known_mem[mem_type].pick_bad_addr()

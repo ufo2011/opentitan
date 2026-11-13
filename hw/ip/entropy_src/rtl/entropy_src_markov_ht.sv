@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -6,26 +6,29 @@
 //
 
 module entropy_src_markov_ht #(
-  parameter int RegWidth = 16,
-  parameter int RngBusWidth = 4
+  parameter int RegWidth          = 16,
+  parameter int RngBusWidth       = 4,
+  parameter int RngBusBitSelWidth = 2
 ) (
   input logic clk_i,
   input logic rst_ni,
 
    // ins req interface
-  input logic [RngBusWidth-1:0] entropy_bit_i,
-  input logic                   entropy_bit_vld_i,
-  input logic                   clear_i,
-  input logic                   active_i,
-  input logic [RegWidth-1:0]    thresh_hi_i,
-  input logic [RegWidth-1:0]    thresh_lo_i,
-  input logic                   window_wrap_pulse_i,
-  input logic                   threshold_scope_i,
-  output logic [RegWidth-1:0]   test_cnt_hi_o,
-  output logic [RegWidth-1:0]   test_cnt_lo_o,
-  output logic                  test_fail_hi_pulse_o,
-  output logic                  test_fail_lo_pulse_o,
-  output logic                  count_err_o
+  input logic [RngBusWidth-1:0]       entropy_bit_i,
+  input logic                         entropy_bit_vld_i,
+  input logic                         rng_bit_en_i,
+  input logic [RngBusBitSelWidth-1:0] rng_bit_sel_i,
+  input logic                         clear_i,
+  input logic                         active_i,
+  input logic [RegWidth-1:0]          thresh_hi_i,
+  input logic [RegWidth-1:0]          thresh_lo_i,
+  input logic                         window_wrap_pulse_i,
+  input logic                         threshold_scope_i,
+  output logic [RegWidth-1:0]         test_cnt_hi_o,
+  output logic [RegWidth-1:0]         test_cnt_lo_o,
+  output logic                        test_fail_hi_pulse_o,
+  output logic                        test_fail_lo_pulse_o,
+  output logic                        count_err_o
 );
 
   // signals
@@ -34,6 +37,7 @@ module entropy_src_markov_ht #(
   logic [RegWidth-1:0]                  pair_cntr_min, pair_cntr_min_tmp;
   logic [RegWidth-1:0]                  pair_cntr_sum;
   logic [RngBusWidth-1:0][RegWidth-1:0] pair_cntr;
+  logic [RegWidth-1:0]                  rng_bit_cnt;
   logic [RngBusWidth-1:0]               pair_cntr_err;
 
   // flops
@@ -81,8 +85,9 @@ module entropy_src_markov_ht #(
       .incr_en_i(samples_no_match_pulse[sh]),
       .decr_en_i(1'b0),
       .step_i(RegWidth'(1)),
+      .commit_i(1'b1),
       .cnt_o(pair_cntr[sh]),
-      .cnt_next_o(),
+      .cnt_after_commit_o(),
       .err_o(pair_cntr_err[sh])
     );
   end : gen_cntrs
@@ -128,7 +133,7 @@ module entropy_src_markov_ht #(
 
   prim_sum_tree #(
     .NumSrc(RngBusWidth),
-    .Width(RegWidth)
+    .InWidth(RegWidth)
   ) u_sum (
     .clk_i       (clk_i),
     .rst_ni      (rst_ni),
@@ -138,12 +143,29 @@ module entropy_src_markov_ht #(
     .sum_valid_o ()
   );
 
-  assign test_cnt_hi_o = threshold_scope_i ? pair_cntr_sum : pair_cntr_max;
-  assign test_cnt_lo_o = threshold_scope_i ? pair_cntr_sum : pair_cntr_min;
+  always_comb begin
+    rng_bit_cnt = '0;
+
+    for (int i = 0; i < RngBusWidth; i++) begin
+      if (rng_bit_sel_i == i) begin
+        rng_bit_cnt = pair_cntr[i];
+      end
+    end
+  end
+
+  assign test_cnt_hi_o = rng_bit_en_i ? rng_bit_cnt :
+                         threshold_scope_i ? pair_cntr_sum :
+                         pair_cntr_max;
+  assign test_cnt_lo_o = rng_bit_en_i ? rng_bit_cnt :
+                         threshold_scope_i ? pair_cntr_sum :
+                         pair_cntr_min;
 
   // the pulses will be only one clock in length
-  assign test_fail_hi_pulse_o = active_i && window_wrap_pulse_i && (test_cnt_hi_o > thresh_hi_i);
-  assign test_fail_lo_pulse_o = active_i && window_wrap_pulse_i && (test_cnt_lo_o < thresh_lo_i);
+  // A high threshold of all ones or a low threshold of zero disables the respective test.
+  assign test_fail_hi_pulse_o = active_i && window_wrap_pulse_i && ~&thresh_hi_i &&
+                                (test_cnt_hi_o >= thresh_hi_i);
+  assign test_fail_lo_pulse_o = active_i && window_wrap_pulse_i && (thresh_lo_i != '0) &&
+                                (test_cnt_lo_o <= thresh_lo_i);
   assign count_err_o = (|pair_cntr_err);
 
 endmodule

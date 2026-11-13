@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -16,7 +16,7 @@ class tl_agent_cfg extends dv_base_agent_cfg;
   // Maximum number of outstanding transactions supported by the DUT.
   // 0: Unlimited from the host perspective, might be back-pressured by the device
   // 1: Only single transaction at a time
-  // n: Number of maximum oustanding requests
+  // n: Number of maximum outstanding requests
 
   // This is initialized to an arbitrary value. The DUT may actually support higher or lower than
   // this number. Calculating exactly how many outstanding transactions the DUT supports is hard to
@@ -108,11 +108,8 @@ class tl_agent_cfg extends dv_base_agent_cfg;
 
   // Sets the randomization dist weight for a new a_source value to be constrained to the last
   // a_source released. This only ATTEMPTS to set the a_source to the last_a_source_released value -
-  // it is not always guaranteed even at 100%, especially if the test does non-blocking accessses.
+  // it is not always guaranteed even at 100%, especially if the test does non-blocking accesses.
   rand int unsigned use_last_a_source_released_pct = 20;
-
-  // The monitor detects reset and maintains the value below.
-  bit reset_asserted;
 
   constraint a_source_eq_last_a_source_released_pct_c {
     use_last_a_source_released_pct <= 100;
@@ -175,7 +172,7 @@ class tl_agent_cfg extends dv_base_agent_cfg;
   //
   // This function takes the tl_seq_item object to specifically randomize the a_source such that it
   // does not match an existing one in the a_source_q. This randomization also takes into account
-  // any existing constriants on a_source that may exist in the class definition. The new a_source
+  // any existing constraints on a_source that may exist in the class definition. The new a_source
   // value is randomized to be equal to the last a_source released from the a_source_pend_q
   // 20% of the time (weight is configurable).
   //
@@ -195,7 +192,7 @@ class tl_agent_cfg extends dv_base_agent_cfg;
     //                    // to False again.
     `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(a_source,
         // use soft constraint as seq may still send req when all the valid a_source are used
-        (!reset_asserted) -> soft !(a_source inside {a_source_pend_q});
+        (!in_reset) -> soft !(a_source inside {a_source_pend_q});
         // Set the upper a_source bits that are unused to 0.
         (a_source >> valid_a_source_width) == 0;
         // We cannot guarantee that last_a_source_released is not in a_source_pend_q,
@@ -225,7 +222,7 @@ class tl_agent_cfg extends dv_base_agent_cfg;
   // Ensures that the queue does not exceed the max outstanding req size. Pops the oldest a_source
   // used to last_a_source_released.
   virtual function void add_to_a_source_pend_q(bit [SourceWidth-1:0] a_source);
-    if (reset_asserted) return;
+    if (in_reset) return;
     if (a_source_pend_q.size() == max_outstanding_req) begin
       last_a_source_released = a_source_pend_q.pop_front();
     end

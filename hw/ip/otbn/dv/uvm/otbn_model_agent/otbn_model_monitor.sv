@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,10 +19,9 @@ class otbn_model_monitor extends dv_base_monitor #(
 
   `uvm_component_new
 
-  protected task collect_trans(uvm_phase phase);
+  protected task collect_trans();
     fork
       collect_status();
-      // TODO: Only run when coverage is enabled.
       collect_insns();
     join
   endtask

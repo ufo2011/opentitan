@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,27 +32,32 @@ class entropy_src_dut_cfg extends uvm_object;
   uint          preconfig_disable_pct;
 
   // Constraint knob for SW-accessible REGWEN-related fields
-  uint          me_regwen_pct, sw_regupd_pct;
+  uint          sw_regupd_pct;
 
   // Constraint knobs for Boolean fields in CONF register
   // (RNG_BIT_SEL is always uniform)
-  uint          fips_enable_pct, entropy_data_reg_enable_pct, ht_threshold_scope_pct,
-                rng_bit_enable_pct;
+  uint          fips_enable_pct, entropy_data_reg_enable_pct, fips_flag_pct,
+                rng_fips_pct, ht_threshold_scope_pct, rng_bit_enable_pct;
 
   // Constraint knobs for Boolean fields in ENTROPY_CONTROL register
-  uint          route_software_pct, type_bypass_pct;
+  uint          route_software_pct, type_bypass_pct, esfinal_clr_while_dsbld_pct;
 
   // Constraint knobs for Boolean fields in FW_OV_CONTROL register
   uint          fw_read_pct, fw_over_pct, fw_ov_insert_start_pct;
 
   // Health test-related knobs
   //
+  // Knob for controlling the one-way behavior of the threshold registers.
+  uint          ht_threshold_oneway_pct;
+
   // Knob for selecting special tighter thresholds for more stringent testing of alert conditions.
   uint          tight_thresholds_pct;
 
   // Real constraints on sigma ranges (floating point value)
   // The range of each threshold depends on whether the particular test is intended to be tight
   real adaptp_sigma_max_typ, adaptp_sigma_max_tight, adaptp_sigma_min_typ, adaptp_sigma_min_tight;
+  real adaptps_sigma_max_typ, adaptps_sigma_max_tight;
+  real adaptps_sigma_min_typ, adaptps_sigma_min_tight;
   real markov_sigma_max_typ, markov_sigma_max_tight, markov_sigma_min_typ, markov_sigma_min_tight;
   real bucket_sigma_max_typ, bucket_sigma_max_tight, bucket_sigma_min_typ, bucket_sigma_min_tight;
 
@@ -65,11 +70,9 @@ class entropy_src_dut_cfg extends uvm_object;
   // This knob controls the frequency of bad configurations
   uint          bad_mubi_cfg_pct;
 
-  ///////////////////////////////////////////////
-  // Fixed DUT configurations (TODO:RANDOMIZE) //
-  ///////////////////////////////////////////////
-
-  uint boot_mode_retry_limit;
+  // max_observe_fifo_threshold is the upper limit for the randomization of the
+  // observe FIFO threshold.
+  uint          max_observe_fifo_threshold = entropy_src_reg_pkg::ObserveFifoDepth;
 
   ///////////////////////
   // Randomized fields //
@@ -77,12 +80,14 @@ class entropy_src_dut_cfg extends uvm_object;
 
   rand bit [NumEntropySrcIntr-1:0] en_intr;
 
-  rand bit                      sw_regupd, me_regwen;
+  rand bit                      sw_regupd;
   rand bit                      preconfig_disable;
   rand bit [1:0]                rng_bit_sel;
 
-  rand prim_mubi_pkg::mubi4_t   module_enable, fips_enable, route_software, type_bypass,
-                                entropy_data_reg_enable, rng_bit_enable, ht_threshold_scope;
+  rand prim_mubi_pkg::mubi4_t   module_enable, fips_enable, fips_flag, route_software, type_bypass,
+                                rng_fips, entropy_data_reg_enable, rng_bit_enable,
+                                ht_threshold_oneway, ht_threshold_scope,
+                                esfinal_clr_while_dsbld;
 
   rand int                      observe_fifo_thresh;
 
@@ -106,19 +111,21 @@ class entropy_src_dut_cfg extends uvm_object;
   rand health_test_e which_tight_ht;
 
   // Note: These integer-valued fields are used to derive their real-valued counterparts.
-  rand int unsigned adaptp_sigma_i, markov_sigma_i, bucket_sigma_i;
+  rand int unsigned adaptp_sigma_i, adaptps_sigma_i, markov_sigma_i, bucket_sigma_i;
 
   // Randomized ranges, to be set in post_randomize after the actual tight HT's are selected
-  real adaptp_sigma_min, markov_sigma_min, bucket_sigma_min;
-  real adaptp_sigma_max, markov_sigma_max, bucket_sigma_max;
+  real adaptp_sigma_min, adaptps_sigma_min, markov_sigma_min, bucket_sigma_min;
+  real adaptp_sigma_max, adaptps_sigma_max, markov_sigma_max, bucket_sigma_max;
 
   // Randomized real values: to be managed in post_randomize
   // Controlled by the knobs <test>_sigma_max_<typ/tight>, and <test>_sigma_min_<typ/tight>
-  real              adaptp_sigma, markov_sigma, bucket_sigma;
+  real adaptp_sigma, adaptps_sigma, markov_sigma, bucket_sigma;
 
   // Thresholds for repcnt repcnts
   rand bit [15:0]   repcnt_thresh_bypass, repcnt_thresh_fips,
                     repcnts_thresh_bypass, repcnts_thresh_fips;
+
+  rand bit [3:0] ht_watermark_num;
 
   rand bit             use_invalid_mubi;
   rand invalid_mubi_e  which_invalid_mubi;
@@ -149,10 +156,6 @@ class entropy_src_dut_cfg extends uvm_object;
   constraint sw_regupd_c {sw_regupd dist {
       1 :/ sw_regupd_pct,
       0 :/ (100 - sw_regupd_pct) };}
-
-  constraint me_regwen_c {me_regwen dist {
-      1 :/ me_regwen_pct,
-      0 :/ (100 - me_regwen_pct) };}
 
   constraint fw_read_enable_c {fw_read_enable dist {
       prim_mubi_pkg::MuBi4True  :/ fw_read_pct,
@@ -190,6 +193,14 @@ class entropy_src_dut_cfg extends uvm_object;
       prim_mubi_pkg::MuBi4True  :/ fips_enable_pct,
       prim_mubi_pkg::MuBi4False :/ (100 - fips_enable_pct) };}
 
+  constraint fips_flag_c {fips_flag dist {
+      prim_mubi_pkg::MuBi4True  :/ fips_flag_pct,
+      prim_mubi_pkg::MuBi4False :/ (100 - fips_flag_pct) };}
+
+  constraint rng_fips_c {rng_fips dist {
+      prim_mubi_pkg::MuBi4True  :/ rng_fips_pct,
+      prim_mubi_pkg::MuBi4False :/ (100 - rng_fips_pct) };}
+
   constraint route_c {route_software dist {
       prim_mubi_pkg::MuBi4True  :/ route_software_pct,
       prim_mubi_pkg::MuBi4False :/ (100 - route_software_pct) };}
@@ -197,6 +208,10 @@ class entropy_src_dut_cfg extends uvm_object;
   constraint bypass_c {type_bypass dist {
       prim_mubi_pkg::MuBi4True  :/ type_bypass_pct,
       prim_mubi_pkg::MuBi4False :/ (100 - type_bypass_pct) };}
+
+  constraint esfinal_clr_while_dsbld_c {esfinal_clr_while_dsbld dist {
+      prim_mubi_pkg::MuBi4True  :/ esfinal_clr_while_dsbld_pct,
+      prim_mubi_pkg::MuBi4False :/ (100 - esfinal_clr_while_dsbld_pct) };}
 
   constraint entropy_data_reg_enable_c {entropy_data_reg_enable dist {
       prim_mubi_pkg::MuBi4True  :/ entropy_data_reg_enable_pct,
@@ -206,9 +221,24 @@ class entropy_src_dut_cfg extends uvm_object;
       prim_mubi_pkg::MuBi4True  :/ rng_bit_enable_pct,
       prim_mubi_pkg::MuBi4False :/ (100 - rng_bit_enable_pct) };}
 
-  constraint ht_threshold_scope_c {ht_threshold_scope dist {
-      prim_mubi_pkg::MuBi4True  :/ ht_threshold_scope_pct,
-      prim_mubi_pkg::MuBi4False :/ (100 - ht_threshold_scope_pct)};}
+  constraint ht_threshold_oneway_c {ht_threshold_oneway dist {
+      prim_mubi_pkg::MuBi4True  :/ ht_threshold_oneway_pct,
+      prim_mubi_pkg::MuBi4False :/ (100 - ht_threshold_oneway_pct) };}
+
+  constraint ht_threshold_scope_c {
+    solve rng_bit_enable before ht_threshold_scope;
+    // In single lane mode, ht_threshold_scope needs to be disabled.
+    if (rng_bit_enable != MuBi4False) {
+      ht_threshold_scope dist {
+        prim_mubi_pkg::MuBi4False :/ 100
+      };
+    } else {
+      ht_threshold_scope dist {
+        prim_mubi_pkg::MuBi4True  :/ ht_threshold_scope_pct,
+        prim_mubi_pkg::MuBi4False :/ (100 - ht_threshold_scope_pct)
+      };
+    }
+  }
 
   constraint tight_thresholds_c {tight_thresholds dist {
       1 :/ tight_thresholds_pct,
@@ -225,8 +255,16 @@ class entropy_src_dut_cfg extends uvm_object;
   //
   // The last bin captures this most relaxed threshold with just one value 41 (>40)
   constraint repcnt_thresh_bypass_c {
-      solve tight_thresholds, which_tight_ht before repcnt_thresh_bypass;
-      if (tight_thresholds && (which_tight_ht == repcnt_ht) ) {
+      solve tight_thresholds, which_tight_ht, rng_bit_enable before repcnt_thresh_bypass;
+      // In single lane mode, the test window size is 4x as large and thus the threshold needs
+      // to be a bit higher.
+      if (rng_bit_enable != MuBi4False) {
+        repcnt_thresh_bypass dist {
+          [11 : 20] :/ 1,
+          [21 : 40] :/ 1,
+          [41 : 80] :/ 0
+        };
+      } else if (tight_thresholds && (which_tight_ht == repcnt_ht) ) {
         repcnt_thresh_bypass dist {
           [6  : 10] :/ 1,
           [11 : 20] :/ 1,
@@ -244,8 +282,16 @@ class entropy_src_dut_cfg extends uvm_object;
     }
 
   constraint repcnt_thresh_fips_c {
-      solve tight_thresholds, which_tight_ht before repcnt_thresh_fips;
-      if (tight_thresholds && (which_tight_ht == repcnt_ht) ) {
+      solve rng_bit_enable, tight_thresholds, which_tight_ht before repcnt_thresh_fips;
+      // In single lane mode, the test window size is 4x as large and thus the threshold needs
+      // to be a bit higher.
+      if (rng_bit_enable != MuBi4False) {
+        repcnt_thresh_fips dist {
+          [11 : 20] :/ 1,
+          [21 : 40] :/ 1,
+          [41 : 80] :/ 0
+        };
+      } else if (tight_thresholds && (which_tight_ht == repcnt_ht) ) {
         repcnt_thresh_fips dist {
           [6  : 10] :/ 1,
           [11 : 20] :/ 1,
@@ -270,8 +316,13 @@ class entropy_src_dut_cfg extends uvm_object;
   // As with the repcnt test, the highest bin would (for an assumed ideal RNG noice source)
 
   constraint repcnts_thresh_bypass_c {
-      solve tight_thresholds, which_tight_ht before repcnts_thresh_bypass;
-      if (tight_thresholds && (which_tight_ht == repcnts_ht) ) {
+      solve rng_bit_enable, tight_thresholds, which_tight_ht before repcnts_thresh_bypass;
+      // In single lane mode, the repcnts health test needs to be disabled.
+      if (rng_bit_enable != prim_mubi_pkg::MuBi4False) {
+        repcnts_thresh_bypass dist {
+          16'hffff :/ 100
+        };
+      } else if (tight_thresholds && (which_tight_ht == repcnts_ht) ) {
         repcnts_thresh_bypass dist {
           [2  :  3] :/ 1,
           [4  :  5] :/ 1,
@@ -289,8 +340,13 @@ class entropy_src_dut_cfg extends uvm_object;
     }
 
   constraint repcnts_thresh_fips_c {
-      solve tight_thresholds, which_tight_ht before repcnts_thresh_fips;
-      if (tight_thresholds && (which_tight_ht == repcnts_ht) ) {
+      solve rng_bit_enable, tight_thresholds, which_tight_ht before repcnts_thresh_fips;
+      // In single lane mode, the repcnts health test needs to be disabled.
+      if (rng_bit_enable != prim_mubi_pkg::MuBi4False) {
+        repcnts_thresh_fips dist {
+          16'hffff :/ 100
+        };
+      } else if (tight_thresholds && (which_tight_ht == repcnts_ht) ) {
         repcnts_thresh_fips dist {
           [2  :  3] :/ 1,
           [4  :  5] :/ 1,
@@ -306,6 +362,12 @@ class entropy_src_dut_cfg extends uvm_object;
         };
       }
     }
+
+  constraint ht_watermark_num_c {ht_watermark_num dist {
+      0        :/ 1,  // Unsupported values are mapped to 0, too.
+      [1 :  8] :/ 16,
+      [9 : 15] :/ 1}; // Unsupported values
+  }
 
   constraint alert_threshold_c {alert_threshold dist {
       1             :/ 3,
@@ -325,10 +387,10 @@ class entropy_src_dut_cfg extends uvm_object;
       1 :/ bad_mubi_cfg_pct,
       0 :/ (100 - bad_mubi_cfg_pct)};}
 
-  // TODO: Is zero a valid value for this register?
-  // What does the DUT do with a value of zero?
   constraint observe_fifo_thresh_c {observe_fifo_thresh dist {
-      [1:OBSERVE_FIFO_DEPTH]  :/ 1};}
+      // 0 is a reserved value that is not to be used.
+      [1:max_observe_fifo_threshold]  :/ 1};
+  }
 
   ///////////////
   // Functions //
@@ -345,10 +407,16 @@ class entropy_src_dut_cfg extends uvm_object;
                   module_enable.name()),
         $sformatf("\n\t |***** fips_enable                 : %12s *****| \t",
                   fips_enable.name()),
+        $sformatf("\n\t |***** fips_flag                   : %12s *****| \t",
+                  fips_flag.name()),
+        $sformatf("\n\t |***** rng_fips                    : %12s *****| \t",
+                  rng_fips.name()),
         $sformatf("\n\t |***** route_software              : %12s *****| \t",
                   route_software.name()),
         $sformatf("\n\t |***** type_bypass                 : %12s *****| \t",
                   type_bypass.name()),
+        $sformatf("\n\t |***** esfinal_clr_while_dsbld     : %12s *****| \t",
+                  esfinal_clr_while_dsbld.name()),
         $sformatf("\n\t |***** entropy_data_reg_enable     : %12s *****| \t",
                   entropy_data_reg_enable.name()),
         $sformatf("\n\t |***** rng_bit_enable              : %12s *****| \t",
@@ -359,16 +427,20 @@ class entropy_src_dut_cfg extends uvm_object;
                   fips_window_size),
         $sformatf("\n\t |***** bypass_window_size          : %12d *****| \t",
                   bypass_window_size),
-        $sformatf("\n\t |***** boot_mode_retry_limit       : %12d *****| \t",
-                  boot_mode_retry_limit),
         $sformatf("\n\t |***** fw_read_enable              : %12s *****| \t",
                   fw_read_enable.name()),
         $sformatf("\n\t |***** fw_over_enable              : %12s *****| \t",
                   fw_over_enable.name()),
         $sformatf("\n\t |***** observe_fifo_threshold      : %12d *****| \t",
                   observe_fifo_thresh),
+        $sformatf("\n\t |***** ht_threshold_oneway         : %12d *****| \t",
+                  ht_threshold_oneway),
+        $sformatf("\n\t |***** ht_threshold_scope          : %12d *****| \t",
+                  ht_threshold_scope),
         $sformatf("\n\t |***** adaptp_sigma                : %12.3f *****| \t",
                   adaptp_sigma),
+        $sformatf("\n\t |***** adaptps_sigma               : %12.3f *****| \t",
+                  adaptps_sigma),
         $sformatf("\n\t |***** bucket_sigma                : %12.3f *****| \t",
                   bucket_sigma),
         $sformatf("\n\t |***** markov_sigma                : %12.3f *****| \t",
@@ -387,16 +459,28 @@ class entropy_src_dut_cfg extends uvm_object;
                   module_enable_pct),
         $sformatf("\n\t |***** fips_enable_pct             : %12d *****| \t",
                   fips_enable_pct),
+        $sformatf("\n\t |***** fips_flag_pct               : %12d *****| \t",
+                  fips_flag_pct),
+        $sformatf("\n\t |***** rng_fips_pct                : %12d *****| \t",
+                  rng_fips_pct),
         $sformatf("\n\t |***** route_software_pct          : %12d *****| \t",
                   route_software_pct),
         $sformatf("\n\t |***** type_bypass_pct             : %12d *****| \t",
                   type_bypass_pct),
+        $sformatf("\n\t |***** esfinal_clr_while_dsbld_pct : %12d *****| \t",
+                  esfinal_clr_while_dsbld_pct),
         $sformatf("\n\t |***** entropy_data_reg_enable_pct : %12d *****| \t",
                   entropy_data_reg_enable_pct),
         $sformatf("\n\t |***** rng_bit_enable_pct          : %12d *****| \t",
                   rng_bit_enable_pct),
+        $sformatf("\n\t |***** ht_threshold_oneway_pct     : %12d *****| \t",
+                  ht_threshold_oneway_pct),
+        $sformatf("\n\t |***** ht_threshold_scope_pct      : %12d *****| \t",
+                  ht_threshold_scope_pct),
         $sformatf("\n\t |***** adaptp_sigma range          : (%04.2f, %04.2f) *****| \t",
                   adaptp_sigma_min, adaptp_sigma_max),
+        $sformatf("\n\t |***** adaptps_sigma range         : (%04.2f, %04.2f) *****| \t",
+                  adaptps_sigma_min, adaptps_sigma_max),
         $sformatf("\n\t |***** bucket_sigma range          : (%04.2f, %04.2f) *****| \t",
                   bucket_sigma_min, bucket_sigma_max),
         $sformatf("\n\t |***** markov_sigma range          : (%04.2f, %04.2f) *****| \t",
@@ -421,6 +505,15 @@ class entropy_src_dut_cfg extends uvm_object;
                                                                            adaptp_sigma_max_typ;
     adaptp_sigma = adaptp_sigma_min + (adaptp_sigma_max - adaptp_sigma_min) * tmp_r;
 
+    tmp_r = real'(adaptps_sigma_i)/{$bits(adaptps_sigma_i){1'b1}};
+    adaptps_sigma_min =
+        tight_thresholds && (which_tight_ht == adaptps_ht) ? adaptps_sigma_min_tight :
+                                                             adaptps_sigma_min_typ;
+    adaptps_sigma_max =
+        tight_thresholds && (which_tight_ht == adaptps_ht) ? adaptps_sigma_max_tight :
+                                                             adaptps_sigma_max_typ;
+    adaptps_sigma = adaptps_sigma_min + (adaptps_sigma_max - adaptps_sigma_min) * tmp_r;
+
     tmp_r = real'(markov_sigma_i)/{$bits(markov_sigma_i){1'b1}};
     markov_sigma_min = tight_thresholds && (which_tight_ht == markov_ht) ? markov_sigma_min_tight :
                                                                            markov_sigma_min_typ;
@@ -443,7 +536,10 @@ class entropy_src_dut_cfg extends uvm_object;
       case (which_invalid_mubi)
         invalid_fips_enable: fips_enable = invalid_mubi_val;
         invalid_entropy_data_reg_enable: entropy_data_reg_enable = invalid_mubi_val;
+        invalid_fips_flag: fips_flag = invalid_mubi_val;
+        invalid_rng_fips: fips_flag = invalid_mubi_val;
         invalid_module_enable: module_enable = invalid_mubi_val;
+        invalid_threshold_oneway: ht_threshold_oneway = invalid_mubi_val;
         invalid_threshold_scope: ht_threshold_scope = invalid_mubi_val;
         invalid_rng_bit_enable: rng_bit_enable = invalid_mubi_val;
         invalid_fw_ov_mode: fw_read_enable = invalid_mubi_val;
@@ -451,6 +547,7 @@ class entropy_src_dut_cfg extends uvm_object;
         invalid_fw_ov_insert_start: fw_ov_insert_start = invalid_mubi_val;
         invalid_es_route: route_software = invalid_mubi_val;
         invalid_es_type: type_bypass = invalid_mubi_val;
+        invalid_esfinal_clr_while_dsbld: esfinal_clr_while_dsbld = invalid_mubi_val;
         invalid_alert_threshold: begin
           // Let the alert_threshold_inv field take some
           // improper value.
@@ -480,19 +577,23 @@ class entropy_src_dut_cfg extends uvm_object;
     `DV_CHECK(en_intr_pct <= 100);
     `DV_CHECK(module_enable_pct <= 100);
     `DV_CHECK(preconfig_disable_pct <= 100);
-    `DV_CHECK(me_regwen_pct <= 100);
     `DV_CHECK(sw_regupd_pct <= 100);
     `DV_CHECK(fips_enable_pct <= 100);
     `DV_CHECK(entropy_data_reg_enable_pct <= 100);
+    `DV_CHECK(fips_flag_pct <= 100);
+    `DV_CHECK(rng_fips_pct <= 100);
+    `DV_CHECK(ht_threshold_oneway_pct <= 100);
     `DV_CHECK(ht_threshold_scope_pct <= 100);
     `DV_CHECK(rng_bit_enable_pct <= 100);
     `DV_CHECK(route_software_pct <= 100);
     `DV_CHECK(type_bypass_pct <= 100);
+    `DV_CHECK(esfinal_clr_while_dsbld_pct <= 100);
     `DV_CHECK(fw_read_pct <= 100);
     `DV_CHECK(fw_over_pct <= 100);
     `DV_CHECK(fw_ov_insert_start_pct <= 100);
     `DV_CHECK(default_ht_thresholds_pct <= 100);
     `DV_CHECK(bad_mubi_cfg_pct <= 100);
+    `DV_CHECK(max_observe_fifo_threshold <= entropy_src_reg_pkg::ObserveFifoDepth);
   endfunction
 
 endclass

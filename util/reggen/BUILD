@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -59,6 +59,12 @@ py_library(
 )
 
 py_library(
+    name = "feature",
+    srcs = ["feature.py"],
+    deps = [":lib"],
+)
+
+py_library(
     name = "enum_entry",
     srcs = ["enum_entry.py"],
     deps = [":lib"],
@@ -106,6 +112,7 @@ py_library(
         ":bus_interfaces",
         ":clocking",
         ":countermeasure",
+        ":feature",
         ":inter_signal",
         ":interrupt",
         ":lib",
@@ -113,6 +120,7 @@ py_library(
         ":reg_block",
         ":signal",
         requirement("hjson"),
+        requirement("semantic_version"),
     ],
 )
 
@@ -138,11 +146,13 @@ py_library(
         ":clocking",
         ":field",
         ":lib",
+        ":memory",
         ":multi_register",
         ":params",
         ":register",
         ":signal",
         ":window",
+        requirement("semantic_version"),
     ],
 )
 
@@ -178,6 +188,16 @@ py_library(
     deps = [
         ":bits",
         ":lib",
+    ],
+)
+
+py_library(
+    name = "memory",
+    srcs = ["memory.py"],
+    deps = [
+        ":access",
+        ":lib",
+        ":params",
     ],
 )
 
@@ -315,6 +335,38 @@ py_library(
 )
 
 py_library(
+    name = "exporter",
+    srcs = ["exporter.py"],
+    deps = [
+        ":ip_block",
+    ],
+)
+
+py_library(
+    name = "systemrdl_exporter",
+    srcs = ["systemrdl_exporter.py"],
+    deps = [
+        ":access",
+        ":exporter",
+        ":field",
+        ":ip_block",
+        ":multi_register",
+        ":reg_block",
+        ":register",
+        ":window",
+        requirement("peakrdl_systemrdl"),
+    ],
+)
+
+py_library(
+    name = "md_helpers",
+    srcs = ["md_helpers.py"],
+    deps = [
+        ":signal",
+    ],
+)
+
+py_library(
     name = "validate",
     srcs = ["validate.py"],
 )
@@ -327,4 +379,12 @@ py_library(
 filegroup(
     name = "tpl_files",
     srcs = glob(["**/*.tpl"]),
+)
+
+filegroup(
+    name = "doc_files",
+    srcs = glob([
+        "**/*.md",
+        "**/*.svg",
+    ]),
 )

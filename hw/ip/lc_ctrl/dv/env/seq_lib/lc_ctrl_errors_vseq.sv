@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,6 +36,8 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
   bit fatal_state_alert_received;
   bit fatal_bus_integ_alert_received;
   bit assertions_disabled;
+  // Discussed in issue #18201.
+  bit disable_cdc_jtag_assertion;
 
 
   `uvm_object_utils_begin(lc_ctrl_errors_vseq)
@@ -70,7 +72,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
     err_inj.transition_err == 0;
     err_inj.transition_count_err == 0;
     err_inj.clk_byp_error_rsp == 0;
-    err_inj.flash_rma_error_rsp == 0;
+    err_inj.nvm_rma_error_rsp == 0;
     err_inj.token_mismatch_err == 0;
     err_inj.token_response_err == 0;
     err_inj.token_invalid_err == 0;
@@ -121,7 +123,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
 
   constraint mubi_err_inj_c {
     err_inj.clk_byp_rsp_mubi_err == 0;
-    err_inj.flash_rma_rsp_mubi_err == 0;
+    err_inj.nvm_rma_rsp_mubi_err == 0;
     err_inj.otp_secrets_valid_mubi_err == 0;
     err_inj.otp_test_tokens_valid_mubi_err == 0;
     err_inj.otp_rma_token_valid_mubi_err == 0;
@@ -151,9 +153,11 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
     end
 
     // Reenable assertions before next sequence
-    `DV_ASSERT_CTRL_REQ("OtpProgH_DataStableWhenBidirectionalAndReq_A", 1)
-    `DV_ASSERT_CTRL_REQ("OtpProgReqHighUntilAck_A", 1)
-    `DV_ASSERT_CTRL_REQ("OtpProgAckAssertedOnlyWhenReqAsserted_A", 1)
+    `DV_ASSERT_CTRL_REQ("OtpProgH_DataStableWhenBidirectionalAndReq_A",
+                        disable_cdc_jtag_assertion ? 0 : 1)
+    `DV_ASSERT_CTRL_REQ("OtpProgReqHighUntilAck_A", disable_cdc_jtag_assertion ? 0 : 1)
+    `DV_ASSERT_CTRL_REQ("OtpProgAckAssertedOnlyWhenReqAsserted_A",
+                        disable_cdc_jtag_assertion ? 0 : 1)
     `DV_ASSERT_CTRL_REQ("KmacIfSyncReqAckAckNeedsReq", 1)
     `DV_ASSERT_CTRL_REQ("StateRegs_A", 1)
     `DV_ASSERT_CTRL_REQ("FsmStateRegs_A", 1)
@@ -165,7 +169,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
     disable handle_escalate;
     disable security_escalation_inject;
     disable run_clk_byp_rsp;
-    disable run_flash_rma_rsp;
+    disable run_nvm_rma_rsp;
 
     // Clear escalates
     cfg.escalate_injected = 0;
@@ -178,6 +182,10 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
   endtask
 
   virtual task pre_start();
+    bit cdc_instrumentation_enabled;
+    void'($value$plusargs("cdc_instrumentation_enabled=%d", cdc_instrumentation_enabled));
+    if (cdc_instrumentation_enabled) disable_cdc_jtag_assertion = 1;
+
     // Align cfg.err_inj with the sequence before body starts
     update_err_inj_cfg();
     mubi_assertion_controls();
@@ -216,7 +224,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
 
       // Kill processes
       disable run_clk_byp_rsp;
-      disable run_flash_rma_rsp;
+      disable run_nvm_rma_rsp;
 
       if (i != 1) begin
         `DV_CHECK_RANDOMIZE_FATAL(this)
@@ -242,7 +250,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
       // Respawn processes
       fork
         run_clk_byp_rsp(err_inj.clk_byp_error_rsp);
-        run_flash_rma_rsp(err_inj.flash_rma_error_rsp);
+        run_nvm_rma_rsp(err_inj.nvm_rma_error_rsp);
       join_none
 
       `uvm_info(`gfn, $sformatf(
@@ -330,8 +338,13 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
       // SW transition request
       // verilog_format: off - avoid bad formatting
       if ((err_inj.state_err || valid_state_for_trans(lc_state)) &&
-          (err_inj.count_err || err_inj.transition_count_err ||
-          (lc_cnt != LcCnt24 && lc_state != LcStScrap))) begin
+          (err_inj.count_err ||
+           // We can't inject a transition count error if we're in RMA or PROD_END since the only
+           // valid transition from those states is into SCRAP, which is always allowed (even when
+           // the transition counter is maxed out).
+           (err_inj.transition_count_err && !(lc_state inside {LcStRma, LcStProdEnd})) ||
+           (!err_inj.transition_count_err && lc_state inside {LcStRma, LcStProdEnd})   ||
+           (lc_cnt != LcCnt24 && lc_state != LcStScrap))) begin
         lc_ctrl_state_pkg::lc_token_t token_val = get_random_token();
         randomize_next_lc_state(dec_lc_state(lc_state));
         `uvm_info(`gfn, $sformatf(
@@ -342,75 +355,76 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
         cfg.set_test_phase(LcCtrlWaitTransition);
         sw_transition_req(next_lc_state, token_val);
         cfg.set_test_phase(LcCtrlTransitionComplete);
+
+        // verilog_format: on
+
+        if (cfg.err_inj.token_mux_ctrl_redun_err || cfg.err_inj.token_mux_digest_err) begin
+          // Allow the FSM to get to a terminal state
+          wait(cfg.lc_ctrl_vif.lc_ctrl_fsm_state inside {PostTransSt, InvalidSt, EscalateSt});
+          disable token_mux_ctrl_err_inject;
+          disable token_mux_digest_err_inject;
+        end
+
+        // Allow volatile registers to settle
+        cfg.clk_rst_vif.wait_clks($urandom_range(15, 10));
+
+        cfg.set_test_phase(LcCtrlReadState1);
+        // Check count and state before escalate is generated
+        // Skip this if we are injecting clock bypass error responses as the KMAC
+        // may or may not respond leaving the FSM stuck in TokenHashSt
+        // Also Token Mux select error injection leads to unpredictable results
+        if (!err_inj.clk_byp_error_rsp && !err_inj.token_mux_ctrl_redun_err) begin
+          rd_lc_state_and_cnt_csrs();
+        end else begin
+          `uvm_info(`gfn, "Skipped read of lc state & lc_count because of error injection",
+                    UVM_MEDIUM)
+          cfg.clk_rst_vif.wait_clks($urandom_range(15, 10));
+        end
+
+        // Allow escalate to be generated if we have received an alert
+        cfg.set_test_phase(LcCtrlEscalate);
+
+        // Wait before re-checking lc_state to allow escalate to be accepted
+        cfg.clk_rst_vif.wait_clks($urandom_range(150, 100));
+        cfg.set_test_phase(LcCtrlReadState2);
+        // Check count and state after escalate is generated
+        // Skip if token mux select line error injection
+        if (!err_inj.token_mux_ctrl_redun_err) rd_lc_state_and_cnt_csrs();
+
+        cfg.set_test_phase(LcCtrlPostTransition);
+
+        // Delay a few extra cycles if we are doing escalate injection
+        if (err_inj.security_escalation_err) begin
+          cfg.clk_rst_vif.wait_clks(security_escalation_err_inj_delay + 10);
+        end
+
+        // Attempt a second transition post transition if enabled
+        // verilog_format: off - avoid bad formatting
+        if (err_inj.post_trans_err) begin
+          `uvm_info(`gfn, "Attempting second transition post transition", UVM_LOW)
+          `DV_CHECK_RANDOMIZE_FATAL(this)
+          // Clear all error injections except post_trans_err
+          err_inj = '{post_trans_err: 1, default: 0};
+          // SW transition request
+          if ((err_inj.state_err || valid_state_for_trans(lc_state)) &&
+              (err_inj.count_err || err_inj.transition_count_err || lc_cnt != LcCnt24)) begin
+            lc_ctrl_state_pkg::lc_token_t token_val = get_random_token();
+            randomize_next_lc_state(dec_lc_state(lc_state));
+            set_hashed_token();
+            set_otp_prog_rsp();
+            sw_transition_req(next_lc_state, token_val);
+          end else begin
+            // wait at least two clks for scb to finish checking lc outputs
+            cfg.clk_rst_vif.wait_clks($urandom_range(15, 6));
+          end
+          cfg.set_test_phase(LcCtrlPostTransTransitionComplete);
+        end
+        // verilog_format: on
       end else begin
         cfg.set_test_phase(LcCtrlBadNextState);
         // wait at least two clks for scb to finish checking lc outputs
-        cfg.clk_rst_vif.wait_clks($urandom_range(10, 2));
+        cfg.clk_rst_vif.wait_clks($urandom_range(15, 6));
       end
-      // verilog_format: on
-
-      if (cfg.err_inj.token_mux_ctrl_redun_err || cfg.err_inj.token_mux_digest_err) begin
-        // Allow the FSM to get to a terminal state
-        wait(cfg.lc_ctrl_vif.lc_ctrl_fsm_state inside {PostTransSt, InvalidSt, EscalateSt});
-        disable token_mux_ctrl_err_inject;
-        disable token_mux_digest_err_inject;
-      end
-
-      // Allow volatile registers to settle
-      cfg.clk_rst_vif.wait_clks($urandom_range(15, 10));
-
-      cfg.set_test_phase(LcCtrlReadState1);
-      // Check count and state before escalate is generated
-      // Skip this if we are injecting clock bypass error responses as the KMAC
-      // may or may not respond leaving the FSM stuck in TokenHashSt
-      // Also Token Mux select error injection leads to unpredicable results
-      if (!err_inj.clk_byp_error_rsp && !err_inj.token_mux_ctrl_redun_err) begin
-        rd_lc_state_and_cnt_csrs();
-      end else begin
-        `uvm_info(`gfn, "Skipped read of lc state & lc_count because of error injection",
-                  UVM_MEDIUM)
-        cfg.clk_rst_vif.wait_clks($urandom_range(15, 10));
-      end
-
-      // Allow escalate to be generated if we have received an alert
-      cfg.set_test_phase(LcCtrlEscalate);
-
-      // Wait before re-checking lc_state to allow escalate to be accepted
-      cfg.clk_rst_vif.wait_clks($urandom_range(150, 100));
-      cfg.set_test_phase(LcCtrlReadState2);
-      // Check count and state after escalate is generated
-      // Skip if token mux select line error injection
-      if (!err_inj.token_mux_ctrl_redun_err) rd_lc_state_and_cnt_csrs();
-
-      cfg.set_test_phase(LcCtrlPostTransition);
-
-      // Delay a few extra cycles if we are doing escalate injection
-      if (err_inj.security_escalation_err) begin
-        cfg.clk_rst_vif.wait_clks(security_escalation_err_inj_delay + 10);
-      end
-
-      // Attempt a second transition post transition if enabled
-      // verilog_format: off - avoid bad formatting
-      if (err_inj.post_trans_err) begin
-        `uvm_info(`gfn, "Attempting second transition post transition", UVM_LOW)
-        `DV_CHECK_RANDOMIZE_FATAL(this)
-        // Clear all error injections except post_trans_err
-        err_inj = '{post_trans_err: 1, default: 0};
-        // SW transition request
-        if ((err_inj.state_err || valid_state_for_trans(lc_state)) &&
-            (err_inj.count_err || err_inj.transition_count_err || lc_cnt != LcCnt24)) begin
-          lc_ctrl_state_pkg::lc_token_t token_val = get_random_token();
-          randomize_next_lc_state(dec_lc_state(lc_state));
-          set_hashed_token();
-          set_otp_prog_rsp();
-          sw_transition_req(next_lc_state, token_val);
-        end else begin
-          // wait at least two clks for scb to finish checking lc outputs
-          cfg.clk_rst_vif.wait_clks($urandom_range(10, 2));
-        end
-        cfg.set_test_phase(LcCtrlPostTransTransitionComplete);
-      end
-      // verilog_format: on
 
       // Sample coverage if enabled
       sample_cov();
@@ -435,15 +449,17 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
 
     // Disable assertions depending on error injection
     if (err_inj.clk_byp_error_rsp || err_inj.clk_byp_rsp_mubi_err ||
-        err_inj.security_escalation_err) begin
+        err_inj.security_escalation_err || err_inj.nvm_rma_error_rsp) begin
       `DV_ASSERT_CTRL_REQ("OtpProgH_DataStableWhenBidirectionalAndReq_A", 0)
       `DV_ASSERT_CTRL_REQ("OtpProgReqHighUntilAck_A", 0)
       `DV_ASSERT_CTRL_REQ("OtpProgAckAssertedOnlyWhenReqAsserted_A", 0)
       `DV_ASSERT_CTRL_REQ("KmacIfSyncReqAckAckNeedsReq", 0)
     end else begin
-      `DV_ASSERT_CTRL_REQ("OtpProgH_DataStableWhenBidirectionalAndReq_A", 1)
-      `DV_ASSERT_CTRL_REQ("OtpProgReqHighUntilAck_A", 1)
-      `DV_ASSERT_CTRL_REQ("OtpProgAckAssertedOnlyWhenReqAsserted_A", 1)
+      `DV_ASSERT_CTRL_REQ("OtpProgH_DataStableWhenBidirectionalAndReq_A",
+                          disable_cdc_jtag_assertion ? 0 : 1)
+      `DV_ASSERT_CTRL_REQ("OtpProgReqHighUntilAck_A", disable_cdc_jtag_assertion ? 0 : 1)
+      `DV_ASSERT_CTRL_REQ("OtpProgAckAssertedOnlyWhenReqAsserted_A",
+                          disable_cdc_jtag_assertion ? 0 : 1)
       `DV_ASSERT_CTRL_REQ("KmacIfSyncReqAckAckNeedsReq", 1)
     end
 
@@ -475,10 +491,21 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
         if (!err_inj.transition_err && !err_inj.state_err) {
           // Valid transition
           next_lc_state inside {VALID_NEXT_STATES[curr_lc_state]};
+          // The constraints cannot be solved for if the only valid transition is into SCRAP, hence
+          // we specifically allow those cases and make sure we're not using RMA and PROD_END to
+          // test transition counter errors.
+          if (err_inj.transition_count_err &&
+              !(curr_lc_state inside {DecLcStRma, DecLcStProdEnd})) {
+            // Transition count errors due to counter saturation are injected by requesting a
+            // transition into any state with a saturated counter in OTP. This does not work if the
+            // target state is SCRAP, though, since a transition into SCRAP is always allowed.
+            next_lc_state != DecLcStScrap;
+          }
         } else if (!err_inj.state_err) {
           // Invalid transition
           !(next_lc_state inside {VALID_NEXT_STATES[curr_lc_state]});
-        })
+        }
+        )
     `uvm_info(`gfn,$sformatf("randomize_next_lc_state: next_lc_state=%s",
         next_lc_state.name()), UVM_MEDIUM)
   endfunction
@@ -491,8 +518,8 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
     lc_ctrl_state_pkg::lc_token_t token_err_inj;
     kmac_pkg::rsp_digest_t kmac_digest;
 
-    tokens_a[ZeroTokenIdx]       = lc_ctrl_state_pkg::AllZeroTokenHashed;
-    tokens_a[RawUnlockTokenIdx]  = lc_ctrl_state_pkg::RndCnstRawUnlockTokenHashed;
+    tokens_a[ZeroTokenIdx]       = lc_ctrl_token_pkg::AllZeroTokenHashed;
+    tokens_a[RawUnlockTokenIdx]  = lc_ctrl_token_pkg::RndCnstRawUnlockTokenHashed;
     tokens_a[TestUnlockTokenIdx] = cfg.lc_ctrl_vif.otp_i.test_unlock_token;
     tokens_a[TestExitTokenIdx]   = cfg.lc_ctrl_vif.otp_i.test_exit_token;
     tokens_a[RmaTokenIdx]        = cfg.lc_ctrl_vif.otp_i.rma_token;
@@ -523,7 +550,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
       end
     end
     clear_kmac_user_digest_share();
-    cfg.m_kmac_app_agent_cfg.add_user_digest_share(kmac_digest);
+    cfg.m_kmac_app_agent_cfg.add_user_digest(kmac_digest);
     // Set error response
     cfg.m_kmac_app_agent_cfg.error_rsp_pct = (err_inj.token_response_err) ? 100 : 0;
   endfunction
@@ -533,7 +560,6 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
     bit [1:0] err_bits = 0;
     // Clear any previous data
     cfg.m_otp_prog_pull_agent_cfg.clear_d_user_data();
-    // TODO: tailor constraint to LC state transitions for V3
     if (err_inj.otp_prog_err) `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(err_bits, err_bits == 3;)
     foreach (err_bits[i]) cfg.m_otp_prog_pull_agent_cfg.add_d_user_data(err_bits[i]);
   endfunction
@@ -561,7 +587,15 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
       if (!err_inj.state_err && !err_inj.state_illegal_err) begin
         `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(lc_state,
                                            // lc_state should be valid for transition
-                                           lc_state inside {LcValidStateForTrans};)
+                                           lc_state inside {LcValidStateForTrans};
+                                           // The only valid transitions from PROD_END and RMA are
+                                           // into SCRAP. Since transitioning into SCRAP is always
+                                           // allowed, we cannot use these states as base states to
+                                           // test the transition counter saturation error.
+                                           if (err_inj.transition_count_err) {
+                                             !(lc_state inside {LcStProdEnd, LcStRma});
+                                           }
+                                           )
         `uvm_info(`gfn, $sformatf("drive_otp_i: driving lc_state=%s", lc_state.name), UVM_MEDIUM)
       end else begin
         // Force invalid state on input optionally with illegal coding
@@ -573,7 +607,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
       if (!err_inj.count_err && !err_inj.count_illegal_err) begin
         `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(lc_cnt,
                                            (lc_state != LcStRaw) -> (lc_cnt != LcCnt0);
-        // Count must be less than LcCnt24 unless we want to inject a tranisition count error
+        // Count must be less than LcCnt24 unless we want to inject a transition count error
         if (!err_inj.transition_count_err) {lc_cnt != LcCnt24;}
         else {lc_cnt == LcCnt24;})
       end else begin
@@ -663,7 +697,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
     bit state_error_exp, state_error_act;
     bit count_error_exp, count_error_act;
     bit token_error_exp, token_error_act;
-    bit flash_rma_error_exp, flash_rma_error_act;
+    bit nvm_rma_error_exp, nvm_rma_error_act;
     bit otp_error_exp, otp_error_act;
     bit transition_error_exp, transition_error_act;
     bit transition_count_error_exp, transition_count_error_act;
@@ -678,7 +712,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
       `uvm_info(`gfn, {"wait_status: ", ral.status.sprint(uvm_default_line_printer)}, UVM_MEDIUM)
       if (get_field_val(ral.status.transition_successful, status_val)) break;
       if (get_field_val(ral.status.token_error, status_val)) break;
-      if (get_field_val(ral.status.flash_rma_error, status_val)) break;
+      if (get_field_val(ral.status.nvm_rma_error, status_val)) break;
       if (get_field_val(ral.status.transition_error, status_val)) break;
       if (get_field_val(ral.status.transition_count_error, status_val)) break;
       if (get_field_val(ral.status.otp_error, status_val) ||
@@ -707,7 +741,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
             has_test_token(dec_lc_state(lc_state), next_lc_state)) ||
         (cfg.err_inj.otp_rma_token_valid_mubi_err &&
          has_rma_token(dec_lc_state(lc_state), next_lc_state)) || cfg.err_inj.token_mux_digest_err;
-    flash_rma_error_exp = cfg.err_inj.flash_rma_error_rsp || cfg.err_inj.flash_rma_rsp_mubi_err;
+    nvm_rma_error_exp = cfg.err_inj.nvm_rma_error_rsp || cfg.err_inj.nvm_rma_rsp_mubi_err;
     otp_error_exp = cfg.err_inj.otp_prog_err || cfg.err_inj.clk_byp_error_rsp ||
         cfg.err_inj.clk_byp_rsp_mubi_err;
     transition_count_error_exp = cfg.err_inj.transition_count_err;
@@ -717,7 +751,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
     // Actual bits
     state_error_act = get_field_val(ral.status.state_error, status_val);
     token_error_act = get_field_val(ral.status.token_error, status_val);
-    flash_rma_error_act = get_field_val(ral.status.flash_rma_error, status_val);
+    nvm_rma_error_act = get_field_val(ral.status.nvm_rma_error, status_val);
     otp_error_act = get_field_val(ral.status.otp_error, status_val);
     transition_count_error_act = get_field_val(ral.status.transition_count_error, status_val);
     otp_partition_error_act = get_field_val(ral.status.otp_partition_error, status_val);
@@ -731,7 +765,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
       if (!cfg.err_inj.token_mux_ctrl_redun_err) begin
         `DV_CHECK_EQ(token_error_act, token_error_exp)
       end
-      `DV_CHECK_EQ(flash_rma_error_act, flash_rma_error_exp)
+      `DV_CHECK_EQ(nvm_rma_error_act, nvm_rma_error_exp)
       `DV_CHECK_EQ(otp_error_act, otp_error_exp)
       `DV_CHECK_EQ(transition_count_error_exp, transition_count_error_act)
       `DV_CHECK_EQ(otp_partition_error_exp, otp_partition_error_act)
@@ -802,7 +836,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
   // Deassert after an number of clock cycles if assert clocks > 0
   // Otherwise leave asserted
   protected virtual task send_escalate(int index, int assert_clocks = 0);
-    // TODO - replace with calls to escalate agent when driver implemented
+    // ICEBOX(#18007) - replace with calls to escalate agent when driver implemented
     `uvm_info(`gfn, $sformatf("send_escalate: index=%0d assert_clocks=%0d", index, assert_clocks),
               UVM_LOW)
     cfg.escalate_injected = 1;
@@ -829,7 +863,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
 
   // Clear escalate assertion
   protected virtual task clear_escalate(int index);
-    // TODO - replace with calls to escalate agent when driver implemented
+    // ICEBOX(#18007) - replace with calls to escalate agent when driver implemented
     case (index)
       0: begin
         cfg.m_esc_scrap_state0_agent_cfg.vif.sender_cb.esc_tx_int <= 2'b01;
@@ -925,69 +959,96 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
   endtask
 
 
-  virtual task run_flash_rma_rsp(bit has_err = 0);
-    // Number of lc_flash_rma_ack_i synchronisation FFs
-    const int FLASH_RMA_ACK_SYNC_FFS = 2;
+  virtual task run_nvm_rma_rsp(bit has_err = 0);
+    // Number of lc_nvm_rma_ack_i synchronisation FFs
+    // This value can take 2 or 3 cycles after adding cdc instrumentation
+    // and we take maximum to be conservative.
+    const int NVM_RMA_ACK_SYNC_FFS = 3;
     // Values to be driven for On and Off
-    lc_ctrl_pkg::lc_tx_t on_val = err_inj.flash_rma_rsp_mubi_err ?
+    lc_ctrl_pkg::lc_tx_t on_val = err_inj.nvm_rma_rsp_mubi_err ?
         // Get a random value for on
         cip_base_pkg::get_rand_lc_tx_val(.t_weight(0), .f_weight(0), .other_weight(1)) :
         // Standard On value
         lc_ctrl_pkg::On;
-    lc_ctrl_pkg::lc_tx_t off_val = err_inj.flash_rma_rsp_mubi_err ?
+    lc_ctrl_pkg::lc_tx_t off_val = err_inj.nvm_rma_rsp_mubi_err ?
         // Get a random value for off
         cip_base_pkg::get_rand_lc_tx_val(.t_weight(0), .f_weight(0), .other_weight(1)) :
         // Standard On value
         lc_ctrl_pkg::Off;
-    `uvm_info(`gfn, $sformatf("run_flash_rma_rsp started off_val=%0x, on_val=%0x",
+    `uvm_info(`gfn, $sformatf("run_nvm_rma_rsp started off_val=%0x, on_val=%0x",
         off_val,on_val), UVM_MEDIUM)
 
-    cfg.lc_ctrl_vif.set_flash_rma_ack(off_val);
+    set_nvm_rma_ack(off_val);
+    // injecting nvm_rma_error_rsp via a separate task for cleanliness
+    if (err_inj.nvm_rma_error_rsp) begin
+      run_nvm_rma_err_rsp();
+      return;
+    end
+
     forever begin
       lc_ctrl_pkg::lc_tx_t rsp = off_val;
-      while (cfg.lc_ctrl_vif.flash_rma_req_o != lc_ctrl_pkg::On &&
-          !err_inj.flash_rma_error_rsp) begin
-        @(cfg.lc_ctrl_vif.flash_rma_req_o or err_inj);
-        if(err_inj.flash_rma_rsp_mubi_err &&
-          cfg.lc_ctrl_vif.flash_rma_req_o != lc_ctrl_pkg::On) begin
-          cfg.lc_ctrl_vif.set_flash_rma_ack(rsp);
+      while (cfg.lc_ctrl_vif.nvm_rma_req_o != lc_ctrl_pkg::On) begin
+        @(cfg.lc_ctrl_vif.nvm_rma_req_o or err_inj);
+        if(err_inj.nvm_rma_rsp_mubi_err &&
+          cfg.lc_ctrl_vif.nvm_rma_req_o != lc_ctrl_pkg::On) begin
+          set_nvm_rma_ack(rsp);
         end
       end
-      if (err_inj.flash_rma_error_rsp) begin
-        // Error stream just on -> off -> on... every clock cycle
-        rsp = (rsp == lc_ctrl_pkg::On) ? Off : On;
-        cfg.lc_ctrl_vif.set_flash_rma_ack(rsp);
-        cfg.clk_rst_vif.wait_clks(1);
-      end else begin
         // Normal behaviour
-        rsp = On;
-        cfg.clk_rst_vif.wait_clks($urandom_range(0, 20));
-        cfg.lc_ctrl_vif.set_flash_rma_ack(rsp);
-        // We can only inject error values after state FlashRmaSt starts
-        if(err_inj.flash_rma_rsp_mubi_err) begin
-          wait(cfg.lc_ctrl_vif.lc_ctrl_fsm_state inside {FlashRmaSt});
-          // Allow time to get through the synchronisation FFs
-          cfg.clk_rst_vif.wait_clks(FLASH_RMA_ACK_SYNC_FFS);
-          // Now inject the bad value
-          rsp = on_val;
-          cfg.lc_ctrl_vif.set_flash_rma_ack(rsp);
-        end
+      rsp = On;
+      cfg.clk_rst_vif.wait_clks($urandom_range(0, 20));
+      set_nvm_rma_ack(rsp);
+      // We can only inject error values after state NvmRmaSt starts
+      if(err_inj.nvm_rma_rsp_mubi_err) begin
+        wait(cfg.lc_ctrl_vif.lc_ctrl_fsm_state inside {NvmRmaSt});
+        // Allow time to get through the synchronisation FFs
+        cfg.clk_rst_vif.wait_clks(NVM_RMA_ACK_SYNC_FFS);
+        // Now inject the bad value. When verifying MuBi errors in the NVM RMA response, our
+        // sequence seems to expect the invalid MuBi signal to arrive within at most 1 clock
+        // cycle.
+        rsp = on_val;
+        set_nvm_rma_ack(rsp, .max_delay_cycles(1));
       end
-      wait (cfg.lc_ctrl_vif.flash_rma_req_o != lc_ctrl_pkg::On || err_inj.flash_rma_error_rsp);
-      if (err_inj.flash_rma_error_rsp) begin
-        // Error stream just on -> off -> on... every clock cycle
-        rsp = (rsp == lc_ctrl_pkg::On) ? Off : On;
-        cfg.lc_ctrl_vif.set_flash_rma_ack(rsp);
-        cfg.clk_rst_vif.wait_clks(1);
-      end else begin
-        // Normal behaviour
-        rsp = off_val;
-        cfg.clk_rst_vif.wait_clks($urandom_range(0, 20));
-        cfg.lc_ctrl_vif.set_flash_rma_ack(rsp);
-      end
+      wait (cfg.lc_ctrl_vif.nvm_rma_req_o != lc_ctrl_pkg::On);
+      // Normal behaviour
+      rsp = off_val;
+      cfg.clk_rst_vif.wait_clks($urandom_range(0, 20));
+      set_nvm_rma_ack(rsp);
     end
   endtask
   // verilog_format: on
+
+  // Model an NVM controller that responds incorrectly to the RMA handshake. Each fault is driven
+  // once and then held, so it settles through the ack synchronisers even with CDC instrumentation
+  // enabled and is guaranteed to be seen by the FSM. The FSM is expected to detect the error in
+  // either the TokenCheck0St, TokenCheck1St, or TransProgSt states. This is where the FSM is
+  // expected to assert the nvm_rma_error_o signal.
+  virtual task run_nvm_rma_err_rsp();
+    @(cfg.transition_cmd_wr_ev);
+    if (next_lc_state != DecLcStRma) begin
+      // Acknowledge an RMA request that was never made. Randomly pick which state the FSM flags
+      // the error in.
+      randcase                                                        // exp error arrival state
+        1: ;                                                          // TokenCheck0St
+        1: wait (cfg.lc_ctrl_vif.lc_ctrl_fsm_state == NvmRmaSt);      // TokenCheck1St/TransProgSt
+        1: wait (cfg.lc_ctrl_vif.lc_ctrl_fsm_state == TokenCheck0St); // TransProgSt
+      endcase
+      set_nvm_rma_ack(lc_ctrl_pkg::On, .max_delay_cycles(0));
+    end else begin
+      // Acknowledge the request, then withdraw the ack once the FSM has accepted it and left
+      // NvmRmaSt. The FSM requires the ack to stay On in TransProgSt, where this is caught.
+      wait (cfg.lc_ctrl_vif.nvm_rma_req_o == lc_ctrl_pkg::On);
+      cfg.clk_rst_vif.wait_clks($urandom_range(0, 20));
+      set_nvm_rma_ack(lc_ctrl_pkg::On);
+      // Wait for FSM to leave NvmRmaSt so that it has accepted the request,
+      // meaning we can now withdraw the ack.
+      wait (cfg.lc_ctrl_vif.lc_ctrl_fsm_state != NvmRmaSt);
+      // The ack will propagate through the synchronisation FFs,
+      // so by withdrawing it now, the FSM will see it as Off in TransProgSt.
+      set_nvm_rma_ack(lc_ctrl_pkg::Off, .max_delay_cycles(0));
+    end
+  endtask
+
 
   // Security escalation injection task
   virtual task security_escalation_inject();
@@ -1027,8 +1088,13 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
     // Values other than On/Off trigger assertions in the primitives
     if (err_inj.clk_byp_rsp_mubi_err) `DV_ASSERT_CTRL_REQ("FsmClkBypAckSync", 0)
     else `DV_ASSERT_CTRL_REQ("FsmClkBypAckSync", 1)
-    if (err_inj.flash_rma_rsp_mubi_err) `DV_ASSERT_CTRL_REQ("FsmClkFlashRmaAckSync", 0)
-    else `DV_ASSERT_CTRL_REQ("FsmClkFlashRmaAckSync", 1)
+    if (err_inj.nvm_rma_rsp_mubi_err) begin
+      `DV_ASSERT_CTRL_REQ("FsmClkNvmRmaAckSync", 0)
+      `DV_ASSERT_CTRL_REQ("FsmClkNvmRmaAckBuf", 0)
+    end else begin
+      `DV_ASSERT_CTRL_REQ("FsmClkNvmRmaAckSync", 1)
+      `DV_ASSERT_CTRL_REQ("FsmClkNvmRmaAckBuf", 1)
+    end
     if (err_inj.otp_test_tokens_valid_mubi_err) `DV_ASSERT_CTRL_REQ("FsmOtpTestTokensValidSync", 0)
     else `DV_ASSERT_CTRL_REQ("FsmOtpTestTokensValidSync", 1);
     if (err_inj.otp_rma_token_valid_mubi_err) `DV_ASSERT_CTRL_REQ("FsmOtpRmaTokenValidSync", 0)
@@ -1045,7 +1111,7 @@ class lc_ctrl_errors_vseq extends lc_ctrl_smoke_vseq;
     `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(inj_state,
                                        inj_state inside {
         ClkMuxSt, CntIncrSt, CntProgSt, TransCheckSt,
-        FlashRmaSt, TokenHashSt, TokenCheck0St, TokenCheck1St}; )
+        NvmRmaSt, TokenHashSt, TokenCheck0St, TokenCheck1St}; )
 
     // Save in config object for scoreboard
     cfg.token_mux_ctrl_redun_err_inj_state = inj_state;

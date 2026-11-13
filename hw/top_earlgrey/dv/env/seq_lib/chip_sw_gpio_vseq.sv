@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,22 @@ class chip_sw_gpio_vseq extends chip_sw_base_vseq;
 
     bit [NUM_GPIOS-1:0] gpios_mask = {NUM_GPIOS{1'b1}};
     uint                timeout_ns = 2_000_000;
+    // The GPIO instance to test, selected via the plusarg '+gpio_idx'.
+    uint                gpio_idx = 0;
 
   `uvm_object_new
+
+  // Override the base-class impl to pass the GPIO instance to test to SW via the backdoor.
+  virtual task cpu_init();
+    bit [7:0] gpio_idx_arr[1];
+
+    void'($value$plusargs("gpio_idx=%0d", gpio_idx));
+    `DV_CHECK(gpio_idx inside {[0 : NUM_GPIO_INSTS-1]})
+    gpio_idx_arr = '{gpio_idx[7:0]};
+
+    super.cpu_init();
+    sw_symbol_backdoor_overwrite("gpio_idx_dv", gpio_idx_arr);
+  endtask
 
   virtual task body();
     super.body();
@@ -53,7 +67,7 @@ class chip_sw_gpio_vseq extends chip_sw_base_vseq;
     // Check for W0 pattern on the GPIO output pins.
     for (int i = 0; i < NUM_GPIOS; i++) begin
       logic [NUM_GPIOS-1:0] exp_gpios = ~(1 << i);
-      `DV_SPINWAIT(wait(cfg.chip_vif.gpios_if.pins === gpios_mask);,
+      `DV_SPINWAIT(wait(cfg.chip_vif.gpios_if.pins === exp_gpios);,
                    $sformatf("Timed out waiting for GPIOs == %0h", exp_gpios),
                    timeout_ns,
                   `gfn)
@@ -91,13 +105,13 @@ class chip_sw_gpio_vseq extends chip_sw_base_vseq;
 
     // Drive T1 pattern.
     for (int i = 0; i < NUM_GPIOS; i++) begin
-      cfg.chip_vif.cpu_clk_rst_if.wait_clks($urandom_range(1000, 2000));
+      cfg.chip_vif.cpu_clk_rst_if.wait_clks($urandom_range(1100, 2000));
       cfg.chip_vif.gpios_if.drive_pin(i, 1'b1);
     end
 
     // Drive T0 pattern.
     for (int i = 0; i < NUM_GPIOS; i++) begin
-      cfg.chip_vif.cpu_clk_rst_if.wait_clks($urandom_range(1000, 2000));
+      cfg.chip_vif.cpu_clk_rst_if.wait_clks($urandom_range(1100, 2000));
       cfg.chip_vif.gpios_if.drive_pin(i, 1'b0);
     end
 

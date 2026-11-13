@@ -1,22 +1,64 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-load("//rules:opentitan.bzl", "OPENTITAN_CPU")
-load("//rules:cross_platform.bzl", "dual_cc_device_library_of", "dual_cc_library", "dual_inputs")
 load(
-    "//rules:opentitan_test.bzl",
-    "cw310_params",
-    "opentitan_functest",
+    "//rules:cross_platform.bzl",
+    "dual_cc_device_library_of",
+    "dual_cc_library",
+    "dual_inputs",
+)
+load(
+    "//rules/opentitan:defs.bzl",
+    "EARLGREY_TEST_ENVS",
+    "fpga_params",
+    "opentitan_test",
+    "qemu_params",
     "verilator_params",
 )
-load("//rules:otbn.bzl", "otbn_insn_count_range")
+load(
+    "@bazel_skylib//lib:dicts.bzl",
+    "dicts",
+)
+load("//hw/top:defs.bzl", "opentitan_require_ip")
 
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
+    name = "ecdsa_p256_key",
+    srcs = ["ecdsa_p256_key.c"],
+    hdrs = ["ecdsa_p256_key.h"],
+    deps = [
+        "//sw/device/lib/base:macros",
+    ],
+)
+
+cc_library(
+    name = "mldsa87_key",
+    srcs = ["mldsa87_key.c"],
+    hdrs = ["mldsa87_key.h"],
+    deps = [
+        "//sw/device/lib/base:macros",
+    ],
+)
+
+cc_library(
     name = "rsa_key",
+    srcs = ["rsa_key.c"],
     hdrs = ["rsa_key.h"],
+    deps = [
+        "//sw/device/lib/base:macros",
+    ],
+)
+
+cc_library(
+    name = "spx_key",
+    srcs = ["spx_key.c"],
+    hdrs = ["spx_key.h"],
+    deps = [
+        "//sw/device/lib/base:macros",
+        "//sw/device/silicon_creator/lib/sigverify/sphincsplus:params",
+    ],
 )
 
 dual_cc_library(
@@ -32,7 +74,6 @@ dual_cc_library(
     deps = dual_inputs(
         device = [
             "//sw/device/lib/base:macros",
-            "//sw/device/lib/base:memory",
         ],
         host = [
             "//sw/device/lib/base:global_mock",
@@ -44,6 +85,11 @@ dual_cc_library(
             "//sw/device/silicon_creator/lib:error",
         ],
     ),
+)
+
+alias(
+    name = "mod_exp_ibex_device_library",
+    actual = dual_cc_device_library_of(":mod_exp_ibex"),
 )
 
 cc_test(
@@ -55,9 +101,10 @@ cc_test(
     ],
 )
 
-opentitan_functest(
+opentitan_test(
     name = "mod_exp_ibex_functest_hardcoded",
     srcs = ["mod_exp_ibex_functest.c"],
+    exec_env = EARLGREY_TEST_ENVS,
     verilator = verilator_params(
         timeout = "long",
         tags = [
@@ -67,167 +114,169 @@ opentitan_functest(
     deps = [
         ":mod_exp_ibex",
         "//sw/device/lib/testing/test_framework:ottf_main",
-        "//sw/device/silicon_creator/lib:test_main",
         "//sw/device/silicon_creator/lib/base:sec_mmio",
         "//sw/device/silicon_creator/lib/sigverify/sigverify_tests:sigverify_testvectors_hardcoded",
     ],
 )
 
-opentitan_functest(
+opentitan_test(
     name = "mod_exp_ibex_functest_wycheproof",
     srcs = ["mod_exp_ibex_functest.c"],
-    cw310 = cw310_params(
+    exec_env = {
+        "//hw/top_earlgrey:fpga_cw340_test_rom": None,
+    },
+    fpga = fpga_params(
         timeout = "long",
     ),
-    targets = ["cw310_test_rom"],  # Test set is too large to run in simulation
+    # This test can take > 40 minutes, so mark it manual as it shouldn't run
+    # in CI/nightlies.
+    verilator = verilator_params(tags = ["manual"]),
     deps = [
         ":mod_exp_ibex",
         "//sw/device/lib/testing/test_framework:ottf_main",
-        "//sw/device/silicon_creator/lib:test_main",
         "//sw/device/silicon_creator/lib/base:sec_mmio",
         "//sw/device/silicon_creator/lib/sigverify/sigverify_tests:sigverify_testvectors_wycheproof",
     ],
 )
 
-dual_cc_library(
-    name = "mod_exp_otbn",
-    srcs = dual_inputs(
-        device = ["mod_exp_otbn.c"],
-        host = ["mock_mod_exp_otbn.cc"],
-    ),
-    hdrs = dual_inputs(
-        host = ["mock_mod_exp_otbn.h"],
-        shared = ["mod_exp_otbn.h"],
-    ),
-    target_compatible_with = dual_inputs(
-        # This target uses OTBN pointers internally, so it cannot
-        # work host-side.
-        device = [OPENTITAN_CPU],
-    ),
-    deps = dual_inputs(
-        device = [
-            "//sw/device/lib/base:macros",
-            "//sw/device/lib/base:memory",
-            "//sw/device/silicon_creator/lib/drivers:otbn",
-            "//sw/otbn/crypto:run_rsa_verify_3072_rr_modexp",
-        ],
-        host = [
-            "//sw/device/lib/base:global_mock",
-            "//sw/device/silicon_creator/testing:rom_test",
-            "@googletest//:gtest",
-        ],
-        shared = [
-            ":rsa_key",
-            "//sw/device/silicon_creator/lib:error",
-        ],
-    ),
-)
-
-opentitan_functest(
-    name = "mod_exp_otbn_functest_hardcoded",
-    srcs = ["mod_exp_otbn_functest.c"],
-    verilator = verilator_params(
-        timeout = "long",
-        tags = [
-            "manual",
-        ],
-    ),
-    deps = [
-        ":mod_exp_otbn",
-        "//sw/device/lib/testing/test_framework:ottf_main",
-        "//sw/device/silicon_creator/lib:test_main",
-        "//sw/device/silicon_creator/lib/base:sec_mmio",
-        "//sw/device/silicon_creator/lib/sigverify/sigverify_tests:sigverify_testvectors_hardcoded",
-    ],
-)
-
-opentitan_functest(
-    name = "mod_exp_otbn_functest_wycheproof",
-    srcs = ["mod_exp_otbn_functest.c"],
-    targets = [
-        "cw310_test_rom",
-        "verilator",
-        "dv",
-    ],
-    verilator = verilator_params(
-        timeout = "long",
-        tags = [
-            "manual",
-        ],
-    ),
-    deps = [
-        ":mod_exp_otbn",
-        "//sw/device/lib/testing/test_framework:ottf_main",
-        "//sw/device/silicon_creator/lib:test_main",
-        "//sw/device/silicon_creator/lib/base:sec_mmio",
-        "//sw/device/silicon_creator/lib/sigverify/sigverify_tests:sigverify_testvectors_wycheproof",
-    ],
-)
-
-# This rule runs the instruction-counting script for OTBN and gets the expected
-# min/max instruction counts.
-otbn_insn_count_range(
-    name = "mod_exp_otbn_insn_count_range",
-    deps = [
-        "//sw/otbn/crypto:run_rsa_verify_3072_rr_modexp",
-    ],
-)
-
-# Check the OTBN instruction count in mod_exp_otbn.h
-sh_test(
-    name = "mod_exp_otbn_insn_count_check",
-    size = "small",
-    srcs = ["mod_exp_otbn_insn_count_check.sh"],
-    args = [
-        "$(location :mod_exp_otbn_insn_count_range)",
-        "$(location mod_exp_otbn.h)",
-    ],
-    data = [
-        "mod_exp_otbn.h",
-        ":mod_exp_otbn_insn_count_range",
-    ],
-)
-
-# Common inputs for sigverify.c; we publish two variants of this
-# library, so factoring this out simplifies the build.
 cc_library(
-    name = "sigverify_inner",
-    srcs = ["sigverify.c"],
-    hdrs = ["sigverify.h"],
-    visibility = ["//visibility:private"],
+    name = "ecdsa_p256_verify",
+    srcs = ["ecdsa_p256_verify.c"],
+    hdrs = ["ecdsa_p256_verify.h"],
+    deps = [
+        ":ecdsa_p256_key",
+        "//sw/device/lib/base:hardened",
+        "//sw/device/silicon_creator/lib:otbn_boot_services",
+        "//sw/device/silicon_creator/lib/drivers:hmac",
+    ],
+)
+
+opentitan_test(
+    name = "ecdsa_p256_verify_functest",
+    srcs = ["ecdsa_p256_verify_functest.c"],
+    exec_env = dicts.add(
+        EARLGREY_TEST_ENVS,
+        {
+            "//hw/top_earlgrey:fpga_cw340_test_rom": None,
+        },
+    ),
+    deps = [
+        ":ecdsa_p256_verify",
+        "//sw/device/lib/testing/test_framework:ottf_main",
+    ],
+)
+
+cc_library(
+    name = "rsa_verify",
+    srcs = ["rsa_verify.c"],
+    hdrs = ["rsa_verify.h"],
     deps = [
         ":mod_exp_ibex",
-        ":mod_exp_otbn",
         ":rsa_key",
-        "//hw/ip/otp_ctrl/data:otp_ctrl_regs",
-        "//hw/top_earlgrey/sw/autogen:top_earlgrey",
-        "//sw/device/lib/base:bitfield",
+        "//hw/top:otp_ctrl_c_regs",
+        "//hw/top/dt",
         "//sw/device/lib/base:hardened",
-        "//sw/device/lib/base:macros",
-        "//sw/device/lib/base:memory",
-        "//sw/device/silicon_creator/lib:manifest",
         "//sw/device/silicon_creator/lib/drivers:hmac",
         "//sw/device/silicon_creator/lib/drivers:lifecycle",
         "//sw/device/silicon_creator/lib/drivers:otp",
     ],
 )
 
-cc_library(
-    name = "sigverify",
+opentitan_test(
+    name = "rsa_verify_functest",
+    srcs = ["rsa_verify_functest.c"],
+    exec_env = dicts.add(
+        EARLGREY_TEST_ENVS,
+        {
+            "//hw/top_earlgrey:fpga_cw340_test_rom": None,
+        },
+    ),
+    verilator = verilator_params(
+        timeout = "long",
+        tags = [
+            "manual",
+        ],
+    ),
     deps = [
-        ":mod_exp_ibex",
-        ":mod_exp_otbn",
-        ":sigverify_inner",
+        ":rsa_verify",
+        "//sw/device/lib/testing/test_framework:ottf_main",
     ],
 )
 
 cc_library(
-    name = "sigverify_without_mock_mod_exp_ibex",
-    visibility = ["//sw/device/silicon_creator/rom:__pkg__"],
+    name = "spx_verify",
+    srcs = ["spx_verify.c"],
+    hdrs = ["spx_verify.h"],
     deps = [
-        dual_cc_device_library_of(":mod_exp_ibex"),
-        ":mod_exp_otbn",
-        ":sigverify_inner",
+        ":spx_key",
+        "//hw/top:otp_ctrl_c_regs",
+        "//hw/top/dt",
+        "//sw/device/lib/base:hardened",
+        "//sw/device/silicon_creator/lib/drivers:hmac",
+        "//sw/device/silicon_creator/lib/drivers:lifecycle",
+        "//sw/device/silicon_creator/lib/drivers:otp",
+        "//sw/device/silicon_creator/lib/sigverify/sphincsplus:verify",
+    ],
+)
+
+opentitan_test(
+    name = "spx_verify_functest",
+    srcs = ["spx_verify_functest.c"],
+    exec_env = EARLGREY_TEST_ENVS,
+    verilator = verilator_params(
+        timeout = "long",
+        tags = [
+            "manual",
+        ],
+    ),
+    deps = [
+        ":spx_verify",
+        "//sw/device/lib/testing/test_framework:ottf_main",
+    ],
+)
+
+cc_library(
+    name = "usage_constraints",
+    srcs = ["usage_constraints.c"],
+    hdrs = ["usage_constraints.h"],
+    deps = [
+        "//hw/top:otp_ctrl_c_regs",
+        "//hw/top/dt",
+        "//sw/device/lib/base:bitfield",
+        "//sw/device/lib/base:hardened",
+        "//sw/device/silicon_creator/lib:manifest",
+        "//sw/device/silicon_creator/lib/drivers:otp",
+    ],
+)
+
+cc_library(
+    name = "flash_exec",
+    hdrs = ["flash_exec.h"],
+)
+
+cc_test(
+    name = "flash_exec_unittest",
+    srcs = ["flash_exec_unittest.cc"],
+    target_compatible_with = opentitan_require_ip("flash_ctrl"),
+    deps = [
+        ":flash_exec",
+        ":rsa_verify",
+        ":spx_verify",
+        "//hw/top:flash_ctrl_c_regs",
+        "//sw/device/silicon_creator/testing:rom_test",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "sigverify",
+    hdrs = ["sigverify.h"],
+    deps = [
+        ":ecdsa_p256_verify",
+        ":flash_exec",
+        ":rsa_verify",
+        ":spx_verify",
+        ":usage_constraints",
     ],
 )
 
@@ -236,32 +285,15 @@ cc_test(
     srcs = ["sigverify_unittest.cc"],
     deps = [
         ":sigverify",
-        "//hw/top_earlgrey/ip/flash_ctrl/data/autogen:flash_ctrl_regs",
         "//sw/device/silicon_creator/testing:rom_test",
         "@googletest//:gtest_main",
     ],
 )
 
-opentitan_functest(
-    name = "sigverify_functest",
-    srcs = ["sigverify_functest.c"],
-    verilator = verilator_params(
-        timeout = "long",
-        tags = [
-            "manual",
-        ],
-    ),
-    deps = [
-        ":sigverify",
-        "//sw/device/lib/testing/test_framework:ottf_main",
-        "//sw/device/silicon_creator/lib:test_main",
-        "//sw/device/silicon_creator/lib/base:sec_mmio",
-    ],
-)
-
-opentitan_functest(
+opentitan_test(
     name = "sigverify_dynamic_functest_hardcoded",
     srcs = ["sigverify_dynamic_functest.c"],
+    exec_env = EARLGREY_TEST_ENVS,
     verilator = verilator_params(
         timeout = "long",
         tags = [
@@ -271,23 +303,30 @@ opentitan_functest(
     deps = [
         ":sigverify",
         "//sw/device/lib/testing/test_framework:ottf_main",
-        "//sw/device/silicon_creator/lib:test_main",
         "//sw/device/silicon_creator/lib/base:sec_mmio",
         "//sw/device/silicon_creator/lib/sigverify/sigverify_tests:sigverify_testvectors_hardcoded",
     ],
 )
 
-opentitan_functest(
+opentitan_test(
     name = "sigverify_dynamic_functest_wycheproof",
     srcs = ["sigverify_dynamic_functest.c"],
-    cw310 = cw310_params(
+    exec_env = {
+        # Test set is too large as ROM_EXT
+        "//hw/top_earlgrey:fpga_cw340_test_rom": None,
+    },
+    fpga = fpga_params(
         timeout = "long",
     ),
-    targets = ["cw310_test_rom"],  # Test set is too large to run in simulation
+    qemu = qemu_params(
+        timeout = "long",
+    ),
+    # This test can take > 40 minutes, so mark it manual as it shouldn't run
+    # in CI/nightlies.
+    verilator = verilator_params(tags = ["manual"]),
     deps = [
         ":sigverify",
         "//sw/device/lib/testing/test_framework:ottf_main",
-        "//sw/device/silicon_creator/lib:test_main",
         "//sw/device/silicon_creator/lib/base:sec_mmio",
         "//sw/device/silicon_creator/lib/sigverify/sigverify_tests:sigverify_testvectors_wycheproof",
     ],

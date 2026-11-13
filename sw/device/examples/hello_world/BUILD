@@ -1,23 +1,28 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-load("//rules:opentitan.bzl", "OPENTITAN_CPU", "opentitan_flash_binary")
-load("//rules:exclude_files.bzl", "exclude_files")
+load("//rules/opentitan:defs.bzl", "opentitan_binary")
+load("//rules:files.bzl", "exclude_files")
 load("@rules_pkg//pkg:mappings.bzl", "pkg_files")
+load("//hw/top:defs.bzl", "opentitan_require_top")
 
 package(default_visibility = ["//visibility:public"])
 
-opentitan_flash_binary(
+opentitan_binary(
     name = "hello_world",
-    srcs = [
-        "hello_world.c",
-    ],
+    testonly = True,
+    srcs = ["hello_world.c"],
     copts = [
-        "-nostdlib",
-        "-ffreestanding",
         # Disable the date-time warning only for the hello world program.
         "-Wno-date-time",
+    ],
+    exec_env = [
+        "//hw/top_earlgrey:fpga_cw340",
+        "//hw/top_earlgrey:sim_dv",
+        "//hw/top_earlgrey:sim_verilator",
+        # For some reason, this target makes englishbreakfast builds fail.
+        #"//hw/top_earlgrey:silicon_owner_sival_rom_ext",
     ],
     deps = [
         ":hello_world_lib",
@@ -27,41 +32,28 @@ opentitan_flash_binary(
 
 cc_library(
     name = "hello_world_lib",
-    target_compatible_with = [OPENTITAN_CPU],
+    target_compatible_with = opentitan_require_top("earlgrey"),
     deps = [
-        "//hw/top_earlgrey/sw/autogen:top_earlgrey",
+        "//hw/top:top_lib",
         "//sw/device/examples:demos",
         "//sw/device/lib/arch:device",
         "//sw/device/lib/crt",
         "//sw/device/lib/dif:gpio",
         "//sw/device/lib/dif:pinmux",
-        "//sw/device/lib/dif:spi_device",
         "//sw/device/lib/dif:uart",
         "//sw/device/lib/runtime:hart",
         "//sw/device/lib/runtime:log",
-        "//sw/device/lib/runtime:print",
+        "//sw/device/lib/runtime:print_uart",
         "//sw/device/lib/testing:pinmux_testutils",
         "//sw/device/lib/testing/test_framework:check",
-        "//sw/device/lib/testing/test_framework:ottf_ld_silicon_creator_slot_a",
         "//sw/device/lib/testing/test_framework:ottf_start",
         "//sw/device/lib/testing/test_framework:ottf_test_config",
-    ],
-)
-
-exclude_files(
-    name = "pre_package",
-    testonly = True,
-    srcs = [":hello_world"],
-    exclude_suffix = [
-        ".ll",
-        ".i",
-        ".s",
     ],
 )
 
 pkg_files(
     name = "package",
     testonly = True,
-    srcs = [":pre_package"],
+    srcs = [":hello_world"],
     prefix = "earlgrey/examples",
 )

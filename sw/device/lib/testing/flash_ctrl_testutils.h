@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include "sw/device/lib/base/status.h"
 #include "sw/device/lib/dif/dif_flash_ctrl.h"
 
 /**
@@ -14,7 +15,9 @@
  *
  * @param flash_state A flash_ctrl state handle.
  */
-void flash_ctrl_testutils_wait_for_init(dif_flash_ctrl_state_t *flash_state);
+OT_WARN_UNUSED_RESULT
+status_t flash_ctrl_testutils_wait_for_init(
+    dif_flash_ctrl_state_t *flash_state);
 
 /**
  * Wait for a flash_ctrl operation to end.
@@ -24,10 +27,10 @@ void flash_ctrl_testutils_wait_for_init(dif_flash_ctrl_state_t *flash_state);
  * Clears any error codes and returns the value of operation_error.
  *
  * @param flash_state A flash_ctrl state handle.
- * @return False if the operation produced an error.
+ * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
-bool flash_ctrl_testutils_wait_transaction_end(
+status_t flash_ctrl_testutils_wait_transaction_end(
     dif_flash_ctrl_state_t *flash_state);
 
 /**
@@ -38,12 +41,15 @@ bool flash_ctrl_testutils_wait_transaction_end(
  * @param data_region The region index.
  * @param region_size The region size (in number of pages).
  * @param region_properties The properties for the data region.
- * @return The byte address offset of the region.
+ * @param region_properties The properties for the data region.
+ * @param[out] offset The byte address offset of the region.
+ * @return The result of the operation.
  */
-uint32_t flash_ctrl_testutils_data_region_setup_properties(
+OT_WARN_UNUSED_RESULT
+status_t flash_ctrl_testutils_data_region_setup_properties(
     dif_flash_ctrl_state_t *flash_state, uint32_t base_page_index,
     uint32_t data_region, uint32_t region_size,
-    dif_flash_ctrl_region_properties_t region_properties);
+    dif_flash_ctrl_region_properties_t region_properties, uint32_t *offset);
 
 /**
  * Setup and enable for a data region with scrambling disabled.
@@ -52,11 +58,13 @@ uint32_t flash_ctrl_testutils_data_region_setup_properties(
  * @param base_page_index The region base page index.
  * @param data_region The region index.
  * @param region_size The region size (in number of pages).
- * @return The byte address offset of the region.
+ * @param[out] offset The byte address offset of the region.
+ * @return The result of the operation.
  */
-uint32_t flash_ctrl_testutils_data_region_setup(
+OT_WARN_UNUSED_RESULT
+status_t flash_ctrl_testutils_data_region_setup(
     dif_flash_ctrl_state_t *flash_state, uint32_t base_page_index,
-    uint32_t data_region, uint32_t region_size);
+    uint32_t data_region, uint32_t region_size, uint32_t *offset);
 
 /**
  * Setup and enable for a data region with scrambling enabled.
@@ -65,11 +73,13 @@ uint32_t flash_ctrl_testutils_data_region_setup(
  * @param base_page_index The region base page index.
  * @param data_region The region index.
  * @param region_size The region size (in number of pages).
- * @return The byte address offset of the region.
+ * @param[out] offset The byte address offset of the region.
+ * @return The result of the operation.
  */
-uint32_t flash_ctrl_testutils_data_region_scrambled_setup(
+OT_WARN_UNUSED_RESULT
+status_t flash_ctrl_testutils_data_region_scrambled_setup(
     dif_flash_ctrl_state_t *flash_state, uint32_t base_page_index,
-    uint32_t data_region, uint32_t region_size);
+    uint32_t data_region, uint32_t region_size, uint32_t *offset);
 
 /**
  * Setup and enable for an info region taking region properties as a parameter.
@@ -79,12 +89,14 @@ uint32_t flash_ctrl_testutils_data_region_scrambled_setup(
  * @param bank The required bank.
  * @param partition_id The partition index.
  * @param region_properties The properties for the info region.
- * @return The byte address offset of the region.
+ * @param[out] offset The byte address offset of the region.
+ * @return The result of the operation.
  */
-uint32_t flash_ctrl_testutils_info_region_setup_properties(
+OT_WARN_UNUSED_RESULT
+status_t flash_ctrl_testutils_info_region_setup_properties(
     dif_flash_ctrl_state_t *flash_state, uint32_t page_id, uint32_t bank,
-    uint32_t partition_id,
-    dif_flash_ctrl_region_properties_t region_properties);
+    uint32_t partition_id, dif_flash_ctrl_region_properties_t region_properties,
+    uint32_t *offset);
 
 /**
  * Setup and enable for an info region with scrambling disabled.
@@ -93,11 +105,13 @@ uint32_t flash_ctrl_testutils_info_region_setup_properties(
  * @param page_id Region page index.
  * @param bank The required bank.
  * @param partition_id The partition index.
- * @return The byte address offset of the region.
+ * @param[out] offset The byte address offset of the region.
+ * @return The result of the operation.
  */
-uint32_t flash_ctrl_testutils_info_region_setup(
+OT_WARN_UNUSED_RESULT
+status_t flash_ctrl_testutils_info_region_setup(
     dif_flash_ctrl_state_t *flash_state, uint32_t page_id, uint32_t bank,
-    uint32_t partition_id);
+    uint32_t partition_id, uint32_t *offset);
 
 /**
  * Setup and enable for an info region with scrambling enabled.
@@ -106,11 +120,13 @@ uint32_t flash_ctrl_testutils_info_region_setup(
  * @param page_id Region page index.
  * @param bank The required bank.
  * @param partition_id The partition index.
- * @return The byte address offset of the region.
+ * @param[out] offset The byte address offset of the region.
+ * @return The result of the operation.
  */
-uint32_t flash_ctrl_testutils_info_region_scrambled_setup(
+OT_WARN_UNUSED_RESULT
+status_t flash_ctrl_testutils_info_region_scrambled_setup(
     dif_flash_ctrl_state_t *flash_state, uint32_t page_id, uint32_t bank,
-    uint32_t partition_id);
+    uint32_t partition_id, uint32_t *offset);
 
 /**
  * Erases the page at byte_address.
@@ -120,10 +136,10 @@ uint32_t flash_ctrl_testutils_info_region_scrambled_setup(
  * @param byte_address The byte address of the page to erase.
  * @param partition_id The partition index.
  * @param partition_type The partition type, data or info.
- * @return False if the operation failed.
+ * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
-bool flash_ctrl_testutils_erase_page(
+status_t flash_ctrl_testutils_erase_page(
     dif_flash_ctrl_state_t *flash_state, uint32_t byte_address,
     uint32_t partition_id, dif_flash_ctrl_partition_type_t partition_type);
 
@@ -140,14 +156,13 @@ bool flash_ctrl_testutils_erase_page(
  * @param data The data to program.
  * @param partition_type The partition type, data or info.
  * @param word_count The number of uint32_t words to program.
- * @return False if the operation produced an error.
+ * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
-bool flash_ctrl_testutils_write(dif_flash_ctrl_state_t *flash_state,
-                                uint32_t byte_address, uint32_t partition_id,
-                                const uint32_t *data,
-                                dif_flash_ctrl_partition_type_t partition_type,
-                                uint32_t word_count);
+status_t flash_ctrl_testutils_write(
+    dif_flash_ctrl_state_t *flash_state, uint32_t byte_address,
+    uint32_t partition_id, const uint32_t *data,
+    dif_flash_ctrl_partition_type_t partition_type, uint32_t word_count);
 
 /**
  * Erases and Programs the page at byte_address.
@@ -160,10 +175,10 @@ bool flash_ctrl_testutils_write(dif_flash_ctrl_state_t *flash_state,
  * @param data The data to program.
  * @param partition_type The partition type, data or info.
  * @param word_count The number of uint32_t words to program.
- * @return False if the operation fails.
+ * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
-bool flash_ctrl_testutils_erase_and_write_page(
+status_t flash_ctrl_testutils_erase_and_write_page(
     dif_flash_ctrl_state_t *flash_state, uint32_t byte_address,
     uint32_t partition_id, const uint32_t *data,
     dif_flash_ctrl_partition_type_t partition_type, uint32_t word_count);
@@ -178,14 +193,15 @@ bool flash_ctrl_testutils_erase_and_write_page(
  * @param data_out The data read from the page.
  * @param partition_type The partition type, data or info.
  * @param word_count The number of uint32_t words to read.
- * @return The operation error flag.
+ * @param delay_micros Optional delay (in us) for read FIFO fill testing.
+ * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
-bool flash_ctrl_testutils_read(dif_flash_ctrl_state_t *flash_state,
-                               uint32_t byte_address, uint32_t partition_id,
-                               uint32_t *data_out,
-                               dif_flash_ctrl_partition_type_t partition_type,
-                               uint32_t word_count, uint32_t delay);
+status_t flash_ctrl_testutils_read(
+    dif_flash_ctrl_state_t *flash_state, uint32_t byte_address,
+    uint32_t partition_id, uint32_t *data_out,
+    dif_flash_ctrl_partition_type_t partition_type, uint32_t word_count,
+    uint32_t delay);
 
 /**
  * Sets the flash default configuration.
@@ -198,7 +214,8 @@ bool flash_ctrl_testutils_read(dif_flash_ctrl_state_t *flash_state,
  * @param ecc_en Default ECC enable.
  * @param high_endurance_en Default high endurance enable
  */
-void flash_ctrl_testutils_default_region_access(
+OT_WARN_UNUSED_RESULT
+status_t flash_ctrl_testutils_default_region_access(
     dif_flash_ctrl_state_t *flash_state, bool rd_en, bool prog_en,
     bool erase_en, bool scramble_en, bool ecc_en, bool high_endurance_en);
 
@@ -210,97 +227,61 @@ void flash_ctrl_testutils_default_region_access(
  * @param bank The bank ID.
  * @param data_only True to only erase the data partitions. False to erase
  *                  everything.
- * @return False if the operation failed.
+ * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
-bool flash_ctrl_testutils_bank_erase(dif_flash_ctrl_state_t *flash_state,
-                                     uint32_t bank, bool data_only);
+status_t flash_ctrl_testutils_bank_erase(dif_flash_ctrl_state_t *flash_state,
+                                         uint32_t bank, bool data_only);
 
 enum {
   kFlashCtrlTestUtilsCounterMaxCount = 256,
 };
 
 /**
- * Returns the value of a non-volatile counter in flash.
- *
- * @param counter Counter ID, [0, 2].
- * @return Value of the non-volatile counter
- */
-uint32_t flash_ctrl_testutils_counter_get(size_t counter);
-
-/**
- * Increments a non-volatile counter in flash.
+ * Write to log any faults set in the status register.
  *
  * @param flash_state A flash_ctrl state handle.
- * @param counter Counter ID, [0, 2].
  */
-void flash_ctrl_testutils_counter_increment(dif_flash_ctrl_state_t *flash_state,
-                                            size_t counter);
+OT_WARN_UNUSED_RESULT
+status_t flash_ctrl_testutils_show_faults(
+    const dif_flash_ctrl_state_t *flash_state);
 
 /**
- * Sets a non-volatile counter to at least `val`.
+ * Print the properties of a flash data region configuration.
  *
- * This function simply writes zeros to the corresponding flash word without any
- * checks and is intended for contexts where performance is critical, e.g. ISRs.
- * The value of the counter will not change if it is already greater than or
- * equal to `val`.
+ * This prints:
  *
- * @param flash_state A flash_ctrl state handle.
- * @param counter Counter ID, [0, 2].
- * @param val Counter value.
+ * data region n=<index> st=<start> sz=<size> RD-WR-ER-SC-EC-HE LK
+ *
+ * The various properties are printed depending on their mubi bool value:
+ * - The property (e.g. `RD`, `WR`, etc) is printed if enabled by Mubi4True.
+ * - The string `xx` is printed if disabled by Mubi4False.
+ * - The string `uu` is printed if disabled by any other non-True value.
+ *
+ * @param index The index of the region.
+ * @param p The properties of the region.
+ * @param locked Whether or not the region is locked.
  */
-void flash_ctrl_testutils_counter_set_at_least(
-    dif_flash_ctrl_state_t *flash_state, size_t counter, uint32_t val);
+void flash_ctrl_testutils_data_region_print(
+    size_t index, dif_flash_ctrl_data_region_properties_t *p, bool locked);
 
 /**
- * Sets a strike counter to an arbitrary value.
+ * Print the properties of a flash data region configuration.
  *
- * If the arbitrary value is impossible (attempts to flip a bit
- * from 0 to 1 without an erase), an error is created.
+ * This prints:
  *
- * @param flash_state A flash_ctrl state handle.
- * @param strike_counter The address of the counter.
- * @param new_val The new counter value.
+ * info region bank=<bank> part=<partition> page=<page> RD-WR-ER-SC-EC-HE LK
+ *
+ * The various properties are printed depending on their mubi bool value:
+ * - The property (e.g. `RD`, `WR`, etc) is printed if enabled by Mubi4True.
+ * - The string `xx` is printed if disabled by Mubi4False.
+ * - The string `uu` is printed if disabled by any other non-True value.
+ *
+ * @param region The info region descriptor.
+ * @param p The properties of the region.
+ * @param locked Whether or not the region is locked.
  */
-void flash_ctrl_testutils_set_counter(dif_flash_ctrl_state_t *flash_state,
-                                      uint32_t *strike_counter,
-                                      uint32_t new_val);
-
-/**
- * At the beginning of the simulation (Verilator, VCS,etc.),
- * the content of the flash might be all-zeros, and thus,
- * the NVM counter's inital value might be 256.
- * In that case, flash_ctrl_testutils_counter_set_at_least() will not increment
- * This function can be used to initialize a NVM counter to zero by filling
- * its flash region with non-zero values.
- *
- * @param flash_state A flash_ctrl handle.
- * @param counter The ID of the NVM counter, [0, 2].
- **/
-void flash_ctrl_testutils_counter_init_zero(dif_flash_ctrl_state_t *flash_state,
-                                            size_t counter);
-
-/**
- * Init the backdoor API, it should be called before
- * `flash_ctrl_testutils_backdoor_wait_update`.
- *
- * @param flash_state A flash_ctrl handle.
- */
-void flash_ctrl_testutils_backdoor_init(dif_flash_ctrl_state_t *flash_state);
-
-/**
- * This is a backdoor API to be used with dvsim testbench.
- * Backdoor variables present on flash may not be updated when read by software
- * after written in the testbench due to the cache. So this function implements
- * a workaround to invalidate the cache and force it to update. Before using
- * this function `flash_ctrl_testutils_backdoor_init` should be called.
- *
- * @param flash_state A flash_ctrl handle.
- * @param addr The address to a `const uint32_t` variable where the testbench
- * will write to.
- * @param timeout Timeout.
- */
-void flash_ctrl_testutils_backdoor_wait_update(
-    dif_flash_ctrl_state_t *flash_state, uintptr_t addr, size_t timeout);
-
+void flash_ctrl_testutils_info_region_print(
+    dif_flash_ctrl_info_region_t region, dif_flash_ctrl_region_properties_t *p,
+    bool locked);
 #endif  // OPENTITAN_SW_DEVICE_LIB_TESTING_FLASH_CTRL_TESTUTILS_H_

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,11 +7,10 @@
 #include "sw/device/lib/dif/dif_base.h"
 #include "sw/device/lib/dif/dif_entropy_src.h"
 #include "sw/device/lib/runtime/log.h"
+#include "sw/device/lib/testing/entropy_src_testutils.h"
 #include "sw/device/lib/testing/entropy_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
-
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -19,8 +18,13 @@ const size_t kEntropyDataChecks = 10;
 
 bool test_main(void) {
   dif_entropy_src_t entropy_src;
-  CHECK_DIF_OK(dif_entropy_src_init(
-      mmio_region_from_addr(TOP_EARLGREY_ENTROPY_SRC_BASE_ADDR), &entropy_src));
+  CHECK_DIF_OK(dif_entropy_src_init_from_dt(kDtEntropySrc, &entropy_src));
+
+  // Print the CRC value. This makes this test useful when updating the
+  // configuration values stored in OTP. Together with the configuration, also
+  // the CRC value stored in OTP needs to be updated.
+  LOG_INFO("entropy_src config crc32 after ROM: 0x%h",
+           entropy_src_config_crc32(&entropy_src));
 
   // Disable entropy for test purpose, as it has been turned on by ROM
   CHECK_DIF_OK(dif_entropy_src_set_enabled(&entropy_src, kDifToggleDisabled));
@@ -28,10 +32,14 @@ bool test_main(void) {
   // Setup fips grade entropy that can be read by firmware
   const dif_entropy_src_config_t config = {
       .fips_enable = true,
+      .fips_flag = true,
+      .rng_fips = true,
       .route_to_firmware = true,
+      .bypass_conditioner = false,
+      .clear_esfinal_fifo_while_disabled = true,
       .single_bit_mode = kDifEntropySrcSingleBitModeDisabled,
       .health_test_threshold_scope = false, /*default*/
-      .health_test_window_size = 0x0200,    /*default*/
+      .health_test_window_size = 0x0800,    /*default*/
       .alert_threshold = 2,                 /*default*/
   };
 
@@ -39,9 +47,15 @@ bool test_main(void) {
   CHECK_DIF_OK(
       dif_entropy_src_configure(&entropy_src, config, kDifToggleEnabled));
 
+  // Print the CRC value. This makes this test useful when updating the
+  // configuration values stored in OTP. Together with the configuration, also
+  // the CRC value stored in OTP needs to be updated.
+  LOG_INFO("entropy_src config crc32 after re-config: 0x%h",
+           entropy_src_config_crc32(&entropy_src));
+
   // ensure health tests are actually running
-  entropy_testutils_wait_for_state(&entropy_src,
-                                   kDifEntropySrcMainFsmStateContHTRunning);
+  CHECK_STATUS_OK(entropy_src_testutils_wait_for_state(
+      &entropy_src, kDifEntropySrcMainFsmStateContHTRunning));
 
   uint32_t entropy_data;
   uint32_t last_entropy_data = 0;

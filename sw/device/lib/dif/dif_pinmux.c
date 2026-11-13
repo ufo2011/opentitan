@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,9 @@
 #include "sw/device/lib/base/bitfield.h"
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_base.h"
+#include "sw/device/lib/runtime/hart.h"
 
-#include "pinmux_regs.h"  // Generated.
+#include "hw/top/pinmux_regs.h"  // Generated.
 
 static bool dif_pinmux_get_reg_offset(dif_pinmux_index_t index,
                                       dif_pinmux_pad_kind_t kind,
@@ -33,7 +34,7 @@ static bool dif_pinmux_get_reg_offset(dif_pinmux_index_t index,
   if (index >= num_pads) {
     return false;
   }
-  *reg_offset = reg_base + index * sizeof(uint32_t);
+  *reg_offset = reg_base + (ptrdiff_t)(index * sizeof(uint32_t));
   return true;
 }
 
@@ -47,11 +48,21 @@ static bool dif_pinmux_get_sleep_status_bit(dif_pinmux_pad_kind_t kind,
   switch (kind) {
     case kDifPinmuxPadKindMio:
       num_pads = PINMUX_PARAM_N_MIO_PADS;
+      // Only platforms with few MIOs, there is a single register with no index.
+#ifdef PINMUX_MIO_PAD_SLEEP_STATUS_0_REG_OFFSET
       reg_base = PINMUX_MIO_PAD_SLEEP_STATUS_0_REG_OFFSET;
+#else
+      reg_base = PINMUX_MIO_PAD_SLEEP_STATUS_REG_OFFSET;
+#endif
       break;
     case kDifPinmuxPadKindDio:
       num_pads = PINMUX_PARAM_N_DIO_PADS;
+      // Only platforms with few DIOs, there is a single register with no index.
+#ifdef PINMUX_DIO_PAD_SLEEP_STATUS_0_REG_OFFSET
+      reg_base = PINMUX_DIO_PAD_SLEEP_STATUS_0_REG_OFFSET;
+#else
       reg_base = PINMUX_DIO_PAD_SLEEP_STATUS_REG_OFFSET;
+#endif
       break;
     default:
       return false;
@@ -59,7 +70,7 @@ static bool dif_pinmux_get_sleep_status_bit(dif_pinmux_pad_kind_t kind,
   if (index >= num_pads) {
     return false;
   }
-  *reg_offset = index / 32 + reg_base;
+  *reg_offset = (ptrdiff_t)index / 32 + reg_base;
   *bit = index % 32;
   return true;
 }
@@ -106,7 +117,7 @@ static bool dif_pinmux_get_lock_reg_offset(dif_pinmux_index_t index,
     return false;
   }
 
-  *reg_offset = reg_base + index * sizeof(uint32_t);
+  *reg_offset = reg_base + (ptrdiff_t)index * (ptrdiff_t)sizeof(uint32_t);
   return true;
 }
 
@@ -161,7 +172,7 @@ dif_result_t dif_pinmux_input_select(const dif_pinmux_t *pinmux,
     return kDifLocked;
   }
   ptrdiff_t reg_offset =
-      PINMUX_MIO_PERIPH_INSEL_0_REG_OFFSET + (peripheral_input << 2);
+      PINMUX_MIO_PERIPH_INSEL_0_REG_OFFSET + (ptrdiff_t)(peripheral_input << 2);
   uint32_t reg_value =
       bitfield_field32_write(0, PINMUX_MIO_PERIPH_INSEL_0_IN_0_FIELD, insel);
   mmio_region_write32(pinmux->base_addr, reg_offset, reg_value);
@@ -184,19 +195,43 @@ dif_result_t dif_pinmux_output_select(const dif_pinmux_t *pinmux,
   if (is_locked) {
     return kDifLocked;
   }
-  ptrdiff_t reg_offset = PINMUX_MIO_OUTSEL_0_REG_OFFSET + (mio_pad_output << 2);
+  ptrdiff_t reg_offset =
+      PINMUX_MIO_OUTSEL_0_REG_OFFSET + (ptrdiff_t)(mio_pad_output << 2);
   uint32_t reg_value =
       bitfield_field32_write(0, PINMUX_MIO_OUTSEL_0_OUT_0_FIELD, outsel);
   mmio_region_write32(pinmux->base_addr, reg_offset, reg_value);
   return kDifOk;
 }
 
+dif_result_t dif_pinmux_mio_select_input(const dif_pinmux_t *pinmux,
+                                         dt_periph_io_t periph_io,
+                                         dt_pad_t pad) {
+  if (dt_pad_type(pad) != kDtPadTypeMio ||
+      dt_periph_io_type(periph_io) != kDtPeriphIoTypeMio) {
+    return kDifBadArg;
+  }
+  return dif_pinmux_input_select(
+      pinmux, dt_periph_io_mio_periph_input(periph_io), dt_pad_mio_insel(pad));
+}
+
+dif_result_t dif_pinmux_mio_select_output(const dif_pinmux_t *pinmux,
+                                          dt_pad_t pad,
+                                          dt_periph_io_t periph_io) {
+  if (dt_pad_type(pad) != kDtPadTypeMio ||
+      dt_periph_io_type(periph_io) != kDtPeriphIoTypeMio) {
+    return kDifBadArg;
+  }
+  return dif_pinmux_output_select(pinmux, dt_pad_mio_out(pad),
+                                  dt_periph_io_mio_outsel(periph_io));
+}
+
 static dif_pinmux_pad_attr_t dif_pinmux_reg_to_pad_attr(uint32_t reg_value) {
   dif_pinmux_pad_attr_t pad_attrs = {0};
-  pad_attrs.slew_rate =
-      bitfield_field32_read(reg_value, PINMUX_MIO_PAD_ATTR_0_SLEW_RATE_0_FIELD);
-  pad_attrs.drive_strength = bitfield_field32_read(
-      reg_value, PINMUX_MIO_PAD_ATTR_0_DRIVE_STRENGTH_0_FIELD);
+  pad_attrs.slew_rate = (dif_pinmux_pad_slew_rate_t)bitfield_field32_read(
+      reg_value, PINMUX_MIO_PAD_ATTR_0_SLEW_RATE_0_FIELD);
+  pad_attrs.drive_strength =
+      (dif_pinmux_pad_drive_strength_t)bitfield_field32_read(
+          reg_value, PINMUX_MIO_PAD_ATTR_0_DRIVE_STRENGTH_0_FIELD);
   if (bitfield_bit32_read(reg_value, PINMUX_MIO_PAD_ATTR_0_INVERT_0_BIT)) {
     pad_attrs.flags |= kDifPinmuxPadAttrInvertLevel;
   }
@@ -219,8 +254,14 @@ static dif_pinmux_pad_attr_t dif_pinmux_reg_to_pad_attr(uint32_t reg_value) {
   if (bitfield_bit32_read(reg_value, PINMUX_MIO_PAD_ATTR_0_OD_EN_0_BIT)) {
     pad_attrs.flags |= kDifPinmuxPadAttrOpenDrain;
   }
+  if (bitfield_bit32_read(reg_value,
+                          PINMUX_MIO_PAD_ATTR_0_INPUT_DISABLE_0_BIT)) {
+    pad_attrs.flags |= kDifPinmuxPadAttrInputDisable;
+  }
   return pad_attrs;
 }
+
+enum { kDifPinmuxPadAttrSpinWaitMicros = 5 };
 
 dif_result_t dif_pinmux_pad_write_attrs(const dif_pinmux_t *pinmux,
                                         dif_pinmux_index_t pad,
@@ -253,6 +294,8 @@ dif_result_t dif_pinmux_pad_write_attrs(const dif_pinmux_t *pinmux,
     return kDifLocked;
   }
 
+  uint32_t reg_before = mmio_region_read32(pinmux->base_addr, reg_offset);
+
   uint32_t reg_value = bitfield_field32_write(
       0, PINMUX_MIO_PAD_ATTR_0_SLEW_RATE_0_FIELD, attrs_in.slew_rate);
   reg_value = bitfield_field32_write(
@@ -278,13 +321,62 @@ dif_result_t dif_pinmux_pad_write_attrs(const dif_pinmux_t *pinmux,
                            attrs_in.flags & kDifPinmuxPadAttrSchmittTrigger);
   reg_value = bitfield_bit32_write(reg_value, PINMUX_MIO_PAD_ATTR_0_OD_EN_0_BIT,
                                    attrs_in.flags & kDifPinmuxPadAttrOpenDrain);
+  reg_value =
+      bitfield_bit32_write(reg_value, PINMUX_MIO_PAD_ATTR_0_INPUT_DISABLE_0_BIT,
+                           attrs_in.flags & kDifPinmuxPadAttrInputDisable);
   mmio_region_write32(pinmux->base_addr, reg_offset, reg_value);
+
+  // Wait for pull enable/disable changes to propagate to the physical pad.
+  dif_pinmux_pad_attr_t attrs_before = dif_pinmux_reg_to_pad_attr(reg_before);
+  if ((attrs_before.flags & kDifPinmuxPadAttrPullResistorEnable) !=
+      (attrs_in.flags & kDifPinmuxPadAttrPullResistorEnable)) {
+    busy_spin_micros(kDifPinmuxPadAttrSpinWaitMicros);
+  }
 
   uint32_t read_value = mmio_region_read32(pinmux->base_addr, reg_offset);
   *attrs_out = dif_pinmux_reg_to_pad_attr(read_value);
+
+  // Not all pads implement all attributes and not all target platforms support
+  // all attribute values. The underlying hardware registers implement Write-Any
+  // Read-Legal (WARL) semantics. If the specified attribute values are not
+  // supported by the hardware, return `kDifError`. The caller then needs to
+  // decide on how to resolve the situation. Unsupported attribute values can be
+  // identified by comparing `attrs_in` to `attrs_out`.
   if (reg_value != read_value) {
     return kDifError;
   }
+  return kDifOk;
+}
+
+dif_result_t dif_pinmux_pad_from_dt_pad(dt_pad_t pad,
+                                        dif_pinmux_index_t *index_out,
+                                        dif_pinmux_pad_kind_t *type_out) {
+  if (index_out == NULL || type_out == NULL) {
+    return kDifBadArg;
+  }
+  switch (dt_pad_type(pad)) {
+    case kDtPadTypeMio:
+      *type_out = kDifPinmuxPadKindMio;
+      *index_out = dt_pad_mio_pad_index(pad);
+      return kDifOk;
+    case kDtPadTypeDio:
+      *type_out = kDifPinmuxPadKindDio;
+      *index_out = dt_pad_dio_pad_index(pad);
+      return kDifOk;
+    default:
+      return kDifError;
+  }
+}
+
+dif_result_t dif_pinmux_pad_write_attrs_dt(const dif_pinmux_t *pinmux,
+                                           dt_pad_t pad,
+                                           dif_pinmux_pad_attr_t attrs_in,
+                                           dif_pinmux_pad_attr_t *attrs_out) {
+  dif_pinmux_index_t index;
+  dif_pinmux_pad_kind_t type;
+  DIF_RETURN_IF_ERROR(dif_pinmux_pad_from_dt_pad(pad, &index, &type));
+  DIF_RETURN_IF_ERROR(
+      dif_pinmux_pad_write_attrs(pinmux, index, type, attrs_in, attrs_out));
   return kDifOk;
 }
 
@@ -303,6 +395,16 @@ dif_result_t dif_pinmux_pad_get_attrs(const dif_pinmux_t *pinmux,
   }
   uint32_t reg_value = mmio_region_read32(pinmux->base_addr, reg_offset);
   *attrs = dif_pinmux_reg_to_pad_attr(reg_value);
+  return kDifOk;
+}
+
+dif_result_t dif_pinmux_pad_get_attrs_dt(const dif_pinmux_t *pinmux,
+                                         dt_pad_t pad,
+                                         dif_pinmux_pad_attr_t *attrs) {
+  dif_pinmux_index_t index;
+  dif_pinmux_pad_kind_t type;
+  DIF_RETURN_IF_ERROR(dif_pinmux_pad_from_dt_pad(pad, &index, &type));
+  DIF_RETURN_IF_ERROR(dif_pinmux_pad_get_attrs(pinmux, index, type, attrs));
   return kDifOk;
 }
 
@@ -436,8 +538,9 @@ dif_result_t dif_pinmux_pad_sleep_clear_state(const dif_pinmux_t *pinmux,
 dif_result_t dif_pinmux_wakeup_detector_enable(
     const dif_pinmux_t *pinmux, dif_pinmux_index_t detector,
     dif_pinmux_wakeup_config_t config) {
-  // Disable the detector before changing config, and use that function for some
-  // input checking (null pointer, lock status, and detector validity checks).
+  // Disable the detector before changing config, and use that function for
+  // some input checking (null pointer, lock status, and detector validity
+  // checks).
   dif_result_t result = dif_pinmux_wakeup_detector_disable(pinmux, detector);
   if (result != kDifOk) {
     return result;
@@ -490,8 +593,8 @@ dif_result_t dif_pinmux_wakeup_detector_enable(
       return kDifBadArg;
   }
 
-  ptrdiff_t reg_offset =
-      PINMUX_WKUP_DETECTOR_0_REG_OFFSET + detector * sizeof(uint32_t);
+  ptrdiff_t reg_offset = PINMUX_WKUP_DETECTOR_0_REG_OFFSET +
+                         (ptrdiff_t)detector * (ptrdiff_t)sizeof(uint32_t);
   uint32_t reg_value = bitfield_field32_write(
       0, PINMUX_WKUP_DETECTOR_0_MODE_0_FIELD, reg_mode_value);
   reg_value = bitfield_bit32_write(
@@ -501,21 +604,21 @@ dif_result_t dif_pinmux_wakeup_detector_enable(
   mmio_region_write32(pinmux->base_addr, reg_offset, reg_value);
 
   if (set_count) {
-    reg_offset =
-        PINMUX_WKUP_DETECTOR_CNT_TH_0_REG_OFFSET + detector * sizeof(uint32_t);
+    reg_offset = PINMUX_WKUP_DETECTOR_CNT_TH_0_REG_OFFSET +
+                 (ptrdiff_t)detector * (ptrdiff_t)sizeof(uint32_t);
     reg_value = bitfield_field32_write(
         0, PINMUX_WKUP_DETECTOR_CNT_TH_0_TH_0_FIELD, config.counter_threshold);
     mmio_region_write32(pinmux->base_addr, reg_offset, reg_value);
   }
 
-  reg_offset =
-      PINMUX_WKUP_DETECTOR_PADSEL_0_REG_OFFSET + detector * sizeof(uint32_t);
+  reg_offset = PINMUX_WKUP_DETECTOR_PADSEL_0_REG_OFFSET +
+               (ptrdiff_t)detector * (ptrdiff_t)sizeof(uint32_t);
   reg_value = bitfield_field32_write(
       0, PINMUX_WKUP_DETECTOR_PADSEL_0_SEL_0_FIELD, config.pad_select);
   mmio_region_write32(pinmux->base_addr, reg_offset, reg_value);
 
-  reg_offset =
-      PINMUX_WKUP_DETECTOR_EN_0_REG_OFFSET + detector * sizeof(uint32_t);
+  reg_offset = PINMUX_WKUP_DETECTOR_EN_0_REG_OFFSET +
+               (ptrdiff_t)detector * (ptrdiff_t)sizeof(uint32_t);
   reg_value = bitfield_bit32_write(0, PINMUX_WKUP_DETECTOR_EN_0_EN_0_BIT, true);
   mmio_region_write32(pinmux->base_addr, reg_offset, reg_value);
   return kDifOk;
@@ -539,8 +642,8 @@ dif_result_t dif_pinmux_wakeup_detector_disable(const dif_pinmux_t *pinmux,
     return kDifLocked;
   }
 
-  ptrdiff_t reg_offset =
-      PINMUX_WKUP_DETECTOR_EN_0_REG_OFFSET + sizeof(uint32_t) * detector;
+  ptrdiff_t reg_offset = PINMUX_WKUP_DETECTOR_EN_0_REG_OFFSET +
+                         (ptrdiff_t)sizeof(uint32_t) * (ptrdiff_t)detector;
   mmio_region_write32(pinmux->base_addr, reg_offset, 0);
   return kDifOk;
 }

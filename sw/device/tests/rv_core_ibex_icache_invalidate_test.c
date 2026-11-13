@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,9 +23,13 @@ bool test_main(void) {
   for (unsigned i = 0; i < kNumIcacheInvals; i++) {
     icache_invalidate();
 
+    uint32_t cpuctrlsts;
+    // Check that the icache scramble key is no longer valid.
+    CSR_READ(CSR_REG_CPUCTRL, &cpuctrlsts);
+    CHECK((cpuctrlsts & (1 << 8)) == 0);
+
     // Wait for the icache scramble key to become valid before requesting the
     // next invalidation.
-    uint32_t cpuctrlsts;
     do {
       CSR_READ(CSR_REG_CPUCTRL, &cpuctrlsts);
     } while ((cpuctrlsts & (1 << 8)) == 0);

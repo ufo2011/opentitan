@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -13,7 +13,14 @@ module tb;
   import top_earlgrey_pkg::*;
   import chip_test_pkg::*;
   import xbar_test_pkg::*;
-  import mem_bkdr_util_pkg::mem_bkdr_util;
+  import rram_ctrl_bkdr_util_pkg::*;
+  import mem_bkdr_util_pkg::*;
+  import rom_ctrl_bkdr_util_pkg::*;
+  import sram_ctrl_bkdr_util_pkg::*;
+  import prim_secded_pkg::get_ecc_data_width;
+  import prim_secded_pkg::get_ecc_parity_width;
+  import prim_secded_pkg::SecdedInv_39_32;
+  import prim_secded_pkg::SecdedInv_28_22;
 
   // macro includes
   `include "uvm_macros.svh"
@@ -21,39 +28,78 @@ module tb;
   `include "chip_hier_macros.svh"  // TODO: Deprecate this.
 
   // interfaces
+`ifdef ANALOGSIM
+  ast_pkg::awire_t cc1;
+  ast_pkg::awire_t cc2;
+`endif
 
-  // Legacy clk_rst_if to satisfy our CIP base classes. DO NOT USE it in test sequences.
+  // In most simulations the DV infrastructure provides a virtual interface connected to a
+  // concrete clk_rst_if which is completely passive, since the AST provides both.
+  // In order to enable cycle waits we connect clk and rst_n to chip internal signals.
   //
-  // This interface has an active clock driver, but the clock port is not connected to anything. The
-  // reset port is passive and is connected to the chip's POR_N port. The reset port is active only
-  // in `xbar_mode`, because a different UVM environment is in use, which does not have the chip_if.
-  // For the regular chip tests, the chip_if is used exclusively to drive all chip's ports.
+  // The XBAR simulation mode uses a different environment, and drives the internal clocks
+  // directly, bypassing the AST.
   //
-  // The bogus active clock is made to match the chip's main clock frequency. This is done to
-  // ensure compatibility with the CIP / DV lib base sequence classes which assume certain things.
-  // This clk_rst_if (which is available in the chip env as cfg.clk_rst_vif) should not be used to
-  // wait for clock events. Most tests will not require an external clock source - they will use
-  // internally generated clock provided by AST.
-  //
-  // Note that attempting to drive the external clock / power on reset using this interface will
-  // vacuously return instead of throwing an error. This is done to support the our base classes.
-  // To do so, the test sequences must use chip_vif.ext_clk_if and chip_vif.por_n_if respectively.
-  wire clk, rst_n;
-  clk_rst_if clk_rst_if(.clk(clk), .rst_n(rst_n));
+  // XBAR mode uses a different UVM environment than the full chip. It requires the POR to be driven
+  // using a clk_rst_if instance. The `xbar_mode` plusarg is used to switch between the two
+  // environments. It is declared as type `logic` so that a wait statement can be used in other
+  // initial blocks to wait for its value to stabilize after a plusarg lookup.
+
+  // We use two clk_rst_ifs, the passive one for normal full chip tests, and the xbar one for
+  // tests running in xbar_mode. The virtual interface clk_rst_vif used by sequences and the
+  // infrastructure is selected depending on xbar_mode.
+
+  // The passive clk_rst_if used for full chip testing, and is driven separately with a
+  // sensible frequency, just for calls to wait for cycles to be sensible.
+  wire passive_clk, passive_rst_n;
+  clk_rst_if passive_clk_rst_if(
+    .clk(passive_clk),
+    .rst_n(passive_rst_n)
+  );
+  // Reset driver for pad tests.
+  assign passive_rst_n = dut.chip_if.chip_por_n;
+
+  // The interface only drives the clock.
+  initial passive_clk_rst_if.set_active(.drive_clk_val(1), .drive_rst_n_val(0));
+
+  // The xbar clk_rst_if is active, but only rst_n is hooked up. It is used in the xbar testbench,
+  // so leave it as is.
+  wire xbar_clk, rst_n;
+  clk_rst_if xbar_clk_rst_if(
+    .clk(xbar_clk),
+    .rst_n(rst_n)
+  );
+  initial xbar_clk_rst_if.set_active(.drive_clk_val(1), .drive_rst_n_val(1));
+
+  logic xbar_mode;
+  initial begin
+    if (!$value$plusargs("xbar_mode=%0b", xbar_mode)) xbar_mode = 0;
+    if (xbar_mode)
+      uvm_config_db#(virtual clk_rst_if)::set(null, "*.env*", "clk_rst_vif", xbar_clk_rst_if);
+    else
+      uvm_config_db#(virtual clk_rst_if)::set(null, "*.env*", "clk_rst_vif", passive_clk_rst_if);
+  end
+
+  assign dut.POR_N = xbar_mode ? rst_n : 1'bz;
 
   // TODO: Absorb this functionality into chip_if.
   bind dut ast_supply_if ast_supply_if (
-    .clk(top_earlgrey.clk_aon_i),
+    .clk(top_earlgrey.earlgrey_pd_aon.ast_clk_src_aon),
+`ifdef GATE_LEVEL
+    .core_sleeping_trigger(0),
+    .low_power_trigger(0)
+`else
     .core_sleeping_trigger(top_earlgrey.rv_core_ibex_pwrmgr.core_sleeping),
     .low_power_trigger(`PWRMGR_HIER.pwr_rst_o.reset_cause == pwrmgr_pkg::LowPwrEntry)
+`endif
   );
 
   // TODO: Absorb this functionality into chip_if.
   bind dut ast_ext_clk_if ast_ext_clk_if ();
 
   // TODO: Absorb this functionality into chip_if.
-  alert_esc_if alert_if[NUM_ALERTS](.clk  (`ALERT_HANDLER_HIER.clk_i),
-                                    .rst_n(`ALERT_HANDLER_HIER.rst_ni));
+  alert_if alert_if[NUM_ALERTS](.clk  (`ALERT_HANDLER_HIER.clk_i),
+                                .rst_n(`ALERT_HANDLER_HIER.rst_ni));
   for (genvar i = 0; i < NUM_ALERTS; i++) begin : gen_connect_alert_rx
     assign alert_if[i].alert_rx = `ALERT_HANDLER_HIER.alert_rx_o[i];
   end
@@ -73,14 +119,17 @@ module tb;
 `endif
     // Dedicated Pads
     .POR_N(dut.chip_if.dios[top_earlgrey_pkg::DioPadPorN]),
+    .PORA_N(dut.chip_if.dios[top_earlgrey_pkg::DioPadPoraN]),
     .USB_P(dut.chip_if.dios[top_earlgrey_pkg::DioPadUsbP]),
     .USB_N(dut.chip_if.dios[top_earlgrey_pkg::DioPadUsbN]),
+`ifdef ANALOGSIM
+    .CC1(cc1),
+    .CC2(cc2),
+`else
     .CC1(dut.chip_if.dios[top_earlgrey_pkg::DioPadCc1]),
     .CC2(dut.chip_if.dios[top_earlgrey_pkg::DioPadCc2]),
-    .FLASH_TEST_VOLT(dut.chip_if.dios[top_earlgrey_pkg::DioPadFlashTestVolt]),
-    .FLASH_TEST_MODE0(dut.chip_if.dios[top_earlgrey_pkg::DioPadFlashTestMode0]),
-    .FLASH_TEST_MODE1(dut.chip_if.dios[top_earlgrey_pkg::DioPadFlashTestMode1]),
-    .OTP_EXT_VOLT(dut.chip_if.dios[top_earlgrey_pkg::DioPadOtpExtVolt]),
+`endif
+    .RRAM_ANALOG(dut.chip_if.dios[top_earlgrey_pkg::DioPadRramAnalog]),
     .SPI_HOST_D0(dut.chip_if.dios[top_earlgrey_pkg::DioPadSpiHostD0]),
     .SPI_HOST_D1(dut.chip_if.dios[top_earlgrey_pkg::DioPadSpiHostD1]),
     .SPI_HOST_D2(dut.chip_if.dios[top_earlgrey_pkg::DioPadSpiHostD2]),
@@ -95,7 +144,6 @@ module tb;
     .SPI_DEV_CS_L(dut.chip_if.dios[top_earlgrey_pkg::DioPadSpiDevCsL]),
     .IOR8(dut.chip_if.dios[top_earlgrey_pkg::DioPadIor8]),
     .IOR9(dut.chip_if.dios[top_earlgrey_pkg::DioPadIor9]),
-    .AST_MISC(dut.chip_if.ast_misc),
 
     // Muxed Pads
     .IOA0(dut.chip_if.mios[top_earlgrey_pkg::MioPadIoa0]),
@@ -147,26 +195,210 @@ module tb;
     .IOR13(dut.chip_if.mios[top_earlgrey_pkg::MioPadIor13])
   );
 
-  `define SIM_SRAM_IF u_sim_sram.u_sim_sram_if
+  // Knob to skip ROM backdoor logging (for sims that use ROM macro). Set below.
+  logic skip_rom_bkdr_load;
 
   // Instantiate & connect the simulation SRAM inside the CPU (rv_core_ibex) using forces.
   bit en_sim_sram = 1'b1;
   wire sel_sim_sram = !dut.chip_if.stub_cpu & en_sim_sram;
+`ifdef GATE_LEVEL
+  localparam int gsim_TlH2DWidth = $bits(tlul_pkg::tl_h2d_t);
+  localparam int gsim_TlD2HWidth = $bits(tlul_pkg::tl_d2h_t);
+
+  logic [gsim_TlH2DWidth-1:0] gsim_tl_win_h2d_int;
+  logic [gsim_TlD2HWidth-1:0] gsim_tl_win_d2h_int;
+
+  prim_buf #(
+    .Width(gsim_TlH2DWidth)
+  ) u_tlul_req_buf (
+    .in_i(tlul_pkg::tl_h2d_t'(`CPU_HIER.u_tlul_req_buf.in_i)),
+    .out_o(gsim_tl_win_h2d_int)
+  );
+  prim_buf #(
+    .Width(gsim_TlD2HWidth)
+  ) u_tlul_rsp_buf (
+    .in_i(u_sim_sram.tl_in_o),
+    .out_o(gsim_tl_win_d2h_int)
+  );
+`endif
+  // Interface presently just permits the DPI model to be easily connected and
+  // disconnected as required, since SENSE pin is a MIO with other uses.
+  usb20_if u_usb20_if (
+    .clk_i            (dut.chip_if.usb_clk),
+    .rst_ni           (dut.chip_if.usb_rst_n),
+
+    .usb_vbus         (dut.chip_if.mios[top_earlgrey_pkg::MioPadIoc7]),
+    .usb_p            (dut.chip_if.dios[top_earlgrey_pkg::DioPadUsbP]),
+    .usb_n            (dut.chip_if.dios[top_earlgrey_pkg::DioPadUsbN])
+  );
+
+  // Instantiate & connect the USB DPI model for top-level testing.
+  usb20_usbdpi u_usb20_usbdpi (
+    .clk_i            (dut.chip_if.usb_clk),
+    .rst_ni           (dut.chip_if.usb_rst_n),
+
+    .enable           (u_usb20_if.connected),
+
+    // Outputs from the DPI module
+    .usb_sense_p2d_o  (u_usb20_if.usb_sense_p2d),
+    .usb_dp_en_p2d_o  (u_usb20_if.usb_dp_en_p2d),
+    .usb_dn_en_p2d_o  (u_usb20_if.usb_dn_en_p2d),
+    .usb_dp_p2d_o     (u_usb20_if.usb_dp_p2d),
+    .usb_dn_p2d_o     (u_usb20_if.usb_dn_p2d),
+
+    .usb_p            (dut.chip_if.dios[top_earlgrey_pkg::DioPadUsbP]),
+    .usb_n            (dut.chip_if.dios[top_earlgrey_pkg::DioPadUsbN])
+  );
+
+  // This interface enables the environment to connect the DPI modules.
+  tb_dpi_if u_tb_dpi_if();
+
+  // The connection for the pins via DPI.
+  logic [31:0] gpiodpi_p2d;
+  logic [31:0] gpiodpi_d2p;
+  logic [31:0] gpiodpi_en_d2p;
+  logic [31:0] gpiodpi_pull_en_d2p;
+  logic [31:0] gpiodpi_pull_sel_d2p;
+
+  // The gpiodpi module allows the host to directly control gpio when enabled.
+  gpiodpi u_gpiodpi(
+`ifdef GATE_LEVEL
+    .clk_i(dut.top_earlgrey.earlgrey_pd_aon.u_clkmgr.clocks_o_clk_io_div4_peri),
+    .rst_ni(dut.top_earlgrey.earlgrey_pd_aon.u_rstmgr.resets_o_rst_lc_io_div4_n_1_),
+`else
+    .clk_i(dut.top_earlgrey.earlgrey_pd_aon.u_clkmgr.clocks_o.clk_io_div4_peri),
+    .rst_ni(dut.top_earlgrey.earlgrey_pd_aon.u_rstmgr.resets_o.rst_lc_io_div4_n[rstmgr_pkg::DomainMainSel]),
+`endif
+    .active(u_tb_dpi_if.enable_gpiodpi),
+    .gpio_p2d(gpiodpi_p2d),
+    .gpio_d2p(gpiodpi_d2p),
+    .gpio_en_d2p(gpiodpi_en_d2p),
+    .gpio_pull_en(gpiodpi_pull_en_d2p),
+    .gpio_pull_sel(gpiodpi_pull_sel_d2p)
+  );
+
+  // Assign pad values from gpiodpi outputs if active.
+  // TODO: revise the pad assignments: these are literally from verilator.
+  assign {dut.IOB12, dut.IOB11, dut.IOB10, dut.IOB9, dut.IOB8, dut.IOB7, dut.IOB6} =
+      u_tb_dpi_if.enable_gpiodpi ? gpiodpi_p2d[6:0] : 7'hzz;
+  assign {dut.IOR13, dut.IOR12, dut.IOR11, dut.IOR10, dut.IOR7, dut.IOR6, dut.IOR5} =
+      u_tb_dpi_if.enable_gpiodpi ? gpiodpi_p2d[13:7] : 7'hzz;
+  assign {dut.IOC2, dut.IOC1, dut.IOC0} = u_tb_dpi_if.enable_gpiodpi ? gpiodpi_p2d[24:22] : 3'hz;
+  assign dut.IOC5 = u_tb_dpi_if.enable_gpiodpi ? gpiodpi_p2d[27] : 1'hz;
+  assign dut.IOC8 = u_tb_dpi_if.enable_gpiodpi ? gpiodpi_p2d[30] : 1'hz;
+
+  // Inputs to gpiodpi.
+  // 14 generic GPIOs
+`define ASSIGN_GPIODPI_D2P(gi_, pi_)                               \
+  assign gpiodpi_d2p[gi_] = dut.mio_out[pi_];                      \
+  assign gpiodpi_en_d2p[gi_] = dut.mio_oe[pi_];                    \
+  assign gpiodpi_pull_en_d2p[gi_] = dut.mio_attr[pi_].pull_en;     \
+  assign gpiodpi_pull_sel_d2p[gi_] = dut.mio_attr[pi_].pull_select
+
+`define ASSIGN_UNUSED_GPIODPI_D2P(gi_)    \
+  assign gpiodpi_d2p[gi_] = 1'b0;         \
+  assign gpiodpi_en_d2p[gi_] = 1'b0;      \
+  assign gpiodpi_pull_en_d2p[gi_] = 1'b0; \
+  assign gpiodpi_pull_sel_d2p[gi_] = 1'b0
+
+`ifndef GATE_LEVEL
+  `ASSIGN_GPIODPI_D2P(0, MioPadIob6);
+  `ASSIGN_GPIODPI_D2P(1, MioPadIob7);
+  `ASSIGN_GPIODPI_D2P(2, MioPadIob8);
+  `ASSIGN_GPIODPI_D2P(3, MioPadIob9);
+  `ASSIGN_GPIODPI_D2P(4, MioPadIob10);
+  `ASSIGN_GPIODPI_D2P(5, MioPadIob11);
+  `ASSIGN_GPIODPI_D2P(6, MioPadIob12);
+  `ASSIGN_GPIODPI_D2P(7, MioPadIor5);
+  `ASSIGN_GPIODPI_D2P(8, MioPadIor6);
+  `ASSIGN_GPIODPI_D2P(9, MioPadIor7);
+  `ASSIGN_GPIODPI_D2P(10, MioPadIor10);
+  `ASSIGN_GPIODPI_D2P(11, MioPadIor11);
+  `ASSIGN_GPIODPI_D2P(12, MioPadIor12);
+  `ASSIGN_GPIODPI_D2P(13, MioPadIor13);
+  // SW straps
+  `ASSIGN_GPIODPI_D2P(22, MioPadIoc0);
+  `ASSIGN_GPIODPI_D2P(23, MioPadIoc1);
+  `ASSIGN_GPIODPI_D2P(24, MioPadIoc2);
+  // TAP straps
+  `ASSIGN_GPIODPI_D2P(27, MioPadIoc5);
+
+  `ASSIGN_GPIODPI_D2P(30, MioPadIoc8);
+`endif
+
+  `ASSIGN_UNUSED_GPIODPI_D2P(14);
+  `ASSIGN_UNUSED_GPIODPI_D2P(15);
+  `ASSIGN_UNUSED_GPIODPI_D2P(16);
+  `ASSIGN_UNUSED_GPIODPI_D2P(17);
+  `ASSIGN_UNUSED_GPIODPI_D2P(18);
+  `ASSIGN_UNUSED_GPIODPI_D2P(19);
+  `ASSIGN_UNUSED_GPIODPI_D2P(20);
+  `ASSIGN_UNUSED_GPIODPI_D2P(21);
+
+  `ASSIGN_UNUSED_GPIODPI_D2P(25);
+  `ASSIGN_UNUSED_GPIODPI_D2P(26);
+
+  `ASSIGN_UNUSED_GPIODPI_D2P(28);
+  `ASSIGN_UNUSED_GPIODPI_D2P(29);
+
+  `ASSIGN_UNUSED_GPIODPI_D2P(31);
+
+`undef ASSIGN_GPIODPI_D2P
+`undef ASSIGN_UNUSED_GPIODPI_D2P
+
+  // The connection to the uarts via DPI. Notice this connects directly to pads, per the
+  // Specific board model.
+  logic uartdpi_tx;
+  logic uartdpi_rx;
+  uartdpi #(
+    .BAUD('d1_000_000),
+    .FREQ('d24_000_000)
+  ) u_uartdpi0(
+`ifdef GATE_LEVEL
+   .clk_i(dut.top_earlgrey.earlgrey_pd_aon.u_clkmgr.clocks_o_clk_io_div4_peri),
+   .rst_ni(dut.top_earlgrey.earlgrey_pd_aon.u_rstmgr.resets_o_rst_lc_io_div4_n_1_),
+`else
+   .clk_i(dut.top_earlgrey.earlgrey_pd_aon.u_clkmgr.clocks_o.clk_io_div4_peri),
+   .rst_ni(dut.top_earlgrey.earlgrey_pd_aon.u_rstmgr.resets_o.rst_lc_io_div4_n[rstmgr_pkg::DomainMainSel]),
+`endif
+    .active(u_tb_dpi_if.enable_uartdpi),
+    .tx_o(uartdpi_tx),
+    .rx_i(uartdpi_rx)
+  );
+
+  assign dut.IOC3 = u_tb_dpi_if.enable_uartdpi ? uartdpi_tx : 1'bz;
+  assign uartdpi_rx = u_tb_dpi_if.enable_uartdpi ? dut.IOC4 : 1'b0;
 
   sim_sram u_sim_sram (
+`ifdef GATE_LEVEL
+    .clk_i (sel_sim_sram ?`CPU_HIER.u_core.u_ibex_core.load_store_unit_i.ls_fsm_cs_reg_0_.CK:1'b0),
+`else
     .clk_i    (sel_sim_sram ? `CPU_HIER.clk_i : 1'b0),
+`endif
     .rst_ni   (`CPU_HIER.rst_ni),
+`ifdef GATE_LEVEL
+    .tl_in_i  (tlul_pkg::tl_h2d_t'(gsim_tl_win_h2d_int)),
+`else
     .tl_in_i  (tlul_pkg::tl_h2d_t'(`CPU_HIER.u_tlul_req_buf.out_o)),
+`endif
     .tl_in_o  (),
     .tl_out_o (),
     .tl_out_i ()
   );
 
+  `define SIM_SRAM_IF u_sim_sram.u_sim_sram_if
+
   initial begin
     void'($value$plusargs("en_sim_sram=%0b", en_sim_sram));
     if (!dut.chip_if.stub_cpu && en_sim_sram) begin
       `SIM_SRAM_IF.start_addr = SW_DV_START_ADDR;
-      force `CPU_HIER.u_tlul_rsp_buf.in_i = u_sim_sram.tl_in_o;
+`ifndef PATTERN
+  `ifdef GATE_LEVEL
+    force `CPU_HIER.u_tlul_rsp_buf.out_o = gsim_tl_win_d2h_int;
+  `else
+    force `CPU_HIER.u_tlul_rsp_buf.in_i = u_sim_sram.tl_in_o;
+  `endif
+`endif
     end
   end
 
@@ -203,165 +435,351 @@ module tb;
     uvm_config_db#(virtual ast_ext_clk_if)::set(
         null, "*.env", "ast_ext_clk_vif", dut.ast_ext_clk_if);
 
+    // USB DPI interface.
+    uvm_config_db#(virtual usb20_if)::set(
+        null, "*.env", "usb20_vif", u_usb20_if);
+
+    // Generic DPI interface.
+    uvm_config_db#(virtual tb_dpi_if)::set(
+        null, "*.env", "tb_dpi_vif", u_tb_dpi_if);
+
+    // Number of Virtual Targets that each I3C instance implements. The CSRs describe
+    // `i3c_reg_pkg::MaxTargets` of them, so the RAL has to know which ones the RTL ties off.
+    uvm_config_db#(int unsigned)::set(
+        null, "uvm_test_top", "i3c0_num_targets", dut.top_earlgrey.I3c0NumTargets);
+    uvm_config_db#(int unsigned)::set(
+        null, "uvm_test_top", "i3c1_num_targets", dut.top_earlgrey.I3c1NumTargets);
+
     // Format time in microseconds losing no precision. The added "." makes it easier to determine
     // the order of magnitude without counting digits, as is needed if it was formatted as ps or ns.
     $timeformat(-6, 6, " us", 13);
     run_test();
   end
 
+  `undef SIM_SRAM_IF
+
   for (genvar i = 0; i < NUM_ALERTS; i++) begin : gen_alert_vif
     initial begin
-      uvm_config_db#(virtual alert_esc_if)::set(null, $sformatf("*.env.m_alert_agent_%0s",
-          LIST_OF_ALERTS[i]), "vif", alert_if[i]);
+      automatic string agent_path = $sformatf("*.env.m_alert_agent_%0s", LIST_OF_ALERTS[i]);
+      uvm_config_db#(virtual alert_if)::set(null, agent_path, "vif", alert_if[i]);
     end
   end
 
-  `undef SIM_SRAM_IF
+  if (1) begin : gen_rom_ctrl
+       // Note: Splitting out PD_MAIN_PATH separately is to work around a problem with the linting
+       // tool. With Verible 3622 (the version currently used in CI) a bind statement where the
+       // target is just a macro expansion (`ROM_CTRL_PATH) causes an unrelated lint error.
+       // Splitting things like this means that we only have to repeat "u_rom_ctrl".
+`define PD_MAIN_PATH      dut.top_earlgrey.earlgrey_pd_main
+`define ROM_CTRL_PATH     `PD_MAIN_PATH.u_rom_ctrl
+`define ROM_CTRL_MEM_HIER `ROM_CTRL_PATH.gen_rom_scramble_enabled.u_rom.u_rom.u_prim_rom.mem
 
-  // Instantitate the memory backdoor util instances.
-  if (`PRIM_DEFAULT_IMPL == prim_pkg::ImplGeneric) begin : gen_generic
+    localparam string EnvPath = "*.env.m_rom_ctrl_env";
+
+    // The information that we pass to the environment will depend on whether
+    // DISABLE_ROM_INTEGRITY_CHECK is defined. To make it possible to reason about this in the
+    // environment, we define a bit showing whether it is defined and will pass it through
+    // uvm_config_db below.
+`ifdef DISABLE_ROM_INTEGRITY_CHECK
+   localparam bit RomIntegrityCheckDisabled = 1;
+`else
+   localparam bit RomIntegrityCheckDisabled = 0;
+`endif
+
+    wire clk, rst_n;
+    assign clk = `ROM_CTRL_PATH.clk_i;
+    assign rst_n = `ROM_CTRL_PATH.rst_ni;
+
+    clk_rst_if  clk_rst_if (.clk(clk), .rst_n(rst_n));
+    tl_if       rom_tl_if (.clk(clk), .rst_n(rst_n));
+    tl_if       regs_tl_if (.clk(clk), .rst_n(rst_n));
+
+    assign rom_tl_if.if_mode = Monitor;
+    assign rom_tl_if.h2d = `ROM_CTRL_PATH.rom_tl_i;
+    assign rom_tl_if.d2h = `ROM_CTRL_PATH.rom_tl_o;
+
+    assign regs_tl_if.if_mode = Monitor;
+    assign regs_tl_if.h2d = `ROM_CTRL_PATH.regs_tl_i;
+    assign regs_tl_if.d2h = `ROM_CTRL_PATH.regs_tl_o;
+
+    wire kmac_pkg::app_rsp_t kmac_data_in;
+    wire kmac_pkg::app_req_t kmac_data_out;
+    assign kmac_data_in  = `ROM_CTRL_PATH.kmac_data_i;
+    assign kmac_data_out = `ROM_CTRL_PATH.kmac_data_o;
+
+    // Note: The req and rsp inout ports get driven with kmac_data_in/kmac_data_out from the design,
+    //       and the interface should be in Monitor mode. We don't assign kmac_app_if.if_mode here:
+    //       this will be set by the build phase of the kmac_app_*_agent that we instantiate.
+    kmac_app_if u_app_if (.clk_i (clk), .rst_ni (rst_n), .req (kmac_data_out), .rsp (kmac_data_in));
+
+    bind `PD_MAIN_PATH.u_rom_ctrl
+      rom_ctrl_bound_if #(.Bound(1), .SecDisableScrambling(SecDisableScrambling))
+      u_bound_if (.clk_i, .rst_ni);
+
+    // We only bind in the FSM interface if scrambling is enabled (otherwise there won't actually be
+    // an FSM module). If DISABLE_ROM_INTEGRITY_CHECK is not defined, the
+    // SecRomCtrlDisableScrambling parameter to dut will not be set, so scrambling will be enabled
+    // and there will be an FSM at `FSM_PATH.
+`ifndef DISABLE_ROM_INTEGRITY_CHECK
+`define FSM_PATH `ROM_CTRL_PATH.gen_fsm_scramble_enabled.u_checker_fsm
+    bind `ROM_CTRL_PATH.gen_fsm_scramble_enabled.u_checker_fsm
+      rom_ctrl_fsm_bound_if #(.Bound(1), .TopCount(TopCount))
+      u_bound_if (.clk_i, .rst_ni);
+
     initial begin
+      uvm_config_db#(virtual rom_ctrl_fsm_if)::set(null, EnvPath, "rom_ctrl_fsm_vif",
+                                                   `FSM_PATH.u_bound_if.gen_bound.u_fsm_if);
+
+      uvm_config_db#(bit [127:0])::set(null, EnvPath, "scramble_key",
+                                       `ROM_CTRL_PATH.RndCnstScrKey);
+      uvm_config_db#(bit [63:0])::set(null, EnvPath, "scramble_nonce",
+                                      `ROM_CTRL_PATH.RndCnstScrNonce);
+    end
+`undef FSM_PATH
+`endif
+
+    // Register the various interfaces so that they can be picked up by the passive rom_ctrl
+    // environment.
+    //
+    // There will be a rom_ctrl_bkdr_util created in the section that creates backdoor utilities
+    // below, which will pass that to the rom_ctrl environment too.
+    initial begin
+      automatic string rom_reg_block_name = "rom_ctrl_rom_reg_block";
+      automatic string regs_reg_block_name = "rom_ctrl_regs_reg_block";
+
+      uvm_config_db#(virtual clk_rst_if)::set(null, EnvPath, "clk_rst_vif", clk_rst_if);
+      uvm_config_db#(virtual rom_ctrl_if)::set(null, EnvPath, "rom_ctrl_vif",
+                                               `ROM_CTRL_PATH.u_bound_if.gen_bound.u_rom_ctrl_if);
+
+      uvm_config_db#(virtual tl_if)::set(null, {EnvPath, ".m_tl_agent_", rom_reg_block_name},
+                                         "vif", rom_tl_if);
+      uvm_config_db#(virtual tl_if)::set(null, {EnvPath, ".m_tl_agent_", regs_reg_block_name},
+                                         "vif", regs_tl_if);
+      uvm_config_db#(virtual clk_rst_if)::set(null, EnvPath, {"clk_rst_vif_", rom_reg_block_name},
+                                              clk_rst_if);
+
+      uvm_config_db#(virtual kmac_app_if)::set(null, {EnvPath, ".m_kmac_agent"}, "vif", u_app_if);
+
+      // Connect rom_ctrl's alert interface to the passive environment (which will instantiate an
+      // extra alert agent and run it in passive mode).
+      uvm_config_db#(virtual alert_if)::set(null, {EnvPath, ".m_alert_agent_fatal"},
+                                            "vif", alert_if[TopEarlgreyAlertIdRomCtrlFatal]);
+
+      // Pass a flag that tells the environment whether to expect rom_ctrl_fsm_vif.
+      uvm_config_db#(bit)::set(null, EnvPath,
+                               "integrity_check_disabled", RomIntegrityCheckDisabled);
+    end
+
+`undef ROM_CTRL_MEM_HIER
+`undef ROM_CTRL_PATH
+`undef PD_MAIN_PATH
+  end
+
+  // Instantiate the memory backdoor util instances.
+  if (prim_pkg::PrimTechName == "Generic") begin : gen_generic
+    initial begin
+      // Unfortunately xcelium does not understand typed constructors so we must assign to local
+      // variables first.
+      rram_ctrl_bkdr_util data, info;
+      rram_ctrl_otp_bkdr_util otp;
+      sram_ctrl_bkdr_util ram_main0, ram_ret0;
+      rom_ctrl_bkdr_util rom;
       chip_mem_e    mem;
       mem_bkdr_util m_mem_bkdr_util[chip_mem_e];
 
-      `uvm_info("tb.sv", "Creating mem_bkdr_util instance for flash 0 data", UVM_MEDIUM)
-      m_mem_bkdr_util[FlashBank0Data] = new(
-          .name  ("mem_bkdr_util[FlashBank0Data]"),
-          .path  (`DV_STRINGIFY(`FLASH0_DATA_MEM_HIER)),
-          .depth ($size(`FLASH0_DATA_MEM_HIER)),
-          .n_bits($bits(`FLASH0_DATA_MEM_HIER)),
-          .err_detection_scheme(mem_bkdr_util_pkg::EccHamming_76_68),
-          .system_base_addr    (top_earlgrey_pkg::TOP_EARLGREY_EFLASH_BASE_ADDR));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[FlashBank0Data], `FLASH0_DATA_MEM_HIER)
+      // Width of an ECC-protected word under each err_detection_scheme used below (data bits plus
+      // integrity bits), for memories whose logical word width can't be derived via $bits() (which
+      // would give the wrong, physical rather than logical, answer once folded).
+      localparam int unsigned EccWordWidth39_32 =
+          get_ecc_data_width(SecdedInv_39_32) + get_ecc_parity_width(SecdedInv_39_32);
+      localparam int unsigned EccWordWidth28_22 =
+          get_ecc_data_width(SecdedInv_28_22) + get_ecc_parity_width(SecdedInv_28_22);
 
-      `uvm_info("tb.sv", "Creating mem_bkdr_util instance for flash 0 info", UVM_MEDIUM)
-      m_mem_bkdr_util[FlashBank0Info] = new(
-          .name  ("mem_bkdr_util[FlashBank0Info]"),
-          .path  (`DV_STRINGIFY(`FLASH0_INFO_MEM_HIER)),
-          .depth ($size(`FLASH0_INFO_MEM_HIER)),
-          .n_bits($bits(`FLASH0_INFO_MEM_HIER)),
-          .err_detection_scheme(mem_bkdr_util_pkg::EccHamming_76_68),
-          .system_base_addr    (top_earlgrey_pkg::TOP_EARLGREY_EFLASH_BASE_ADDR));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[FlashBank0Info], `FLASH0_INFO_MEM_HIER)
+      `uvm_info("tb.sv", "Creating mem_bkdr_util instance for RRAM data", UVM_MEDIUM)
+      // The last pages are reserved for OTP storage and are excluded from depth and n_bits.
+      // Otherwise clear_mem(), set_mem() or load_mem_from_file() could overwrite the OTP partition.
+      data = new(
+          .name  ("mem_bkdr_util[RramData]"),
+          .path  (`DV_STRINGIFY(`RRAM_DATA_MEM_HIER)),
+          .depth ($size(`RRAM_DATA_MEM_HIER) -
+                  rram_ctrl_pkg::OtpPages * rram_ctrl_pkg::WordsPerPage),
+          .n_bits(($bits(`RRAM_DATA_MEM_HIER) / $size(`RRAM_DATA_MEM_HIER)) *
+                  ($size(`RRAM_DATA_MEM_HIER) -
+                   rram_ctrl_pkg::OtpPages * rram_ctrl_pkg::WordsPerPage)),
+          .err_detection_scheme(mem_bkdr_util_pkg::ErrDetectionNone),
+          .system_base_addr    (top_earlgrey_pkg::TOP_EARLGREY_RRAM_CTRL_HOST_BASE_ADDR));
+      m_mem_bkdr_util[RramData] = data;
+      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[RramData], `RRAM_DATA_MEM_HIER)
 
-      `uvm_info("tb.sv", "Creating mem_bkdr_util instance for flash 1 data", UVM_MEDIUM)
-      m_mem_bkdr_util[FlashBank1Data] = new(
-          .name  ("mem_bkdr_util[FlashBank1Data]"),
-          .path  (`DV_STRINGIFY(`FLASH1_DATA_MEM_HIER)),
-          .depth ($size(`FLASH1_DATA_MEM_HIER)),
-          .n_bits($bits(`FLASH1_DATA_MEM_HIER)),
-          .err_detection_scheme(mem_bkdr_util_pkg::EccHamming_76_68),
-          .system_base_addr    (top_earlgrey_pkg::TOP_EARLGREY_EFLASH_BASE_ADDR +
-              top_earlgrey_pkg::TOP_EARLGREY_EFLASH_SIZE_BYTES / flash_ctrl_pkg::NumBanks));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[FlashBank1Data], `FLASH1_DATA_MEM_HIER)
-
-      `uvm_info("tb.sv", "Creating mem_bkdr_util instance for flash 1 info", UVM_MEDIUM)
-      m_mem_bkdr_util[FlashBank1Info] = new(
-          .name  ("mem_bkdr_util[FlashBank1Info]"),
-          .path  (`DV_STRINGIFY(`FLASH1_INFO_MEM_HIER)),
-          .depth ($size(`FLASH1_INFO_MEM_HIER)),
-          .n_bits($bits(`FLASH1_INFO_MEM_HIER)),
-          .err_detection_scheme(mem_bkdr_util_pkg::EccHamming_76_68),
-          .system_base_addr    (top_earlgrey_pkg::TOP_EARLGREY_EFLASH_BASE_ADDR +
-              top_earlgrey_pkg::TOP_EARLGREY_EFLASH_SIZE_BYTES / flash_ctrl_pkg::NumBanks));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[FlashBank1Info], `FLASH1_INFO_MEM_HIER)
+      `uvm_info("tb.sv", "Creating mem_bkdr_util instance for RRAM info", UVM_MEDIUM)
+      info = new(
+          .name  ("mem_bkdr_util[RramInfo]"),
+          .path  (`DV_STRINGIFY(`RRAM_INFO_MEM_HIER)),
+          .depth ($size(`RRAM_INFO_MEM_HIER)),
+          .n_bits($bits(`RRAM_INFO_MEM_HIER)),
+          .err_detection_scheme(mem_bkdr_util_pkg::ErrDetectionNone),
+          .system_base_addr    (top_earlgrey_pkg::TOP_EARLGREY_RRAM_CTRL_HOST_BASE_ADDR));
+      m_mem_bkdr_util[RramInfo] = info;
+      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[RramInfo], `RRAM_INFO_MEM_HIER)
 
       `uvm_info("tb.sv", "Creating mem_bkdr_util instance for I cache way 0 tag", UVM_MEDIUM)
       m_mem_bkdr_util[ICacheWay0Tag] = new(
           .name  ("mem_bkdr_util[ICacheWay0Tag]"),
-          .path  (`DV_STRINGIFY(`ICACHE0_TAG_MEM_HIER)),
-          .depth ($size(`ICACHE0_TAG_MEM_HIER)),
-          .n_bits($bits(`ICACHE0_TAG_MEM_HIER)),
-          .err_detection_scheme(mem_bkdr_util_pkg::EccInv_28_22));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[ICacheWay0Tag], `ICACHE0_TAG_MEM_HIER)
+          .path  (`DV_STRINGIFY(`ICACHE0_TAG_MEM_INST_HIER.`ICACHE_TAG_MEM_TILE_PATH)),
+          .depth (`ICACHE0_TAG_MEM_DEPTH),
+          .n_bits(`ICACHE0_TAG_MEM_DEPTH * EccWordWidth28_22),
+          .err_detection_scheme(mem_bkdr_util_pkg::EccInv_28_22),
+          .words_per_row(`ICACHE_TAG_MEM_WORDS_PER_ROW));
+      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[ICacheWay0Tag],
+                             `ICACHE0_TAG_MEM_INST_HIER.`ICACHE_TAG_MEM_TILE_PATH)
 
       `uvm_info("tb.sv", "Creating mem_bkdr_util instance for I cache way 1 tag", UVM_MEDIUM)
       m_mem_bkdr_util[ICacheWay1Tag] = new(
           .name  ("mem_bkdr_util[ICacheWay1Tag]"),
-          .path  (`DV_STRINGIFY(`ICACHE1_TAG_MEM_HIER)),
-          .depth ($size(`ICACHE1_TAG_MEM_HIER)),
-          .n_bits($bits(`ICACHE1_TAG_MEM_HIER)),
-          .err_detection_scheme(mem_bkdr_util_pkg::EccInv_28_22));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[ICacheWay1Tag], `ICACHE1_TAG_MEM_HIER)
+          .path  (`DV_STRINGIFY(`ICACHE1_TAG_MEM_INST_HIER.`ICACHE_TAG_MEM_TILE_PATH)),
+          .depth (`ICACHE1_TAG_MEM_DEPTH),
+          .n_bits(`ICACHE1_TAG_MEM_DEPTH * EccWordWidth28_22),
+          .err_detection_scheme(mem_bkdr_util_pkg::EccInv_28_22),
+          .words_per_row(`ICACHE_TAG_MEM_WORDS_PER_ROW));
+      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[ICacheWay1Tag],
+                             `ICACHE1_TAG_MEM_INST_HIER.`ICACHE_TAG_MEM_TILE_PATH)
 
       `uvm_info("tb.sv", "Creating mem_bkdr_util instance for I cache way 0 data", UVM_MEDIUM)
       m_mem_bkdr_util[ICacheWay0Data] = new(
           .name  ("mem_bkdr_util[ICacheWay0Data]"),
-          .path  (`DV_STRINGIFY(`ICACHE0_DATA_MEM_HIER)),
-          .depth ($size(`ICACHE0_DATA_MEM_HIER)),
-          .n_bits($bits(`ICACHE0_DATA_MEM_HIER)),
-          // The line size is 2x 32 bits and ECC is applied separately at the 32-bit word level.
-          .err_detection_scheme(mem_bkdr_util_pkg::EccInv_39_32));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[ICacheWay0Data], `ICACHE0_DATA_MEM_HIER)
+          .path  (`DV_STRINGIFY(`ICACHE0_DATA_MEM_INST_HIER.`ICACHE_DATA_MEM_TILE_PATH)),
+          .depth (`ICACHE0_DATA_MEM_DEPTH),
+          .n_bits(`ICACHE0_DATA_MEM_DEPTH * ibex_pkg::IC_LINE_BEATS * EccWordWidth39_32),
+          .err_detection_scheme(mem_bkdr_util_pkg::EccInv_39_32),
+          .words_per_row(`ICACHE_DATA_MEM_WORDS_PER_ROW));
+      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[ICacheWay0Data],
+                             `ICACHE0_DATA_MEM_INST_HIER.`ICACHE_DATA_MEM_TILE_PATH)
 
       `uvm_info("tb.sv", "Creating mem_bkdr_util instance for I cache way 1 data", UVM_MEDIUM)
       m_mem_bkdr_util[ICacheWay1Data] = new(
           .name  ("mem_bkdr_util[ICacheWay1Data]"),
-          .path  (`DV_STRINGIFY(`ICACHE1_DATA_MEM_HIER)),
-          .depth ($size(`ICACHE1_DATA_MEM_HIER)),
-          .n_bits($bits(`ICACHE1_DATA_MEM_HIER)),
-          // The line size is 2x 32 bits and ECC is applied separately at the 32-bit word level.
-          .err_detection_scheme(mem_bkdr_util_pkg::EccInv_39_32));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[ICacheWay1Data], `ICACHE1_DATA_MEM_HIER)
+          .path  (`DV_STRINGIFY(`ICACHE1_DATA_MEM_INST_HIER.`ICACHE_DATA_MEM_TILE_PATH)),
+          .depth (`ICACHE1_DATA_MEM_DEPTH),
+          .n_bits(`ICACHE1_DATA_MEM_DEPTH * ibex_pkg::IC_LINE_BEATS * EccWordWidth39_32),
+          .err_detection_scheme(mem_bkdr_util_pkg::EccInv_39_32),
+          .words_per_row(`ICACHE_DATA_MEM_WORDS_PER_ROW));
+      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[ICacheWay1Data],
+                             `ICACHE1_DATA_MEM_INST_HIER.`ICACHE_DATA_MEM_TILE_PATH)
 
-      `uvm_info("tb.sv", "Creating mem_bkdr_util instance for OTP", UVM_MEDIUM)
-      m_mem_bkdr_util[Otp] = new(
+      `uvm_info("tb.sv", "Creating mem_bkdr_util instance for OTP (in RRAM)", UVM_MEDIUM)
+      otp = new(
           .name  ("mem_bkdr_util[Otp]"),
-          .path  (`DV_STRINGIFY(`OTP_MEM_HIER)),
-          .depth ($size(`OTP_MEM_HIER)),
-          .n_bits($bits(`OTP_MEM_HIER)),
-          .err_detection_scheme(mem_bkdr_util_pkg::EccHamming_22_16));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[Otp], `OTP_MEM_HIER)
+          .path  (`DV_STRINGIFY(`RRAM_DATA_MEM_HIER)),
+          .depth ($size(`RRAM_DATA_MEM_HIER)),
+          .n_bits($bits(`RRAM_DATA_MEM_HIER)),
+          .err_detection_scheme(mem_bkdr_util_pkg::ErrDetectionNone),
+          .system_base_addr(top_earlgrey_pkg::TOP_EARLGREY_RRAM_CTRL_HOST_BASE_ADDR));
+      m_mem_bkdr_util[Otp] = otp;
+      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[Otp], `RRAM_DATA_MEM_HIER)
 
       `uvm_info("tb.sv", "Creating mem_bkdr_util instance for RAM", UVM_MEDIUM)
-      m_mem_bkdr_util[RamMain0] = new(
+      // The ECC word width (32 data bits + 7 integrity bits, matching mem_bkdr_util_pkg::
+      // EccInv_39_32 below) is the same regardless of which prim_ram_1p implementation is mapped
+      // in, so it is not one of the macros in mem_bkdr_util_hier.svh.
+      ram_main0 = new(
           .name  ("mem_bkdr_util[RamMain0]"),
-          .path  (`DV_STRINGIFY(`RAM_MAIN_MEM_HIER)),
-          .depth ($size(`RAM_MAIN_MEM_HIER)),
-          .n_bits($bits(`RAM_MAIN_MEM_HIER)),
+          .path  (`RAM_MAIN_MEM_PATH),
+          .depth (`RAM_MAIN_MEM_NUM_TILES * `RAM_MAIN_MEM_TILE_DEPTH),
+          .n_bits(`RAM_MAIN_MEM_NUM_TILES * `RAM_MAIN_MEM_TILE_DEPTH * EccWordWidth39_32),
           .err_detection_scheme(mem_bkdr_util_pkg::EccInv_39_32),
-          .system_base_addr    (top_earlgrey_pkg::TOP_EARLGREY_RAM_MAIN_BASE_ADDR));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[RamMain0], `RAM_MAIN_MEM_HIER)
+          .num_prince_rounds_half(2),
+          .system_base_addr     (top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_MAIN_RAM_BASE_ADDR),
+          .tiling_path          (`RAM_MAIN_MEM_TILING_PATH),
+          .tiling_suffix_fmt_str(`RAM_MAIN_MEM_TILING_FMT),
+          .tile_depth           (`RAM_MAIN_MEM_TILE_DEPTH),
+          .words_per_row        (`RAM_MAIN_MEM_WORDS_PER_ROW));
+      m_mem_bkdr_util[RamMain0] = ram_main0;
+      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[RamMain0], `RAM_MAIN_MEM_TILE_HIER)
 
       `uvm_info("tb.sv", "Creating mem_bkdr_util instance for RAM RET", UVM_MEDIUM)
-      m_mem_bkdr_util[RamRet0] = new(
+      // Never tiled, so unlike RAM_MAIN this needs no tiling_path/tiling_suffix_fmt_str/tile_depth.
+      // The word width (EccWordWidth39_32, computed above) is the same regardless of which
+      // prim_ram_1p implementation is mapped in, so, as for RAM_MAIN, it is used directly here
+      // rather than derived via $bits() (which would give the wrong answer once folded: $bits() on
+      // a folded implementation's physical row array is its physical width, not the logical one).
+      ram_ret0 = new(
           .name  ("mem_bkdr_util[RamRet0]"),
-          .path  (`DV_STRINGIFY(`RAM_RET_MEM_HIER)),
-          .depth ($size(`RAM_RET_MEM_HIER)),
-          .n_bits($bits(`RAM_RET_MEM_HIER)),
+          .path  (`DV_STRINGIFY(`RAM_RET_MEM_INST_HIER.`RAM_RET_MEM_TILE_PATH)),
+          .depth (`RAM_RET_MEM_DEPTH),
+          .n_bits(`RAM_RET_MEM_DEPTH * EccWordWidth39_32),
           .err_detection_scheme(mem_bkdr_util_pkg::EccInv_39_32),
-          .system_base_addr    (top_earlgrey_pkg::TOP_EARLGREY_RAM_RET_AON_BASE_ADDR));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[RamRet0], `RAM_RET_MEM_HIER)
+          .system_base_addr    (top_earlgrey_pkg::TOP_EARLGREY_SRAM_CTRL_RET_RAM_BASE_ADDR),
+          .words_per_row        (`RAM_RET_MEM_WORDS_PER_ROW));
+      m_mem_bkdr_util[RamRet0] = ram_ret0;
+      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[RamRet0], `RAM_RET_MEM_INST_HIER.`RAM_RET_MEM_TILE_PATH)
 
       `uvm_info("tb.sv", "Creating mem_bkdr_util instance for ROM", UVM_MEDIUM)
-      m_mem_bkdr_util[Rom] = new(
+      rom = new(
           .name  ("mem_bkdr_util[Rom]"),
-          .path  (`DV_STRINGIFY(`ROM_MEM_HIER)),
-          .depth ($size(`ROM_MEM_HIER)),
-          .n_bits($bits(`ROM_MEM_HIER)),
+          .path  (`ROM_MEM_PATH),
+          .depth (`ROM_MEM_NUM_TILES * $size(`ROM_MEM_TILE_HIER)),
+          .n_bits(`ROM_MEM_NUM_TILES * $bits(`ROM_MEM_TILE_HIER)),
 `ifdef DISABLE_ROM_INTEGRITY_CHECK
           .err_detection_scheme(mem_bkdr_util_pkg::ErrDetectionNone),
 `else
           .err_detection_scheme(mem_bkdr_util_pkg::EccInv_39_32),
 `endif
-          .system_base_addr    (top_earlgrey_pkg::TOP_EARLGREY_ROM_BASE_ADDR));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[Rom], `ROM_MEM_HIER)
+          .key   (top_earlgrey_rnd_cnst_pkg::RndCnstRomCtrlScrKey),
+          .nonce (top_earlgrey_rnd_cnst_pkg::RndCnstRomCtrlScrNonce),
+          .system_base_addr    (top_earlgrey_pkg::TOP_EARLGREY_ROM_CTRL_ROM_BASE_ADDR),
+          .tiling_path         (`ROM_MEM_TILING_PATH),
+          .tiling_suffix_fmt_str(`ROM_MEM_TILING_FMT),
+          .tile_depth          ($size(`ROM_MEM_TILE_HIER)));
+      m_mem_bkdr_util[Rom] = rom;
+
+      // Knob to skip ROM backdoor logging (for sims that use ROM macro).
+      if (!$value$plusargs("skip_rom_bkdr_load=%0b", skip_rom_bkdr_load)) skip_rom_bkdr_load = 0;
+      // A ROM composed of several tiles is loaded from and written to file inside mem_bkdr_util,
+      // which is tile-aware. The $readmemh/$writememh below can only target the single array of an
+      // untiled ROM.
+      if (!skip_rom_bkdr_load && !rom.is_tiled()) begin
+        `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[Rom], `ROM_MEM_TILE_HIER)
+      end
 
       `uvm_info("tb.sv", "Creating mem_bkdr_util instance for OTBN IMEM", UVM_MEDIUM)
       m_mem_bkdr_util[OtbnImem] = new(.name  ("mem_bkdr_util[OtbnImem]"),
-                                      .path  (`DV_STRINGIFY(`OTBN_IMEM_HIER)),
-                                      .depth ($size(`OTBN_IMEM_HIER)),
-                                      .n_bits($bits(`OTBN_IMEM_HIER)),
-                                      .err_detection_scheme(mem_bkdr_util_pkg::EccInv_39_32));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[OtbnImem], `OTBN_IMEM_HIER)
+                                      .path  (`DV_STRINGIFY(`OTBN_IMEM_MEM_INST_HIER.`OTBN_IMEM_MEM_TILE_PATH)),
+                                      .depth (`OTBN_IMEM_MEM_DEPTH),
+                                      .n_bits(`OTBN_IMEM_MEM_DEPTH * EccWordWidth39_32),
+                                      .err_detection_scheme(mem_bkdr_util_pkg::EccInv_39_32),
+                                      .words_per_row(`OTBN_IMEM_MEM_WORDS_PER_ROW));
+      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[OtbnImem],
+                             `OTBN_IMEM_MEM_INST_HIER.`OTBN_IMEM_MEM_TILE_PATH)
 
+      // OTBN_DMEM may be bit-sliced across two macro instances sharing one address (see
+      // mem_bkdr_util_hier.svh), so its path needs the bit-slice-aware OTBN_DMEM_MEM_BKDR_PATH
+      // macro-function, not a plain stringify. Its logical word width is otbn_pkg::ExtWLEN
+      // (WLEN plus integrity bits), unlike the other memories' EccWordWidth39_32 above.
       `uvm_info("tb.sv", "Creating mem_bkdr_util instance for OTBN DMEM", UVM_MEDIUM)
-      m_mem_bkdr_util[OtbnDmem0] = new(.name  ("mem_bkdr_util[OtbnDmem0]"),
-                                       .path  (`DV_STRINGIFY(`OTBN_DMEM_HIER)),
-                                       .depth ($size(`OTBN_DMEM_HIER)),
-                                       .n_bits($bits(`OTBN_DMEM_HIER)),
-                                       .err_detection_scheme(mem_bkdr_util_pkg::EccInv_39_32));
-      `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[OtbnDmem0], `OTBN_DMEM_HIER)
+      m_mem_bkdr_util[OtbnDmem0] = new(
+          .name  ("mem_bkdr_util[OtbnDmem0]"),
+          .path  (`OTBN_DMEM_MEM_BKDR_PATH(`OTBN_DMEM_MEM_INST_HIER)),
+          .depth (`OTBN_DMEM_MEM_DEPTH),
+          .n_bits(`OTBN_DMEM_MEM_DEPTH * otbn_pkg::ExtWLEN),
+          .err_detection_scheme(mem_bkdr_util_pkg::EccInv_39_32),
+          .words_per_row(`OTBN_DMEM_MEM_WORDS_PER_ROW),
+          .num_bit_slices(`OTBN_DMEM_MEM_NUM_BIT_SLICES),
+          .bit_slice_tiling_path(`OTBN_DMEM_MEM_BIT_SLICE_TILING_PATH),
+          .bit_slice_tiling_suffix_fmt_str(`OTBN_DMEM_MEM_BIT_SLICE_TILING_FMT));
+      if (!m_mem_bkdr_util[OtbnDmem0].is_tiled() &&
+          !m_mem_bkdr_util[OtbnDmem0].is_bit_sliced()) begin
+        `MEM_BKDR_UTIL_FILE_OP(m_mem_bkdr_util[OtbnDmem0],
+                               `OTBN_DMEM_MEM_INST_HIER.`OTBN_DMEM_MEM_TILE_PATH)
+      end
+
+      `uvm_info("tb.sv", "Creating mem_bkdr_util instance for USBDEV BUFFER", UVM_MEDIUM)
+      m_mem_bkdr_util[UsbdevBuf] = new(
+          .name  ("mem_bkdr_util[UsbdevBuf]"),
+          .path  (`DV_STRINGIFY(`USBDEV_BUF_MEM_INST_HIER.`USBDEV_BUF_MEM_TILE_PATH)),
+          .depth (`USBDEV_BUF_MEM_DEPTH),
+          .n_bits(`USBDEV_BUF_MEM_DEPTH * TL_DW),
+          .err_detection_scheme(mem_bkdr_util_pkg::ErrDetectionNone),
+          .words_per_row(`USBDEV_BUF_MEM_WORDS_PER_ROW));
 
       mem = mem.first();
       do begin
@@ -375,6 +793,10 @@ module tb;
             null, "*.env", m_mem_bkdr_util[mem].get_name(), m_mem_bkdr_util[mem]);
         mem = mem.next();
       end while (mem != mem.first());
+
+      // Pass the rom_ctrl_bkdr_util to the bound-in block-level environment
+      uvm_config_db#(rom_ctrl_bkdr_util)::set(null, "*.env.m_rom_ctrl_env",
+                                              "rom_ctrl_bkdr_util", rom);
     end
   end : gen_generic
 
@@ -404,45 +826,47 @@ module tb;
       // See chip_padctrl_attributes_vseq for more details.
       forever @dut.chip_if.chip_padctrl_attributes_test_sva_disable begin
         if (dut.chip_if.chip_padctrl_attributes_test_sva_disable) begin
-          $assertoff(0, dut.top_earlgrey.u_flash_ctrl);
-          $assertoff(0, dut.top_earlgrey.u_gpio);
-          $assertoff(0, dut.top_earlgrey.u_i2c0);
-          $assertoff(0, dut.top_earlgrey.u_i2c1);
-          $assertoff(0, dut.top_earlgrey.u_i2c2);
-          $assertoff(0, dut.top_earlgrey.u_pinmux_aon);
-          $assertoff(0, dut.top_earlgrey.u_spi_device);
-          $assertoff(0, dut.top_earlgrey.u_spi_host0);
-          $assertoff(0, dut.top_earlgrey.u_spi_host1);
-          $assertoff(0, dut.top_earlgrey.u_sysrst_ctrl_aon);
-          $assertoff(0, dut.top_earlgrey.u_uart0);
-          $assertoff(0, dut.top_earlgrey.u_uart1);
-          $assertoff(0, dut.top_earlgrey.u_uart2);
-          $assertoff(0, dut.top_earlgrey.u_uart3);
-          $assertoff(0, dut.top_earlgrey.u_usbdev);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_rram_ctrl);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_gpio0);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_gpio1);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_i2c0);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_i2c1);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_i2c2);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_aon.u_pinmux);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_spi_device);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_spi_host0);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_spi_host1);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_aon.u_sysrst_ctrl);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_uart0);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_uart1);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_uart2);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_uart3);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_usbdev);
         end else begin
-          $asserton(0, dut.top_earlgrey.u_flash_ctrl);
-          $asserton(0, dut.top_earlgrey.u_gpio);
-          $asserton(0, dut.top_earlgrey.u_i2c0);
-          $asserton(0, dut.top_earlgrey.u_i2c1);
-          $asserton(0, dut.top_earlgrey.u_i2c2);
-          $asserton(0, dut.top_earlgrey.u_pinmux_aon);
-          $asserton(0, dut.top_earlgrey.u_spi_device);
-          $asserton(0, dut.top_earlgrey.u_spi_host0);
-          $asserton(0, dut.top_earlgrey.u_spi_host1);
-          $asserton(0, dut.top_earlgrey.u_sysrst_ctrl_aon);
-          $asserton(0, dut.top_earlgrey.u_uart0);
-          $asserton(0, dut.top_earlgrey.u_uart1);
-          $asserton(0, dut.top_earlgrey.u_uart2);
-          $asserton(0, dut.top_earlgrey.u_uart3);
-          $asserton(0, dut.top_earlgrey.u_usbdev);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_rram_ctrl);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_gpio0);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_gpio1);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_i2c0);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_i2c1);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_i2c2);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_aon.u_pinmux);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_spi_device);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_spi_host0);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_spi_host1);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_aon.u_sysrst_ctrl);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_uart0);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_uart1);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_uart2);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_uart3);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_usbdev);
         end
       end
       // See chip_sw_sleep_pin_mio_dio_val_vseq for more details.
       forever @dut.chip_if.chip_sw_sleep_pin_mio_dio_val_sva_disable begin
         if (dut.chip_if.chip_sw_sleep_pin_mio_dio_val_sva_disable) begin
-          $assertoff(0, dut.top_earlgrey.u_spi_device);
+          $assertoff(0, dut.top_earlgrey.earlgrey_pd_main.u_spi_device);
         end else begin
-          $asserton(0, dut.top_earlgrey.u_spi_device);
+          $asserton(0, dut.top_earlgrey.earlgrey_pd_main.u_spi_device);
         end
       end
     join
@@ -451,23 +875,20 @@ module tb;
   // Control assertions in the DUT with UVM resource string "dut_assert_en".
   `DV_ASSERT_CTRL("dut_assert_en", tb.dut)
 
-  // XBAR mode.
-  //
-  // XBAR mode uses a different UVM environment than the full chip. It requires the POR to be driven
-  // using a clk_rst_if instance. The `xbar_mode` plusarg is used to switch between the two
-  // environments. It is declared as type `logic` so that a wait statement can be used in other
-  // initial blocks to wait for its value to stabilize after a plusarg lookup.
-  logic xbar_mode;
-
-  initial begin
-    if (!$value$plusargs("xbar_mode=%0b", xbar_mode)) xbar_mode = 0;
-    clk_rst_if.set_active(.drive_clk_val(1 /* bogus clock */), .drive_rst_n_val(xbar_mode));
-    uvm_config_db#(virtual clk_rst_if)::set(null, "*.env*", "clk_rst_vif", clk_rst_if);
-  end
-  assign dut.POR_N = xbar_mode ? rst_n : 1'bz;
-  assign rst_n = xbar_mode ? 1'bz : dut.chip_if.dios[top_earlgrey_pkg::DioPadPorN];
-
   `include "../autogen/tb__xbar_connect.sv"
   `include "../autogen/tb__alert_handler_connect.sv"
+
+// Gatesim initial
+`ifdef GATE_LEVEL
+  initial begin
+    // unconnected ports
+    tb.dut.chip_if.disable_mios_x_check = 1'b1;
+
+    // Ignore 0 time x
+    $assertoff();
+    #5ns;
+    $asserton();
+  end
+`endif
 
 endmodule

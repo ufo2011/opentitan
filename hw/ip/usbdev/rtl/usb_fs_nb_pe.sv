@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Luke Valenty (TinyFPGA project, https://github.com/tinyfpga/TinyFPGA-Bootloader).
@@ -35,7 +35,14 @@ module usb_fs_nb_pe #(
   input  logic                   cfg_pinflip_i, // 1: USB-side D+ and D- pins are flipped.
                                                 // Change values in logic to accommodate.
   input  logic                   tx_osc_test_mode_i, // Oscillator test mode (constantly output JK)
-  input  logic [NumOutEps-1:0]   data_toggle_clear_i, // Clear the data toggles for an EP
+  output logic [NumOutEps-1:0]   out_data_toggle_o, // Current state of OUT data toggles
+  input  logic                   out_datatog_we_i, // OUT data toggles write strobe from software
+  input  logic [NumOutEps-1:0]   out_datatog_status_i, // New state of selected OUT data toggles
+  input  logic [NumOutEps-1:0]   out_datatog_mask_i, // Which OUT EP data toggles to modify
+  output logic [NumInEps-1:0]    in_data_toggle_o, // Current state of IN data toggles
+  input  logic                   in_datatog_we_i, // IN data toggles write strobe from software
+  input  logic [NumInEps-1:0]    in_datatog_status_i, // New state of selected IN data toggles
+  input  logic [NumInEps-1:0]    in_datatog_mask_i, // Which IN EP data toggles to modify
   input  logic                   diff_rx_ok_i, // 1: received differential data symbols are valid.
                                                // Set low if K and J symbols might be invalid, such
                                                // as when an external differential receiver is
@@ -64,6 +71,9 @@ module usb_fs_nb_pe #(
   input  logic [NumOutEps-1:0]   out_ep_iso_i, // Configure endpoint in isochronous mode
 
   // in endpoint interfaces
+  output logic                   in_xact_starting_o, // Start of an IN transaction
+  output logic [3:0]             in_xact_start_ep_o, // Capture IN packet details
+
   output logic [3:0]             in_ep_current_o, // Other signals addressed to this ep
   output logic                   in_ep_rollback_o, // Bad termination, rollback transaction
   output logic                   in_ep_xact_end_o, // good termination, transaction complete
@@ -78,7 +88,8 @@ module usb_fs_nb_pe #(
   input  logic  [NumInEps-1:0]   in_ep_iso_i, // Configure endpoint in isochronous mode
 
   // sof interface
-  output logic                   sof_valid_o,
+  output logic                   sof_detected_o, // SOF detected, PID valid
+  output logic                   sof_valid_o, // SOF packet valid; frame number may be trusted
   output logic [10:0]            frame_index_o,
 
   // RX line status
@@ -86,7 +97,8 @@ module usb_fs_nb_pe #(
   output logic                   rx_j_det_o,
 
   // RX errors
-  output logic                   rx_crc_err_o,
+  output logic                   rx_crc5_err_o,
+  output logic                   rx_crc16_err_o,
   output logic                   rx_pid_err_o,
   output logic                   rx_bitstuff_err_o,
 
@@ -104,7 +116,13 @@ module usb_fs_nb_pe #(
   output logic                   usb_se0_o,
   output logic                   usb_dp_o,
   output logic                   usb_dn_o,
-  output logic                   usb_oe_o
+  output logic                   usb_oe_o,
+
+  // event counters
+  output logic                   event_datatog_out_o,
+  output logic                   event_timeout_in_o,
+  output logic                   event_nak_in_o,
+  output logic                   event_nodata_in_o
 );
 
   import usb_consts_pkg::*;
@@ -123,6 +141,7 @@ module usb_fs_nb_pe #(
   logic [10:0] rx_frame_num;
   logic rx_data_put;
   logic [7:0] rx_data;
+  logic rx_pid_valid;
   logic rx_pkt_valid;
 
   // tx mux
@@ -141,8 +160,14 @@ module usb_fs_nb_pe #(
 
   logic usb_oe;
 
-  // sof interface
+  // Start Of Frame handling
+  //
+  // - SOF is detected and may be used for timing/synchronization purposes if the PID is valid.
+  assign sof_detected_o = rx_pkt_end & rx_pid_valid & (usb_pid_e'(rx_pid) == UsbPidSof);
+  // - The SOF packet is considered valid iff the packet is also free of bit stuffing violations
+  //   and the CRC5 is correct.
   assign sof_valid_o = rx_pkt_end & rx_pkt_valid & (usb_pid_e'(rx_pid) == UsbPidSof);
+  // - The frame number shall be used only if the SOF packet is valid.
   assign frame_index_o = rx_frame_num;
   assign usb_oe_o = usb_oe;
 
@@ -160,6 +185,10 @@ module usb_fs_nb_pe #(
     .link_active_i         (link_active_i),
     .dev_addr_i            (dev_addr_i),
 
+    // transaction starting
+    .in_xact_starting_o    (in_xact_starting_o),
+    .in_xact_start_ep_o    (in_xact_start_ep_o),
+
     // endpoint interface
     .in_ep_current_o       (in_ep_current_o),
     .in_ep_rollback_o      (in_ep_rollback_o),
@@ -174,7 +203,10 @@ module usb_fs_nb_pe #(
     .in_ep_data_done_i     (in_ep_data_done_i),
     .in_ep_iso_i           (in_ep_iso_not_control),
 
-    .data_toggle_clear_i   (data_toggle_clear_i),
+    .in_data_toggle_o      (in_data_toggle_o),
+    .in_datatog_we_i       (in_datatog_we_i),
+    .in_datatog_status_i   (in_datatog_status_i),
+    .in_datatog_mask_i     (in_datatog_mask_i),
 
     // rx path
     .rx_pkt_start_i        (rx_pkt_start),
@@ -190,7 +222,12 @@ module usb_fs_nb_pe #(
     .tx_pid_o              (in_tx_pid),
     .tx_data_avail_o       (tx_data_avail),
     .tx_data_get_i         (tx_data_get),
-    .tx_data_o             (tx_data)
+    .tx_data_o             (tx_data),
+
+    // event counters
+    .event_timeout_in_o    (event_timeout_in_o),
+    .event_nak_in_o        (event_nak_in_o),
+    .event_nodata_in_o     (event_nodata_in_o)
   );
 
   usb_fs_nb_out_pe #(
@@ -200,7 +237,6 @@ module usb_fs_nb_pe #(
     .clk_48mhz_i            (clk_48mhz_i),
     .rst_ni                 (rst_ni),
     .link_reset_i           (link_reset_i),
-    .link_active_i          (link_active_i),
     .dev_addr_i             (dev_addr_i),
 
     // endpoint interface
@@ -218,7 +254,10 @@ module usb_fs_nb_pe #(
     .out_ep_stall_i         (out_ep_stall_i),
     .out_ep_iso_i           (out_ep_iso_i),
 
-    .data_toggle_clear_i    (data_toggle_clear_i),
+    .out_data_toggle_o      (out_data_toggle_o),
+    .out_datatog_we_i       (out_datatog_we_i),
+    .out_datatog_status_i   (out_datatog_status_i),
+    .out_datatog_mask_i     (out_datatog_mask_i),
 
     // rx path
     .rx_pkt_start_i         (rx_pkt_start),
@@ -233,7 +272,10 @@ module usb_fs_nb_pe #(
     // tx path
     .tx_pkt_start_o         (out_tx_pkt_start),
     .tx_pkt_end_i           (tx_pkt_end),
-    .tx_pid_o               (out_tx_pid)
+    .tx_pid_o               (out_tx_pid),
+
+    // event counters
+    .event_datatog_out_o    (event_datatog_out_o)
   );
 
   usb_fs_rx u_usb_fs_rx (
@@ -257,10 +299,12 @@ module usb_fs_nb_pe #(
     .frame_num_o            (rx_frame_num),
     .rx_data_put_o          (rx_data_put),
     .rx_data_o              (rx_data),
+    .valid_pid_o            (rx_pid_valid),
     .valid_packet_o         (rx_pkt_valid),
     .rx_idle_det_o          (rx_idle_det_o),
     .rx_j_det_o             (rx_j_det_o),
-    .crc_error_o            (rx_crc_err_o),
+    .crc5_error_o           (rx_crc5_err_o),
+    .crc16_error_o          (rx_crc16_err_o),
     .pid_error_o            (rx_pid_err_o),
     .bitstuff_error_o       (rx_bitstuff_err_o)
   );

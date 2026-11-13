@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -27,12 +27,12 @@
  * attached SPI Flash device, mainly in order to not introduce glitches on the
  * CSb line. If the module does not hold the SPI_CLK, then CSb needs one more
  * clock to remove the glitch. The timing delay means that this design will miss
- * the tming to raise CSb in order to cancel the self-complete commands such as
+ * the timing to raise CSb in order to cancel the self-complete commands such as
  * chip erase command.
  *
  * To make CSb de-assertion work, there are a few assumptions:
  *
- * 1. De-asserting CSb in the middle of transmit does not degrade the device
+ * 1. De-asserting CSb in the middle of transaction does not degrade the device
  *    quality.
  * 2. If CSb is de-asserted prior to the 8th SPI_CLK, the SPI flash device
  *    cancels the process without making any assumptions about the expected
@@ -70,6 +70,9 @@
  * attacks or reliability issues, then SW in RoT can redirect the host system's
  * requests to the other half partitions in the flash device.
  */
+
+`include "prim_assert.sv"
+
 module spi_passthrough
   import spi_device_pkg::*;
 (
@@ -77,16 +80,7 @@ module spi_passthrough
   input rst_ni,  // SPI reset
 
   input clk_out_i, // SPI output clk
-
-  // Configurations
-  //
-  // Clock polarity
-  //
-  // CFG.CPOL informs the logic if the host sends inverted SCK or not. If
-  // CFG.CPOL is set, the filtering logic needs to account for the inverted
-  // clock. The logic gates the `host_inverted_sck_i` then sends out the
-  // inverted clock rather than `host_sck_i`.
-  input cfg_cpol_i,
+  input rst_out_ni, // SPI reset safely timed for output clk
 
   // command filter information is given as 256bit register. It is subject to be
   // changed if command config is stored in DPSRAM. If that is supported, the
@@ -122,7 +116,6 @@ module spi_passthrough
   // and cmdparse, but passthrough has to implement its own s2p and cmdparse to
   // support the A/B binary scheme.
   input              host_sck_i,
-  input              host_isck_i, // inverted SCK for CPOL:=1 case
   input              host_csb_i,
   input        [3:0] host_s_i,
   output logic [3:0] host_s_o,    // clk_out_i domain
@@ -326,7 +319,7 @@ module spi_passthrough
   logic [MetaBitCntW-1:0] bitcnt;
 
   // Address or anything host driving after opcode counter
-  logic [AddrCntW-1:0] addrcnt, addrcnt_outclk;
+  logic [AddrCntW-1:0] addrcnt_outclk;
 
   // Dummy counter
   logic [DummyCntW-1:0] dummycnt, dummycnt_d;
@@ -355,12 +348,12 @@ module spi_passthrough
     if (!rst_ni)     csb_deassert <= 1'b 0;
     else if (filter) csb_deassert <= 1'b 1;
   end
-  always_ff @(posedge clk_out_i or negedge rst_ni) begin
-    if (!rst_ni) csb_deassert_outclk <= 1'b 0;
-    else         csb_deassert_outclk <= csb_deassert;
+  always_ff @(posedge clk_out_i or negedge rst_out_ni) begin
+    if (!rst_out_ni) csb_deassert_outclk <= 1'b 0;
+    else             csb_deassert_outclk <= csb_deassert;
   end
 
-  // Look at the waveform above to see why sck_gate_en is inversion of fliter OR
+  // Look at the waveform above to see why sck_gate_en is inversion of filter OR
   // csb_deassert
   assign sck_gate_en = ~(filter | csb_deassert);
 
@@ -450,27 +443,18 @@ module spi_passthrough
     1'b0,
     cmd_info.valid, // valid bit is checked before latching into cmd_info
     cmd_info.opcode,
-    cmd_info.addr_mode,
     cmd_info.opcode,
     cmd_info.upload,
     cmd_info.busy
   };
 
-  addr_mode_e cmdinfo7th_addr_mode;
-  assign cmdinfo7th_addr_mode = get_addr_mode(
-    cmd_info_7th[host_s_i[0]], cfg_addr_4b_en_i);
-
   always_comb begin
     cmd_info_d = '0;
-    addr_size_d = AddrCntW'(23);
 
     if (cmd_8th) begin
       // Latch only two cmd_info when the 7th bit arrives. Then select among two
       // at the 8th beat for cmd_info_d to reduce timing.
       cmd_info_d = cmd_info_7th[host_s_i[0]];
-
-      addr_size_d = (cmdinfo7th_addr_mode == Addr4B)
-                  ? AddrCntW'(31) : AddrCntW'(23);
 
       cmd_info_d.opcode = opcode_d;
 
@@ -478,30 +462,40 @@ module spi_passthrough
     end
   end
 
+  addr_mode_e addr_mode;
+  assign addr_mode = get_addr_mode(cmd_info.addr_mode, cfg_addr_4b_en_i);
+
+  always_comb begin
+    addr_size_d = AddrCntW'(23);
+    if (addr_mode == Addr4B) begin
+      addr_size_d = AddrCntW'(31);
+    end
+  end
+
   // Address swap
-  logic addr_set;
+  logic addr_set_d, addr_set_q;
   logic addr_phase, addr_phase_outclk;
   assign addr_phase = (st == StAddress);
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      addrcnt <= '0;
-    end else if (addr_set) begin
-      // When addr_set is 1, cmd_info is not yet latched.
-      `ASSERT_I(AddrSetInStIdle_A, st == StIdle)
-      addrcnt <= addr_size_d;
-    end else if (addrcnt != '0) begin
-      addrcnt <= addrcnt - AddrCntW'(1);
+      addr_set_q <= '0;
+    end else begin
+      addr_set_q <= addr_set_d;
     end
   end
 
-  always_ff @(posedge clk_out_i or negedge rst_ni) begin
-    if (!rst_ni) addrcnt_outclk <= '0;
-    else         addrcnt_outclk <= addrcnt;
+  always_ff @(posedge clk_out_i or negedge rst_out_ni) begin
+    if (!rst_out_ni) begin
+      addrcnt_outclk <= '0;
+    end else if (addr_set_q) begin
+      addrcnt_outclk <= addr_size_d;
+    end else if (addrcnt_outclk != '0) begin
+      addrcnt_outclk <= addrcnt_outclk - AddrCntW'(1);
+    end
   end
 
   // Based on AddrCnt, the logic swap.
-  // TODO: Handle the DualIO, QuadIO cases
   logic addr_swap;
   assign addr_swap = cfg_addr_mask_i[addrcnt_outclk]
                    ? cfg_addr_value_i[addrcnt_outclk]
@@ -511,9 +505,9 @@ module spi_passthrough
   // The state machine operates in inclk domain.
   // The state generates mux selection signal.
   // The signal latched in outclk domain then activates the mux.
-  always_ff @(posedge clk_out_i or negedge rst_ni) begin
-    if (!rst_ni) addr_phase_outclk <= 1'b 0;
-    else         addr_phase_outclk <= addr_phase;
+  always_ff @(posedge clk_out_i or negedge rst_out_ni) begin
+    if (!rst_out_ni) addr_phase_outclk <= 1'b 0;
+    else             addr_phase_outclk <= addr_phase;
   end
 
   // Payload (4 bytes) swap
@@ -533,9 +527,9 @@ module spi_passthrough
     end
   end
 
-  always_ff @(posedge clk_out_i or negedge rst_ni) begin
-    if (!rst_ni) payloadcnt_outclk <= 5'h 1F;
-    else         payloadcnt_outclk <= payloadcnt;
+  always_ff @(posedge clk_out_i or negedge rst_out_ni) begin
+    if (!rst_out_ni) payloadcnt_outclk <= 5'h 1F;
+    else             payloadcnt_outclk <= payloadcnt;
   end
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
@@ -544,9 +538,9 @@ module spi_passthrough
     else if (payload_replace_clr) payload_replace <= 1'b 0;
   end
 
-  always_ff @(posedge clk_out_i or negedge rst_ni) begin
-    if (!rst_ni) payload_replace_outclk <= 1'b 0;
-    else         payload_replace_outclk <= payload_replace;
+  always_ff @(posedge clk_out_i or negedge rst_out_ni) begin
+    if (!rst_out_ni) payload_replace_outclk <= 1'b 0;
+    else             payload_replace_outclk <= payload_replace;
   end
 
   assign payload_replace_clr = (payloadcnt == '0);
@@ -566,8 +560,8 @@ module spi_passthrough
   // violates timing regardless of the path delay.  By latching the configs
   // into output clock (inverted SCK), it alleviates the timing budget.
   logic cmd_info_addr_swap_en_outclk, cmd_info_payload_swap_en_outclk;
-  always_ff @(posedge clk_out_i or negedge rst_ni) begin
-    if (!rst_ni) begin
+  always_ff @(posedge clk_out_i or negedge rst_out_ni) begin
+    if (!rst_out_ni) begin
       cmd_info_addr_swap_en_outclk    <= 1'b 0;
       cmd_info_payload_swap_en_outclk <= 1'b 0;
     end else begin
@@ -605,7 +599,6 @@ module spi_passthrough
     if (!rst_ni) begin
       mbyte_cnt <= '0;
     end else if (mbyte_set) begin
-      // TODO: check addr enable and update mbyte_cnt to 3 or 1
       mbyte_cnt <= 2'h 3;
     end else if (st == StMByte) begin
       mbyte_cnt <= mbyte_cnt - 1'b 1;
@@ -619,19 +612,112 @@ module spi_passthrough
   assign passthrough_o.s = (swap_en) ? {host_s_i[3:1], swap_data} : host_s_i ;
 
   logic [3:0] passthrough_s_en;
-  always_ff @(posedge clk_out_i or negedge rst_ni) begin
-    if (!rst_ni) passthrough_s_en <= 4'h 1; // S[0] active by default
-    else passthrough_s_en <= device_s_en_inclk;
+  always_ff @(posedge clk_out_i or negedge rst_out_ni) begin
+    if (!rst_out_ni) passthrough_s_en <= 4'h 1; // S[0] active by default
+    else             passthrough_s_en <= device_s_en_inclk;
   end
   assign passthrough_o.s_en = passthrough_s_en;
 
-  assign host_s_o = passthrough_i.s;
-  always_ff @(posedge clk_out_i or negedge rst_ni) begin
-    if (!rst_ni) host_s_en_o <= '0; // input mode
-    else         host_s_en_o <= host_s_en_inclk;
+  // 2-stage pipeline for high-throughput read commands
+  logic [3:0] half_cycle_sampled_sd;
+  logic [3:0] read_pipeline_stg1_d, read_pipeline_stg1_q;
+  logic [3:0] read_pipeline_stg2_d, read_pipeline_stg2_q;
+  logic [3:0] host_s_en_muxed;
+  logic [3:0] read_pipeline_oe_stg1_d, read_pipeline_oe_stg1_q;
+  logic [3:0] read_pipeline_oe_stg2_d, read_pipeline_oe_stg2_q;
+
+  // Sample on the ordinary capture edge, in case half-cycle sampling is
+  // selected. This flop samples data that is to be prepared for a later
+  // launch edge, in a sort of store-and-forward setup.
+  prim_flop #(
+    .Width         ($bits(passthrough_i.s)),
+    .ResetValue    ('0)
+  ) u_read_half_cycle (
+    .clk_i     (clk_i),
+    .rst_ni,
+    .d_i       (passthrough_i.s),
+    .q_o       (half_cycle_sampled_sd)
+  );
+
+  // This flop begins the 2-stage pipeline on clk_out_i, the launch clock for
+  // data output. The input data is either the combinatorial input from the
+  // pad connected to the downstream SPI flash, or it is the output of the
+  // u_read_half_cycle flop above, which sampled the data on the capture edge
+  // that occurred a half cycle earlier.
+  prim_flop #(
+    .Width         ($bits(read_pipeline_stg1_d)),
+    .ResetValue    ('0)
+  ) u_read_pipe_stg1 (
+    .clk_i     (clk_out_i),
+    .rst_ni    (rst_out_ni),
+    .d_i       (read_pipeline_stg1_d),
+    .q_o       (read_pipeline_stg1_q)
+  );
+
+  prim_flop #(
+    .Width         ($bits(read_pipeline_stg2_d)),
+    .ResetValue    ('0)
+  ) u_read_pipe_stg2 (
+    .clk_i     (clk_out_i),
+    .rst_ni    (rst_out_ni),
+    .d_i       (read_pipeline_stg2_d),
+    .q_o       (read_pipeline_stg2_q)
+  );
+
+  prim_flop #(
+    .Width         ($bits(read_pipeline_oe_stg1_d)),
+    .ResetValue    ('0)
+  ) u_read_pipe_oe_stg1 (
+    .clk_i     (clk_out_i),
+    .rst_ni    (rst_out_ni),
+    .d_i       (read_pipeline_oe_stg1_d),
+    .q_o       (read_pipeline_oe_stg1_q)
+  );
+
+  prim_flop #(
+    .Width         ($bits(read_pipeline_oe_stg2_d)),
+    .ResetValue    ('0)
+  ) u_read_pipe_oe_stg2 (
+    .clk_i     (clk_out_i),
+    .rst_ni    (rst_out_ni),
+    .d_i       (read_pipeline_oe_stg2_d),
+    .q_o       (read_pipeline_oe_stg2_q)
+  );
+
+  always_comb begin
+    host_s_o = passthrough_i.s;
+    read_pipeline_stg2_d = read_pipeline_stg1_q;
+    read_pipeline_stg1_d = half_cycle_sampled_sd;
+
+    host_s_en_muxed = host_s_en_inclk;
+    read_pipeline_oe_stg2_d = read_pipeline_oe_stg1_q;
+    read_pipeline_oe_stg1_d = host_s_en_inclk;
+
+    unique case (cmd_info.read_pipeline_mode)
+      RdPipeTwoStageFullCycle: begin
+        host_s_o = read_pipeline_stg2_q;
+        read_pipeline_stg1_d = passthrough_i.s;
+        host_s_en_muxed = read_pipeline_oe_stg2_q;
+      end
+      RdPipeTwoStageHalfCycle: begin
+        host_s_o = read_pipeline_stg2_q;
+        read_pipeline_stg1_d = half_cycle_sampled_sd;
+        host_s_en_muxed = read_pipeline_oe_stg2_q;
+      end
+      default: begin
+        host_s_o = passthrough_i.s;
+        read_pipeline_stg1_d = half_cycle_sampled_sd;
+        host_s_en_muxed = host_s_en_inclk;
+      end
+    endcase
   end
 
-  logic pt_gated_sck, pt_gated_isck, pt_gated_isck_inv;
+  always_ff @(posedge clk_out_i or negedge rst_out_ni) begin
+    if (!rst_out_ni) host_s_en_o <= '0; // input mode
+    else             host_s_en_o <= host_s_en_muxed;
+  end
+
+  logic pt_gated_sck;
   prim_clock_gating #(
     .NoFpgaGate    (1'b 0),
     .FpgaBufGlobal (1'b 1) // Going outside of chip
@@ -641,18 +727,8 @@ module spi_passthrough
     .test_en_i (1'b 0       ), // No FF connected to this gated SCK
     .clk_o     (pt_gated_sck)
   );
-  prim_clock_gating #(
-    .NoFpgaGate    (1'b 0),
-    .FpgaBufGlobal (1'b 1)  // Going outside of chip
-  ) u_pt_isck_cg (
-    .clk_i     (host_isck_i  ),
-    .en_i      (sck_gate_en  ),
-    .test_en_i (1'b 0        ), // No FF connected to this gated SCK
-    .clk_o     (pt_gated_isck)
-  );
-  assign pt_gated_isck_inv = ~pt_gated_isck;
 
-  assign passthrough_o.sck    = (cfg_cpol_i) ? pt_gated_isck_inv : pt_gated_sck;
+  assign passthrough_o.sck    = pt_gated_sck;
   assign passthrough_o.sck_en = 1'b 1;
 
   // CSb propagation:  csb_deassert signal should be an output of FF or latch to
@@ -686,12 +762,12 @@ module spi_passthrough
     cmd_info_latch = 1'b 0;
 
     // addr_set
-    addr_set = 1'b 0;
+    addr_set_d = 1'b 0;
 
     // Payload swap control
     payload_replace_set = 1'b 0;
 
-    // mbyte counter udpate
+    // mbyte counter update
     mbyte_set = 1'b 0;
 
     // Dummy
@@ -725,7 +801,7 @@ module spi_passthrough
           if (cmd_info_d.addr_mode != AddrDisabled) begin
             st_d = StAddress;
 
-            addr_set = 1'b 1;
+            addr_set_d = 1'b 1;
           end else if (cmd_info_d.dummy_en) begin
             st_d = StHighZ;
 
@@ -800,7 +876,7 @@ module spi_passthrough
 
       StAddress: begin
         // based on state, addr_phase is set. So just check if counter reaches 0
-        if (addrcnt == '0) begin
+        if (addrcnt_outclk == '0) begin
           if (cmd_info.mbyte_en) begin
             st_d = StMByte;
 

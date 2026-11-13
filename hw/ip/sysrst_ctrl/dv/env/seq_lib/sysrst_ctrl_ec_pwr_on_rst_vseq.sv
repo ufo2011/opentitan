@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,7 +45,6 @@ class sysrst_ctrl_ec_pwr_on_rst_vseq extends sysrst_ctrl_base_vseq;
       // remains high
       `DV_CHECK_EQ(cfg.vif.ec_rst_l_out, 1);
 
-      // TODO: actually do an OpenTitan reset as the testplan says.
       fork
         begin
           driver_ec_rst_l_in($urandom_range(1, get_ec_rst_timer * 2));

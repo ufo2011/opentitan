@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,46 +7,28 @@
 
 #include <stdnoreturn.h>
 
+#include "sw/device/silicon_creator/lib/error.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
 
 /**
- * Denotes functions that have to use the interrupt handler ABI.
- *
- * These must be 4-byte aligned. Note that they don't use the `interrupt`
- * attribute since ROM handlers shut down the chip instead of returning like
- * regular handlers.
+ * ROM states run callbacks.
  */
-#define ROM_INTERRUPT_HANDLER_ABI __attribute__((aligned(4)))
-
-/**
- * Denotes functions that have to be near the interrupt vector, because they
- * are jumped to from it.
- */
-#define ROM_VECTOR_FUNCTION __attribute__((section(".crt")))
-
-/**
- * The first assembly procedure executed by the ROM (defined in
- * `rom.S`).
- *
- * This procedure does not obey the standard RISC-V calling convention, so it
- * must not be called from other C code.
- */
-ROM_VECTOR_FUNCTION
-noreturn void _rom_start_boot(void);
+static OT_WARN_UNUSED_RESULT rom_error_t rom_state_init(void *arg,
+                                                        uint32_t *next_state);
+static OT_WARN_UNUSED_RESULT rom_error_t
+rom_state_bootstrap_check(void *arg, uint32_t *next_state);
+static OT_WARN_UNUSED_RESULT rom_error_t
+rom_state_bootstrap(void *arg, uint32_t *next_state);
+static OT_WARN_UNUSED_RESULT rom_error_t
+rom_state_boot_rom_ext(void *arg, uint32_t *next_state);
 
 /**
  * The first C function executed by the ROM (defined in `rom.c`)
  */
 noreturn void rom_main(void);
-
-/**
- * ROM hardware exception handler.
- */
-ROM_VECTOR_FUNCTION
-ROM_INTERRUPT_HANDLER_ABI
-noreturn void rom_interrupt_handler(void);
 
 #ifdef __cplusplus
 }  // extern "C"

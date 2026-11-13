@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,11 +67,12 @@ class lc_ctrl_common_vseq extends lc_ctrl_base_vseq;
       `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_iso_part_sw_rd_en_o, lc_ctrl_pkg::Off)
       `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_iso_part_sw_wr_en_o, lc_ctrl_pkg::Off)
       `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_seed_hw_rd_en_o, lc_ctrl_pkg::Off)
+      `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_rma_state_o, lc_ctrl_pkg::Off)
       `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_keymgr_en_o, lc_ctrl_pkg::Off)
       `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_escalate_en_o, lc_ctrl_pkg::On)
       `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_check_byp_en_o, lc_ctrl_pkg::Off)
       `DV_CHECK_EQ(cfg.lc_ctrl_vif.clk_byp_req_o, lc_ctrl_pkg::Off)
-      `DV_CHECK_EQ(cfg.lc_ctrl_vif.flash_rma_req_o, lc_ctrl_pkg::Off)
+      `DV_CHECK_EQ(cfg.lc_ctrl_vif.nvm_rma_req_o, lc_ctrl_pkg::Off)
     end
 
   endtask : check_sec_cm_fi_resp

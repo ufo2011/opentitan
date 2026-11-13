@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 #define OPENTITAN_SW_DEVICE_SILICON_CREATOR_LIB_DRIVERS_MOCK_OTP_H_
 
 #include "sw/device/lib/base/global_mock.h"
-#include "sw/device/silicon_creator/lib/drivers/otp.h"
 #include "sw/device/silicon_creator/testing/rom_test.h"
 
 namespace rom_test {

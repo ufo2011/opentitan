@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,8 +12,7 @@ pkg_tar(
     testonly = True,
     srcs = [
         "//hw:package",
-        "//hw/bitstream/vivado:package",
-        "//hw/ip/otp_ctrl/data:package",
+        "//hw/top_earlgrey/data/otp:package",
         "//sw/device/examples/hello_world:package",
         "//sw/device/lib/testing/test_rom:package",
         "//sw/device/silicon_creator/rom:package",

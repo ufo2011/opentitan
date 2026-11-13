@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -16,10 +16,10 @@ CHECKSUM: "1453744144 2493999736"
 INSTANCE: tb.dut.u_sha3.u_keccak
 Fsm keccak_st "1976953443"
 ANNOTATION: "[LOW_RISK] The transition from any state to error_terminal state is fully verified in FPV."
-Transition StActive->StTerminalError "4->54"
+Transition KeccakStActive->KeccakStTerminalError "4->54"
 Fsm keccak_st "1976953443"
 ANNOTATION: "[LOW_RISK] The transition from any state to error_terminal state is fully verified in FPV."
-Transition StError->StTerminalError "49->54"
+Transition KeccakStError->KeccakStTerminalError "49->54"
 CHECKSUM: "1822236677 68778326"
 INSTANCE: tb.dut.u_app_intf
 Fsm st "75841341"
@@ -44,7 +44,7 @@ Fsm st "75841341"
 ANNOTATION: "[LOW_RISK] The transition from any state to error_terminal state is fully verified in FPV."
 Transition StAppOutLen->StTerminalError "719->137"
 CHECKSUM: "3353140009 1769074264"
-INSTANCE: tb.dut.u_kmac_core
+INSTANCE: tb.dut.gen_kmac_core.u_kmac_core
 Fsm st "2230450921"
 ANNOTATION: "[LOW_RISK] The transition from any state to error_terminal state is fully verified in FPV."
 Transition StKmacFlush->StTerminalError "43->32"

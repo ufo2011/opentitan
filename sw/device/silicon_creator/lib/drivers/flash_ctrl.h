@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 #ifndef OPENTITAN_SW_DEVICE_SILICON_CREATOR_LIB_DRIVERS_FLASH_CTRL_H_
@@ -59,79 +59,99 @@ typedef enum flash_ctrl_partition {
 /**
  * Table of flash information pages.
  *
- * Columns: Name, value, bank index, page index.
- * We use an X macro to faciliate writing enums, swtich statements, and unit
+ * Columns: Name, bank index, page index.
+ * We use an X macro to faciliate writing enums, switch statements, and unit
  * tests using the contants here. All information pages in this table are of
  * type 0 since silicon creator code does not need to access information pages
  * of other types.
- *
- * Encoding generated with
- * $ ./util/design/sparse-fsm-encode.py -d 6 -m 20 -n 32 \
- *     -s 1755363476 --language=c
- *
- * Minimum Hamming distance: 9
- * Maximum Hamming distance: 22
- * Minimum Hamming weight: 13
- * Maximum Hamming weight: 25
  */
 // clang-format off
 #define FLASH_CTRL_INFO_PAGES_DEFINE(X) \
   /**
    * Bank 0 information partition type 0 pages.
    */ \
-  X(kFlashCtrlInfoPageFactoryId,         	0x9dc41c33, 0, 0) \
-  X(kFlashCtrlInfoPageCreatorSecret,     	0xf56af4bb, 0, 1) \
-  X(kFlashCtrlInfoPageOwnerSecret,       	0x10adc6aa, 0, 2) \
-  X(kFlashCtrlInfoPageWaferAuthSecret,   	0x118b5dbb, 0, 3) \
-  X(kFlashCtrlInfoPageBank0Type0Page4,   	0xad3b5bee, 0, 4) \
-  X(kFlashCtrlInfoPageBank0Type0Page5,   	0xa4f6f6c3, 0, 5) \
-  X(kFlashCtrlInfoPageOwnerReserved0,    	0xf646f11b, 0, 6) \
-  X(kFlashCtrlInfoPageOwnerReserved1,    	0x6c86d980, 0, 7) \
-  X(kFlashCtrlInfoPageOwnerReserved2,    	0xdd7f34dc, 0, 8) \
-  X(kFlashCtrlInfoPageOwnerReserved3,    	0x5f07277e, 0, 9) \
+  X(kFlashCtrlInfoPageFactoryId,           0, 0) \
+  X(kFlashCtrlInfoPageCreatorSecret,       0, 1) \
+  X(kFlashCtrlInfoPageOwnerSecret,         0, 2) \
+  X(kFlashCtrlInfoPageWaferAuthSecret,     0, 3) \
+  X(kFlashCtrlInfoPageAttestationKeySeeds, 0, 4) \
+  X(kFlashCtrlInfoPageOwnerReserved0,      0, 5) \
+  X(kFlashCtrlInfoPageOwnerReserved1,      0, 6) \
+  X(kFlashCtrlInfoPageOwnerReserved2,      0, 7) \
+  X(kFlashCtrlInfoPageOwnerReserved3,      0, 8) \
+  X(kFlashCtrlInfoPageFactoryCerts,        0, 9) \
   /**
    * Bank 1 information partition type 0 pages.
    */ \
-  X(kFlashCtrlInfoPageBootData0,          0xfa38c9f6, 1, 0) \
-  X(kFlashCtrlInfoPageBootData1,          0x389c449e, 1, 1) \
-  X(kFlashCtrlInfoPageOwnerSlot0,         0x238cf15c, 1, 2) \
-  X(kFlashCtrlInfoPageOwnerSlot1,         0xad886d3b, 1, 3) \
-  X(kFlashCtrlInfoPageBank1Type0Page4,    0x7dfbdf9b, 1, 4) \
-  X(kFlashCtrlInfoPageBank1Type0Page5,    0xad5dd31d, 1, 5) \
-  X(kFlashCtrlInfoPageCreatorCertificate, 0xe3ffac86, 1, 6) \
-  X(kFlashCtrlInfoPageBootServices,       0xf4f48c3d, 1, 7) \
-  X(kFlashCtrlInfoPageOwnerCerificate0,   0x9fbb840e, 1, 8) \
-  X(kFlashCtrlInfoPageOwnerCerificate1,   0xec309461, 1, 9) \
+  X(kFlashCtrlInfoPageBootData0,           1, 0) \
+  X(kFlashCtrlInfoPageBootData1,           1, 1) \
+  X(kFlashCtrlInfoPageOwnerSlot0,          1, 2) \
+  X(kFlashCtrlInfoPageOwnerSlot1,          1, 3) \
+  X(kFlashCtrlInfoPageCreatorReserved0,    1, 4) \
+  X(kFlashCtrlInfoPageOwnerReserved4,      1, 5) \
+  X(kFlashCtrlInfoPageOwnerReserved5,      1, 6) \
+  X(kFlashCtrlInfoPageOwnerReserved6,      1, 7) \
+  X(kFlashCtrlInfoPageOwnerReserved7,      1, 8) \
+  X(kFlashCtrlInfoPageDiceCerts,           1, 9) \
 // clang-format on
 
 /**
- * Helper macro for defining a `flash_ctrl_info_page_t` enumeration constant.
+ * A struct for storing base, config write-enable register, and config register
+ * addresses of an info page.
+ */
+typedef struct flash_ctrl_info_page {
+  /**
+   * Base address.
+   */
+  uint32_t base_addr;
+  /**
+   * Config write-enable register address (offset from register base).
+   */
+  uint32_t cfg_wen_offset;
+  /**
+   * Config register address (offset from register base).
+   */
+  uint32_t cfg_offset;
+} flash_ctrl_info_page_t;
+
+/**
+ * Helper macro for declaring an extern `flash_ctrl_info_page_t`.
  * @param name_ Name of the enumeration constant.
- * @param value_ Value of the enumeration constant.
  * @param bank_ Bank of the info page.
  * @param page_ Page of the info page.
  */
-#define INFO_PAGE_ENUM_INIT_(name_, value_, bank_, page_) name_ = value_,
+#define INFO_PAGE_STRUCT_DECL_(name_, bank_, page_) \
+  extern const flash_ctrl_info_page_t name_;
 
 /**
  * Info pages.
  */
-typedef enum flash_ctrl_info_page {
-  FLASH_CTRL_INFO_PAGES_DEFINE(INFO_PAGE_ENUM_INIT_)
-} flash_ctrl_info_page_t;
+FLASH_CTRL_INFO_PAGES_DEFINE(INFO_PAGE_STRUCT_DECL_);
+
+#undef INFO_PAGE_STRUCT_DECL_
 
 /**
- * Bitfields for `CREATOR_SW_CFG_FLASH_DATA_DEFAULT_CFG` and
- * `CREATOR_SW_CFG_FLASH_INFO_BOOT_DATA_CFG` OTP items.
+ * Bitfields for `CREATOR_SW_CFG_NVM_DATA_DEFAULT_CFG` and
+ * `CREATOR_SW_CFG_NVM_INFO_BOOT_DATA_CFG` OTP items.
  *
  * Defined here to be able to use in tests.
  */
 #define FLASH_CTRL_OTP_FIELD_SCRAMBLING \
-  (bitfield_field32_t) { .mask = UINT8_MAX, .index = CHAR_BIT * 0 }
+  (bitfield_field32_t){.mask = UINT8_MAX, .index = CHAR_BIT * 0}
 #define FLASH_CTRL_OTP_FIELD_ECC \
-  (bitfield_field32_t) { .mask = UINT8_MAX, .index = CHAR_BIT * 1 }
+  (bitfield_field32_t){.mask = UINT8_MAX, .index = CHAR_BIT * 1}
 #define FLASH_CTRL_OTP_FIELD_HE \
-  (bitfield_field32_t) { .mask = UINT8_MAX, .index = CHAR_BIT * 2 }
+  (bitfield_field32_t){.mask = UINT8_MAX, .index = CHAR_BIT * 2}
+
+/**
+ * Bitfields for `CREATOR_SW_CFG_NVM_HW_INFO_CFG_OVERRIDE` OTP item.
+ *
+ * Defined here to be able to use in tests.
+ */
+#define FLASH_CTRL_OTP_FIELD_HW_INFO_CFG_OVERRIDE_SCRAMBLE_DIS \
+  (bitfield_field32_t){.mask = UINT8_MAX, .index = CHAR_BIT * 0}
+#define FLASH_CTRL_OTP_FIELD_HW_INFO_CFG_OVERRIDE_ECC_DIS \
+  (bitfield_field32_t){.mask = UINT8_MAX, .index = CHAR_BIT * 1}
 
 /**
  * The following constants represent the expected number of sec_mmio
@@ -145,14 +165,19 @@ typedef enum flash_ctrl_info_page {
  * ```
  */
 enum {
-  kFlashCtrlSecMmioCreatorInfoPagesLockdown = 14,
+  kFlashCtrlSecMmioCertInfoPagesOwnerRestrict = 5,
   kFlashCtrlSecMmioDataDefaultCfgSet = 1,
   kFlashCtrlSecMmioDataDefaultPermsSet = 1,
   kFlashCtrlSecMmioExecSet = 1,
   kFlashCtrlSecMmioInfoCfgSet = 1,
+  kFlashCtrlSecMmioInfoCfgLock = 1,
+  kFlashCtrlSecMmioInfoPageLockdown = 2,
   kFlashCtrlSecMmioInfoPermsSet = 1,
   kFlashCtrlSecMmioBankErasePermsSet = 1,
   kFlashCtrlSecMmioInit = 3,
+  // 2 writes: MP_REGION_${region} and MP_REGION_CFG_${region}.
+  kFlashCtrlSecMmioDataRegionProtect = 2,
+  kFlashCtrlSecMmioDataRegionProtectLock = 1,
 };
 
 /**
@@ -163,7 +188,7 @@ enum {
 };
 
 /**
- * Kicks of the initialization of the flash controller.
+ * Kicks off the initialization of the flash controller.
  *
  * This must complete before flash can be accessed. The init status can be
  * queried by calling `flash_ctrl_status_get()` and checking `init_wip`.
@@ -173,6 +198,11 @@ enum {
  * used to check expectations.
  */
 void flash_ctrl_init(void);
+
+/**
+ * Permanently disable the flash controller.
+ */
+void flash_ctrl_disable(void);
 
 /**
  * Status bits.
@@ -206,10 +236,61 @@ typedef struct flash_ctrl_status {
  * This function checks the various status bits as described in
  * `flash_ctrl_status_t`.
  *
- * @param flash_ctrl flash controller device to check the status bits for.
- * @param[out] status_out The current status of the flash controller.
+ * @param[out] status The current status of the flash controller.
  */
 void flash_ctrl_status_get(flash_ctrl_status_t *status);
+
+/**
+ * Error code bits.
+ */
+typedef struct flash_ctrl_error_code {
+  /**
+   * Flash macro error occurred.
+   */
+  bool macro_err;
+  /**
+   * Shadow register update error.
+   */
+  bool update_err;
+  /**
+   * Flash program type is unavailable.
+   */
+  bool prog_type_err;
+  /**
+   * Flash program window resolution error. Start and end of programming region
+   * are in different windows.
+   */
+  bool prog_win_err;
+  /**
+   * Flash programming error, could be an integrity error. Read the
+   * STD_FAULT_STATUS register.
+   */
+  bool prog_err;
+  /**
+   * Flash read error, could be an integrity error. Read the STD_FAULT_STATUS
+   * register.
+   */
+  bool rd_err;
+  /**
+   * Flash access permission error. Read the ERR_ADDR register for the faulting
+   * address.
+   */
+  bool mp_err;
+  /**
+   * Software has supplied an undefined flash operation.
+   */
+  bool op_err;
+} flash_ctrl_error_code_t;
+
+/**
+ * Query the error code register on the flash controller.
+ *
+ * This function checks the various error code bits as described in
+ * `flash_ctrl_error_code_t`.
+ *
+ * @param[out] error_code The current error code of the flash controller.
+ */
+void flash_ctrl_error_code_get(flash_ctrl_error_code_t *error_code);
 
 /**
  * Reads data from the data partition.
@@ -223,6 +304,7 @@ void flash_ctrl_status_get(flash_ctrl_status_t *status);
  * @param[out] data Buffer to store the read data. Must be word aligned.
  * @return Result of the operation.
  */
+OT_WARN_UNUSED_RESULT
 rom_error_t flash_ctrl_data_read(uint32_t addr, uint32_t word_count,
                                  void *data);
 
@@ -239,9 +321,29 @@ rom_error_t flash_ctrl_data_read(uint32_t addr, uint32_t word_count,
  * @param[out] data Buffer to store the read data. Must be word aligned.
  * @return Result of the operation.
  */
-rom_error_t flash_ctrl_info_read(flash_ctrl_info_page_t info_page,
+OT_WARN_UNUSED_RESULT
+rom_error_t flash_ctrl_info_read(const flash_ctrl_info_page_t *info_page,
                                  uint32_t offset, uint32_t word_count,
                                  void *data);
+
+/**
+ * Reads data from an information page, returning all zeros if a read error code
+ * is encountered.
+ *
+ * The flash controller will truncate to the closest, lower word aligned
+ * address. For example, if 0x13 is supplied, the controller will start reading
+ * at address 0x10.
+ *
+ * @param info_page Information page to read from.
+ * @param offset Offset from the start of the page.
+ * @param word_count Number of bus words to read.
+ * @param[out] data Buffer to store the read data. Must be word aligned.
+ * @return Result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+rom_error_t flash_ctrl_info_read_zeros_on_read_error(
+    const flash_ctrl_info_page_t *info_page, uint32_t offset,
+    uint32_t word_count, void *data);
 
 /**
  * Writes data to the data partition.
@@ -255,6 +357,7 @@ rom_error_t flash_ctrl_info_read(flash_ctrl_info_page_t info_page,
  * @param data Data to write. Must be word aligned.
  * @return Result of the operation.
  */
+OT_WARN_UNUSED_RESULT
 rom_error_t flash_ctrl_data_write(uint32_t addr, uint32_t word_count,
                                   const void *data);
 
@@ -271,7 +374,8 @@ rom_error_t flash_ctrl_data_write(uint32_t addr, uint32_t word_count,
  * @param data Data to write. Must be word aligned.
  * @return Result of the operation.
  */
-rom_error_t flash_ctrl_info_write(flash_ctrl_info_page_t info_page,
+OT_WARN_UNUSED_RESULT
+rom_error_t flash_ctrl_info_write(const flash_ctrl_info_page_t *info_page,
                                   uint32_t offset, uint32_t word_count,
                                   const void *data);
 
@@ -308,6 +412,7 @@ typedef enum flash_ctrl_erase_type {
  * @param erase_type Whether to erase a page or a bank.
  * @return Result of the operation.
  */
+OT_WARN_UNUSED_RESULT
 rom_error_t flash_ctrl_data_erase(uint32_t addr,
                                   flash_ctrl_erase_type_t erase_type);
 
@@ -318,6 +423,7 @@ rom_error_t flash_ctrl_data_erase(uint32_t addr,
  * @param erase_type Whether to verify a page or a bank.
  * @return Result of the operation.
  */
+OT_WARN_UNUSED_RESULT
 rom_error_t flash_ctrl_data_erase_verify(uint32_t addr,
                                          flash_ctrl_erase_type_t erase_type);
 
@@ -329,7 +435,8 @@ rom_error_t flash_ctrl_data_erase_verify(uint32_t addr,
  * @param erase_type Whether to erase a page or a bank.
  * @return Result of the operation.
  */
-rom_error_t flash_ctrl_info_erase(flash_ctrl_info_page_t info_page,
+OT_WARN_UNUSED_RESULT
+rom_error_t flash_ctrl_info_erase(const flash_ctrl_info_page_t *info_page,
                                   flash_ctrl_erase_type_t erase_type);
 
 /**
@@ -338,21 +445,27 @@ rom_error_t flash_ctrl_info_erase(flash_ctrl_info_page_t info_page,
  * flash_ctrl config registers use 4-bits for boolean values. Use
  * `kMultiBitBool4True` to enable and `kMultiBitBool4False` to disable
  * permissions.
+ *
+ * The bitfields in this stuct match up with the bitfields in the peripheral
+ * register.
  */
 typedef struct flash_ctrl_perms {
+  uint32_t _pad0 : 4;
   /**
    * Read.
    */
-  multi_bit_bool_t read;
+  uint32_t read : 4;
   /**
    * Write.
    */
-  multi_bit_bool_t write;
+  uint32_t write : 4;
   /**
    * Erase.
    */
-  multi_bit_bool_t erase;
+  uint32_t erase : 4;
+  uint32_t _pad1 : 16;
 } flash_ctrl_perms_t;
+OT_ASSERT_SIZE(flash_ctrl_perms_t, 4);
 
 /**
  * Sets default access permissions for the data partition.
@@ -381,7 +494,7 @@ void flash_ctrl_data_default_perms_set(flash_ctrl_perms_t perms);
  * @param info_page An information page.
  * @param perms New permissions.
  */
-void flash_ctrl_info_perms_set(flash_ctrl_info_page_t info_page,
+void flash_ctrl_info_perms_set(const flash_ctrl_info_page_t *info_page,
                                flash_ctrl_perms_t perms);
 
 /**
@@ -390,21 +503,27 @@ void flash_ctrl_info_perms_set(flash_ctrl_info_page_t info_page,
  * flash_ctrl config registers use 4-bits for boolean values. Use
  * `kMultiBitBool4True` to enable and `kMultiBitBool4False` to disable
  * these settings.
+ *
+ * The bitfields in this stuct match up with the bitfields in the peripheral
+ * register.
  */
 typedef struct flash_ctrl_cfg {
+  uint32_t _pad0 : 16;
   /**
    * Scrambling.
    */
-  multi_bit_bool_t scrambling;
+  uint32_t scrambling : 4;
   /**
    * ECC.
    */
-  multi_bit_bool_t ecc;
+  uint32_t ecc : 4;
   /**
    * High endurance.
    */
-  multi_bit_bool_t he;
+  uint32_t he : 4;
+  uint32_t _pad1 : 4;
 } flash_ctrl_cfg_t;
+OT_ASSERT_SIZE(flash_ctrl_cfg_t, 4);
 
 /**
  * Sets default configuration settings for the data partition.
@@ -418,6 +537,45 @@ typedef struct flash_ctrl_cfg {
 void flash_ctrl_data_default_cfg_set(flash_ctrl_cfg_t cfg);
 
 /**
+ * Reads the current default configuration settings for the data partition.
+ *
+ * @return Current configuration settings.
+ */
+flash_ctrl_cfg_t flash_ctrl_data_default_cfg_get(void);
+
+/**
+ * Reads the boot data info page configuration settings from OTP.
+ *
+ * @return Current OTP configuration settings.
+ */
+flash_ctrl_cfg_t flash_ctrl_boot_data_cfg_get(void);
+
+/**
+ * A type for flash_ctrl memory protection region indices.
+ */
+typedef uint32_t flash_ctrl_region_index_t;
+
+/**
+ * Configure memory protection for a region of pages.
+ *
+ * Based on the `region` parameter, this function overwrites the
+ * `MP_REGION_${region}` and `MP_REGION_CFG_${region}` registers. Calling this
+ * function invalidates previously-configured protections for `region`.
+ *
+ * @param region The index of the region to protect.
+ * @param page_offset The index of the first page in the region.
+ * @param num_pages The number of pages in the region.
+ * @param perms The read/write/erase permissions for this region.
+ * @param cfg Flash config values that are used to fill in some fields of the
+ *            `MP_REGION_CFG_${region}` register.
+ * @param lock Lock the configuration for this region.
+ */
+void flash_ctrl_data_region_protect(flash_ctrl_region_index_t region,
+                                    uint32_t page_offset, uint32_t num_pages,
+                                    flash_ctrl_perms_t perms,
+                                    flash_ctrl_cfg_t cfg, hardened_bool_t lock);
+
+/**
  * Sets configuration settings for an info page.
  *
  * The caller is responsible for calling
@@ -427,8 +585,34 @@ void flash_ctrl_data_default_cfg_set(flash_ctrl_cfg_t cfg);
  * @param info_page An information page.
  * @param cfg New configuration settings.
  */
-void flash_ctrl_info_cfg_set(flash_ctrl_info_page_t info_page,
+void flash_ctrl_info_cfg_set(const flash_ctrl_info_page_t *info_page,
                              flash_ctrl_cfg_t cfg);
+
+/**
+ * Write-locks configuration settings for an info page.
+ *
+ * The caller is responsible for calling
+ * `SEC_MMIO_WRITE_INCREMENT(kFlashCtrlSecMmioInfoCfgLock)` when sec_mmio is
+ * being used to check expectations.
+ *
+ * @param info_page An information page.
+ * @param cfg New configuration settings.
+ */
+void flash_ctrl_info_cfg_lock(const flash_ctrl_info_page_t *info_page);
+
+/**
+ * Disables all access to an info page and locks its configuration until reset.
+ *
+ * Zeroes both the cfg register (clearing all permissions and configuration
+ * bits) and the cfg_wen register (preventing further writes to cfg).
+ *
+ * The caller is responsible for calling
+ * `SEC_MMIO_WRITE_INCREMENT(kFlashCtrlSecMmioInfoPageLockdown)` when sec_mmio
+ * is being used to check expectations.
+ *
+ * @param info_page An information page.
+ */
+void flash_ctrl_info_page_lockdown(const flash_ctrl_info_page_t *info_page);
 
 /**
  * Set bank erase permissions for both flash banks.
@@ -456,18 +640,6 @@ void flash_ctrl_bank_erase_perms_set(hardened_bool_t enable);
  * disable execution.
  */
 void flash_ctrl_exec_set(uint32_t exec_val);
-
-/**
- * Disables all access to silicon creator info pages until next reset.
- *
- * This function must be called in ROM_EXT before handing over execution to the
- * first owner boot stage.
- *
- * The caller is responsible for calling
- * `SEC_MMIO_WRITE_INCREMENT(kFlashCtrlSecMmioCreatorInfoPagesLockdown)` when
- * sec_mmio is being used to check expectations.
- */
-void flash_ctrl_creator_info_pages_lockdown(void);
 
 #ifdef __cplusplus
 }

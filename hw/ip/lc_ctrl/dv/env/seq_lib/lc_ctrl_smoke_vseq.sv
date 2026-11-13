@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,19 +8,11 @@ class lc_ctrl_smoke_vseq extends lc_ctrl_base_vseq;
 
   `uvm_object_new
 
-  rand bit clk_byp_error_rsp, flash_rma_error_rsp;
-  rand bit otp_prog_err, token_mismatch_err;
+  rand bit otp_prog_err;
   dec_lc_state_e next_lc_state;
   rand lc_token_t token_scramble;
 
-  constraint no_err_rsps_c {
-    clk_byp_error_rsp == 0;
-    flash_rma_error_rsp == 0;
-  }
-
   constraint otp_prog_err_c {otp_prog_err == 0;}
-
-  constraint token_mismatch_err_c {token_mismatch_err == 0;}
 
   virtual task pre_start();
     super.pre_start();
@@ -32,15 +24,15 @@ class lc_ctrl_smoke_vseq extends lc_ctrl_base_vseq;
   virtual task post_start();
     // Kill sub processes
     disable run_clk_byp_rsp;
-    disable run_flash_rma_rsp;
+    disable run_nvm_rma_rsp;
     super.post_start();
   endtask
 
   task body();
 
     fork
-      run_clk_byp_rsp(clk_byp_error_rsp);
-      run_flash_rma_rsp(flash_rma_error_rsp);
+      run_clk_byp_rsp(1'b0);
+      run_nvm_rma_rsp(1'b0);
     join_none
 
     //
@@ -78,7 +70,7 @@ class lc_ctrl_smoke_vseq extends lc_ctrl_base_vseq;
       cfg.set_test_phase(LcCtrlDutReady);
 
       // SW transition request
-      if (valid_state_for_trans(lc_state) && lc_cnt != LcCnt24) begin
+      if (valid_state_for_trans(lc_state)) begin
         lc_ctrl_state_pkg::lc_token_t token_val = get_random_token();
         randomize_next_lc_state(dec_lc_state(lc_state));
         `uvm_info(`gfn, $sformatf(
@@ -109,7 +101,10 @@ class lc_ctrl_smoke_vseq extends lc_ctrl_base_vseq;
   // need to randomize here because associative array's index cannot be a rand input in constraint
   virtual function void randomize_next_lc_state(dec_lc_state_e curr_lc_state);
     `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(next_lc_state,
-                                       next_lc_state inside {VALID_NEXT_STATES[curr_lc_state]};)
+                                       next_lc_state inside {VALID_NEXT_STATES[curr_lc_state]};
+                                       // The only valid transition when the counter is maxed is
+                                       // a transition into scrap.
+                                       if (lc_cnt == LcCnt24) next_lc_state == DecLcStScrap;)
   endfunction
 
   // This function add otp_program_i's error bit field from the otp_prog_pull_agent device driver.
@@ -127,8 +122,8 @@ class lc_ctrl_smoke_vseq extends lc_ctrl_base_vseq;
     kmac_pkg::rsp_digest_t kmac_digest;
     // No token for InvalidTokenIdx
     lc_ctrl_state_pkg::lc_token_t tokens_a[NumTokens-1];
-    tokens_a[ZeroTokenIdx]       = 0;
-    tokens_a[RawUnlockTokenIdx]  = lc_ctrl_state_pkg::RndCnstRawUnlockTokenHashed;
+    tokens_a[ZeroTokenIdx]       = lc_ctrl_token_pkg::AllZeroTokenHashed;
+    tokens_a[RawUnlockTokenIdx]  = lc_ctrl_token_pkg::RndCnstRawUnlockTokenHashed;
     tokens_a[TestUnlockTokenIdx] = cfg.lc_ctrl_vif.otp_i.test_unlock_token;
     tokens_a[TestExitTokenIdx]   = cfg.lc_ctrl_vif.otp_i.test_exit_token;
     tokens_a[RmaTokenIdx]        = cfg.lc_ctrl_vif.otp_i.rma_token;
@@ -141,7 +136,7 @@ class lc_ctrl_smoke_vseq extends lc_ctrl_base_vseq;
 
     kmac_digest = token_to_kmac_digest(tokens_a[token_idx], token_scramble);
     clear_kmac_user_digest_share();
-    cfg.m_kmac_app_agent_cfg.add_user_digest_share(kmac_digest);
+    cfg.m_kmac_app_agent_cfg.add_user_digest(kmac_digest);
   endfunction
 
 endclass : lc_ctrl_smoke_vseq

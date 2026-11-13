@@ -1,55 +1,69 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use clap::Args;
 use directories::ProjectDirs;
 use log::LevelFilter;
-use serde_annotate::Annotate;
 use std::env::ArgsOs;
 use std::ffi::OsString;
 use std::io::ErrorKind;
-use std::iter::{IntoIterator, Iterator};
+use std::iter::Iterator;
 use std::path::PathBuf;
-use structopt::StructOpt;
+use std::str::FromStr;
 
 use super::bootstrap::Bootstrap;
+use super::fpga_backdoor::LoadMemories;
 use super::load_bitstream::LoadBitstream;
 use crate::app::TransportWrapper;
 use crate::backend;
+use crate::io::jtag::JtagParams;
 // use opentitanlib::io::uart::UartParams;
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub struct InitializeTest {
-    #[structopt(
-        long,
-        default_value = "config",
-        help = "Filename of a default flagsfile.  Relative to $XDG_CONFIG_HOME/opentitantool."
-    )]
+    /// Filename of a default flagsfile.  Relative to $XDG_CONFIG_HOME/opentitantool.
+    #[arg(long, value_parser = PathBuf::from_str, default_value = "config")]
     pub rcfile: PathBuf,
 
-    #[structopt(long, default_value = "off")]
+    #[arg(long, default_value = "off")]
     pub logging: LevelFilter,
 
-    #[structopt(flatten)]
+    /// De-assert reset signal before executing commands.
+    #[arg(short, long)]
+    drop_reset: bool,
+
+    #[command(flatten)]
     pub backend_opts: backend::BackendOpts,
 
     // TODO: Bootstrap::options already has a uart_params (and a spi_params).
     // This probably needs some refactoring.
-    //#[structopt(flatten)]
+    //#[command(flatten)]
     //pub uart_params: UartParams,
-    #[structopt(flatten)]
+    #[command(flatten)]
     pub load_bitstream: LoadBitstream,
 
-    #[structopt(flatten)]
+    #[command(flatten)]
+    pub load_memories: LoadMemories,
+
+    #[command(flatten)]
     pub bootstrap: Bootstrap,
+
+    #[command(flatten)]
+    pub jtag_params: JtagParams,
 }
 
 impl InitializeTest {
     pub fn init_logging(&self) {
         let level = self.logging;
+        // The tests might use OpenOCD which uses util::printer so we will get
+        // more useful logging if we log the target instead of the module path
         if level != LevelFilter::Off {
             env_logger::Builder::from_default_env()
+                .format_target(true)
+                .format_module_path(false)
+                .format_timestamp_millis()
                 .filter(None, level)
                 .init();
         }
@@ -94,13 +108,16 @@ impl InitializeTest {
         }?;
 
         // Extend the argument list with all remaining command line arguments.
-        arguments.extend(args.into_iter());
+        arguments.extend(args);
         Ok(arguments)
     }
 
     // Print the result of a command.
     // If there is an error and `RUST_BACKTRACE=1`, print a backtrace.
-    pub fn print_result(operation: &str, result: Result<Option<Box<dyn Annotate>>>) -> Result<()> {
+    pub fn print_result(
+        operation: &str,
+        result: Result<Option<Box<dyn erased_serde::Serialize>>>,
+    ) -> Result<()> {
         match result {
             Ok(Some(value)) => {
                 log::info!("{}: success.", operation);
@@ -128,11 +145,31 @@ impl InitializeTest {
         // Create the transport interface.
         let transport = backend::create(&self.backend_opts)?;
 
+        // Set up the default pin configurations as specified in the transport's config file.
+        transport.apply_default_configuration(None)?;
+
+        if self.drop_reset {
+            transport.pin_strapping("RESET")?.remove()?;
+        }
+
         // Create the UART first to initialize the desired parameters.
         let _uart = self.bootstrap.options.uart_params.create(&transport)?;
 
         // Load a bitstream.
-        Self::print_result("load_bitstream", self.load_bitstream.init(&transport))?;
+        Self::print_result(
+            "load_bitstream",
+            self.load_bitstream
+                .init(&transport, &self.jtag_params)
+                .map(|_| None),
+        )?;
+
+        // Program any memories (e.g. ROM, OTP).
+        Self::print_result(
+            "load_memories",
+            self.load_memories
+                .init(&transport, &self.jtag_params)
+                .map(|_| None),
+        )?;
 
         // Bootstrap an rv32 test program.
         Self::print_result("bootstrap", self.bootstrap.init(&transport))?;

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,19 +19,27 @@ typedef struct ujson {
   void *io_context;
   /** A pointer to an IO function for writing data to the output. */
   status_t (*putbuf)(void *, const char *, size_t);
+  /** A pointer to an IO function for flusing buffered data to the output. */
+  status_t (*flushbuf)(void *);
   /** A pointer to an IO function for reading data from the input. */
   status_t (*getc)(void *);
   /** An internal single character buffer for ungetting a character. */
   int16_t buffer;
+  /** Holds the rolling CRC32 of characters that are sent and received.*/
+  uint32_t crc32;
+  /** Holds size counter for strings sent or received.*/
+  size_t str_size;
 } ujson_t;
 
 // clang-format off
-#define UJSON_INIT(context_, getc_, putbuf_) \
-  {                                          \
-    .io_context = (void*)(context_),         \
-    .putbuf_ = (putbuf_),                    \
-    .getc = (getc_),                         \
-    .buffer = -1,                            \
+#define UJSON_INIT(context_, getc_, putbuf_, flushbuf_) \
+  {                                                     \
+      .io_context = (void *)(context_),                 \
+      .putbuf_ = (putbuf_),                             \
+      .flushbuf_ = (flushbuf_),                         \
+      .getc = (getc_),                                  \
+      .buffer = -1,                                     \
+      .crc32 = UINT32_MAX,                              \
   }
 // clang-format on
 
@@ -44,7 +52,8 @@ typedef struct ujson {
  * @return An initialized ujson_t context.
  */
 ujson_t ujson_init(void *context, status_t (*getc)(void *),
-                   status_t (*putbuf)(void *, const char *, size_t));
+                   status_t (*putbuf)(void *, const char *, size_t),
+                   status_t (*flushbuf)(void *));
 
 /**
  * Gets a single character from the input.
@@ -72,6 +81,37 @@ status_t ujson_ungetc(ujson_t *uj, char ch);
  * @return OK or an error.
  */
 status_t ujson_putbuf(ujson_t *uj, const char *buf, size_t len);
+
+/**
+ * Flush a UJSON buffer to the output.
+ *
+ * Some console implementations e.g. the SPI console stage data in a
+ * software buffer before flushing it out to the low-level printf driver, as the
+ * driver code uses a framing protocol that is more efficient if used with bulk
+ * data transfers as opposed to being used with single character writes.
+ *
+ * @param uj A ujson IO context.
+ * @return OK or an error.
+ */
+status_t ujson_flushbuf(ujson_t *uj);
+
+/**
+ * Resets the CRC32 calculation to an initial state.
+ *
+ * @param uj A ujson IO context.
+ */
+void ujson_crc32_reset(ujson_t *uj);
+
+/**
+ * Returns the finished value of a CRC32 calculation.
+ *
+ * Note the state is un-altered by this function.
+ * One must reset before starting a new calculation.
+ *
+ * @param uj A ujson IO context.
+ * @return The final value for the CRC32 calculation.
+ */
+uint32_t ujson_crc32_finish(ujson_t *uj);
 
 /**
  * Compares two strings for equality.
@@ -112,7 +152,7 @@ status_t ujson_consume_maybe(ujson_t *uj, char ch);
  *
  * Consume whitespace until finding a double-quote.  Consume all characters
  * (obeying json escape sequences) until the next double-quote.  If the
- * input string exceeds the length of the user buffer, the the user
+ * input string exceeds the length of the user buffer, the user
  * buffer will contain a truncated string and the entire input json string
  * will be consumed.
  *

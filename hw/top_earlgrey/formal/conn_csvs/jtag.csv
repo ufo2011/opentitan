@@ -1,20 +1,16 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Run these checks with:
-#  ./util/dvsim/dvsim.py hw/top_earlgrey/formal/chip_conn_cfg.hjson
+#  dvsim hw/top_earlgrey/formal/chip_conn_cfg.hjson
 
 ,NAME,SRC BLOCK,SRC SIGNAL,DEST BLOCK,DEST SIGNAL,,,,,,
 
 # Pinmux and lc_ctrl jtag connection.
-CONNECTION, PINMUX_LC_CTRL_JTAG_REQ, top_earlgrey.u_pinmux_aon, lc_jtag_o, top_earlgrey.u_lc_ctrl, jtag_i
-CONNECTION, PINMUX_LC_CTRL_JTAG_RSP, top_earlgrey.u_pinmux_aon, lc_jtag_i, top_earlgrey.u_lc_ctrl, jtag_o
+CONNECTION, PINMUX_LC_CTRL_JTAG_REQ, top_earlgrey.earlgrey_pd_aon.u_pinmux, lc_jtag_o, top_earlgrey.earlgrey_pd_main.u_lc_ctrl, jtag_i
+CONNECTION, PINMUX_LC_CTRL_JTAG_RSP, top_earlgrey.earlgrey_pd_aon.u_pinmux, lc_jtag_i, top_earlgrey.earlgrey_pd_main.u_lc_ctrl, jtag_o
 
-# Pinmux and flash_ctrl jtag connection.
-CONNECTION, PINMUX_FLASH_CTRL_TCK, top_earlgrey.u_pinmux_aon, mio_to_periph_o[top_earlgrey_pkg::MioInFlashCtrlTck], top_earlgrey.u_flash_ctrl, cio_tck_i
-CONNECTION, PINMUX_FLASH_CTRL_TMS, top_earlgrey.u_pinmux_aon, mio_to_periph_o[top_earlgrey_pkg::MioInFlashCtrlTms], top_earlgrey.u_flash_ctrl, cio_tms_i
-CONNECTION, PINMUX_FLASH_CTRL_TDI, top_earlgrey.u_pinmux_aon, mio_to_periph_o[top_earlgrey_pkg::MioInFlashCtrlTdi], top_earlgrey.u_flash_ctrl, cio_tdi_i
-
-CONNECTION, PINMUX_FLASH_CTRL_TDO,    top_earlgrey.u_flash_ctrl, cio_tdo_o,    top_earlgrey.u_pinmux_aon, periph_to_mio_i[top_earlgrey_pkg::MioOutFlashCtrlTdo]
-CONNECTION, PINMUX_FLASH_CTRL_TDO_EN, top_earlgrey.u_flash_ctrl, cio_tdo_en_o, top_earlgrey.u_pinmux_aon, periph_to_mio_oe_i[top_earlgrey_pkg::MioOutFlashCtrlTdo]
+# Pinmux and rram_macro jtag connection.
+CONNECTION, PINMUX_RRAM_MACRO_JTAG_REQ, top_earlgrey.earlgrey_pd_aon.u_pinmux, rram_jtag_o, top_earlgrey.earlgrey_pd_main.u_rram_macro, jtag_i
+CONNECTION, PINMUX_RRAM_MACRO_JTAG_RSP, top_earlgrey.earlgrey_pd_aon.u_pinmux, rram_jtag_i, top_earlgrey.earlgrey_pd_main.u_rram_macro, jtag_o

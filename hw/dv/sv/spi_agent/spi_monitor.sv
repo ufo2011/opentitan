@@ -1,8 +1,8 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-class spi_monitor extends dv_base_monitor#(
+class spi_monitor extends dv_reactive_monitor #(
     .ITEM_T (spi_item),
     .CFG_T  (spi_agent_cfg),
     .COV_T  (spi_agent_cov)
@@ -11,6 +11,7 @@ class spi_monitor extends dv_base_monitor#(
 
   spi_item host_item, host_clone;
   spi_item device_item, device_clone;
+  spi_item plain_item;
   spi_cmd_e cmd;
   spi_cmd_e cmdtmp;
   int cmd_byte;
@@ -23,21 +24,26 @@ class spi_monitor extends dv_base_monitor#(
   // Analysis port for the collected transfer.
   uvm_analysis_port #(spi_item) host_analysis_port;
   uvm_analysis_port #(spi_item) device_analysis_port;
+  // Sends txn on CSB deassertion (CSB becoming active)
+  uvm_analysis_port #(spi_item) csb_active_analysis_port;
+  uvm_analysis_port #(spi_item) plain_sampling_analysis_port;
 
   `uvm_component_new
 
   function void build_phase(uvm_phase phase);
     super.build_phase(phase);
-    host_analysis_port   = new("host_analysis_port", this);
-    device_analysis_port = new("device_analysis_port", this);
+    host_analysis_port           = new("host_analysis_port", this);
+    device_analysis_port         = new("device_analysis_port", this);
+    csb_active_analysis_port     = new("csb_active_analysis_port", this);
+    plain_sampling_analysis_port = new("plain_sampling_analysis_port", this);
   endfunction
 
   virtual task run_phase(uvm_phase phase);
-    forever collect_trans(phase);
+    forever collect_trans();
   endtask
 
   // collect transactions
-  virtual protected task collect_trans(uvm_phase phase);
+  virtual protected task collect_trans();
     bit flash_opcode_received;
 
     wait (cfg.en_monitor);
@@ -46,12 +52,25 @@ class spi_monitor extends dv_base_monitor#(
 
     cfg.vif.sck_polarity = cfg.sck_polarity[active_csb];
     cfg.vif.sck_phase = cfg.sck_phase[active_csb];
-
     host_item   = spi_item::type_id::create("host_item", this);
     device_item = spi_item::type_id::create("device_item", this);
+    plain_item           = spi_item::type_id::create("plain_item", this);
+    cfg.ongoing_flash_cmd = null;
+
+    // Currently only used in spi_host where the SPI bus is sampled without
+    // any segment order expectation
+    plain_sampling_analysis_port.write(plain_item);
+    if (cfg.enable_plain_sampling) begin
+      // Currently used in the spi_device scoreboard. It triggers SV events on a per-byte basis and
+      // when the transaction finishes.
+      csb_active_analysis_port.write(host_item);
+    end
     fork
       begin : isolation_thread
         fork
+          begin: plain_bus_sampling
+            plain_sampling();
+          end
           begin : csb_deassert_thread
             wait(cfg.vif.csb[active_csb] == 1'b1);
           end
@@ -64,7 +83,12 @@ class spi_monitor extends dv_base_monitor#(
                 cmd_byte = 0;
                 collect_curr_trans();
               end
-              SpiModeFlash: collect_flash_trans(host_item, flash_opcode_received);
+              SpiModeFlash: begin
+                `uvm_info(`gfn, "Item sent 'csb_active_analysis_port' since flash_txn just started",
+                          UVM_DEBUG)
+                csb_active_analysis_port.write(host_item);
+                collect_flash_trans(host_item, flash_opcode_received);
+              end
               SpiModeTpm: collect_tpm_trans(host_item);
               default: begin
                 `uvm_fatal(`gfn, $sformatf("Invalid mode %s", cfg.spi_func_mode.name))
@@ -75,10 +99,16 @@ class spi_monitor extends dv_base_monitor#(
         disable fork;
       end : isolation_thread
     join
+
     // write to host_analysis_port
     case (cfg.spi_func_mode)
       SpiModeFlash: begin
+        -> host_item.item_finished_ev;
+        `uvm_info(`gfn, "Triggering 'host_item.item_finished' since CSB just became inactive",
+                  UVM_DEBUG)
         if (flash_opcode_received) begin
+          if (!host_item.write_command)
+            host_item.read_size = host_item.payload_q.size;
           host_analysis_port.write(host_item);
           host_item.mon_item_complete = 1;
         end
@@ -90,8 +120,20 @@ class spi_monitor extends dv_base_monitor#(
         end
       end
       default: ; // do nothing, in SpiModeGeneric, it writes to fifo for each byte
-    endcase
+    endcase // case (cfg.spi_func_mode)
   endtask : collect_trans
+
+  virtual protected task plain_sampling();
+    // for mode 1 and 3, get the leading edges out of the way
+    cfg.wait_sck_edge(LeadingEdge, active_csb);
+    forever begin : loop_forever
+      // wait for the sampling edge
+      cfg.wait_sck_edge(SamplingEdge, active_csb);
+      if(cfg.enable_plain_sampling) begin
+        plain_item.plain_data_q.push_back(cfg.vif.sio[3:0]);
+      end
+    end
+  endtask
 
   virtual protected task collect_curr_trans();
     // for mode 1 and 3, get the leading edges out of the way
@@ -112,7 +154,6 @@ class spi_monitor extends dv_base_monitor#(
       end else begin
         num_samples = 8;
       end
-
       case (cmd)
         CmdOnly, ReadStd, WriteStd: begin
           data_shift = 1;
@@ -138,6 +179,7 @@ class spi_monitor extends dv_base_monitor#(
 
         which_bit_h = cfg.host_bit_dir ? i : 7 - i;
         which_bit_d = cfg.device_bit_dir ? i : 7 - i;
+
         case (cmd)
           CmdOnly, ReadStd, WriteStd: begin
             // sample sio[0] for tx
@@ -225,6 +267,7 @@ class spi_monitor extends dv_base_monitor#(
 
   virtual protected task collect_flash_trans(spi_item item, ref bit flash_opcode_received);
     int num_addr_bytes;
+    int unsigned total_cycles_wait;
     flash_opcode_received = 0;
     // for mode 1 and 3, get the leading edges out of the way
     cfg.wait_sck_edge(LeadingEdge, active_csb);
@@ -234,21 +277,65 @@ class spi_monitor extends dv_base_monitor#(
                           .data(item.opcode), .check_data_not_z(1));
     flash_opcode_received = 1;
     cfg.extract_cmd_info_from_opcode(item.opcode,
-        // output
-        num_addr_bytes, item.write_command, item.num_lanes, item.dummy_cycles);
-    `uvm_info(`gfn, $sformatf("sampled flash opcode: 0x%0h", item.opcode), UVM_MEDIUM)
+                                     // output
+                                     num_addr_bytes, item.write_command, item.num_lanes,
+                                     item.dummy_cycles, item.read_pipeline_mode);
+    // Assigned right after op-code is received
+    cfg.ongoing_flash_cmd = item;
+    `uvm_info(`gfn, $sformatf("sampled flash opcode: 0x%0h", item.opcode), UVM_HIGH)
+    item.terminated_before_dummy_cycles = 1;
+    if (item.read_pipeline_mode>0)
+      item.terminated_before_read_pipeline = 1;
 
+    `uvm_info(`gfn, "Triggering 'host_item.byte_sampled' after sampling opcode", UVM_DEBUG)
+    -> host_item.byte_sampled_ev;
     sample_address(num_addr_bytes, item.address_q);
-
+    if (item.address_q.size > 0) begin
+      `uvm_info(`gfn, "Triggering 'host_item.byte_sampled' after sampling address", UVM_DEBUG)
+      -> host_item.byte_sampled_ev;
+    end
+    total_cycles_wait = item.dummy_cycles + (item.read_pipeline_mode>0 ? 2 : 0);
     repeat (item.dummy_cycles) begin
       cfg.wait_sck_edge(SamplingEdge, active_csb);
     end
+    item.past_dummies = 1;
+    item.terminated_before_dummy_cycles = 0;
+
+    if (cfg.if_mode == dv_utils_pkg::Device) begin
+      `uvm_info(`gfn, {"spi monitor is configured in Device mode -> don't need to add extra",
+                       " read_pipeline delay"}, UVM_HIGH)
+    end
+    else begin
+      repeat (item.read_pipeline_mode>0 ? 2 : 0) begin
+        cfg.wait_sck_edge(SamplingEdge, active_csb);
+        item.terminated_before_read_pipeline = 0;
+      end
+    end
+
+    `uvm_info(`gfn, $sformatf("TB waited for (%0d) dummy_cycles + (%0d) cycles due to read_pipeline"
+                    ,item.dummy_cycles, (item.read_pipeline_mode &&
+                    cfg.if_mode != dv_utils_pkg::Device)  ? 2 : 0), UVM_DEBUG)
+
+    // Item sent after opcode, address, dummies and read pipeline delay
+    `uvm_info(`gfn, $sformatf("Sending {opcode=0x%0x,address=%p} on the 'req_analysis_port'",
+                              item.opcode, item.address_q), UVM_DEBUG)
     req_analysis_port.write(item);
+    `uvm_info(`gfn, "Triggering 'dummy_cycles_ev' after dummy_cycles+read_pipeline(if any)",
+              UVM_DEBUG)
+    -> host_item.dummy_cycles_ev;
 
     forever begin
       logic[7:0] byte_data;
       sample_and_check_byte(item.num_lanes, !item.write_command, byte_data);
+      `uvm_info(`gfn, $sformatf("Sampled: 0x%0x data", byte_data), UVM_DEBUG)
       item.payload_q.push_back(byte_data);
+
+      // Note: in spi-device there are some read commands(QUAD+specific dummy cycles) in which the
+      // S2P module stops signalling byte-beats past the address phase
+      if (item.spi_beat_signalled) begin
+        `uvm_info(`gfn, "Triggering 'host_item.byte_sampled' after sampling a data byte", UVM_DEBUG)
+        -> host_item.byte_sampled_ev;
+      end
     end
   endtask : collect_flash_trans
 
@@ -262,6 +349,7 @@ class spi_monitor extends dv_base_monitor#(
     decode_tpm_cmd(cmd, item.write_command, size);
     if (!item.write_command) item.read_size = size;
     `uvm_info(`gfn, $sformatf("Received TPM command: 0x%0x", cmd), UVM_MEDIUM)
+
     // read 3 bytes address
     fork
       begin : tpm_sio_0
@@ -279,6 +367,7 @@ class spi_monitor extends dv_base_monitor#(
       end
     join
     `uvm_info(`gfn, $sformatf("Received TPM addr: %p", item.address_q), UVM_MEDIUM)
+
     req_analysis_port.write(item);
 
     // poll TPM_START

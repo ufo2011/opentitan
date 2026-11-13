@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,14 +10,15 @@
 
 `define CSRNG_STS_COVBIN \
     csrng_sts: coverpoint sts { \
-      bins pass = {0}; \
-      bins fail = {1}; \
+    bins pass =  {CMD_STS_SUCCESS}; \
+    bins fail = {CMD_STS_INVALID_ACMD, CMD_STS_INVALID_GEN_CMD, \
+                 CMD_STS_INVALID_CMD_SEQ, CMD_STS_RESEED_CNT_EXCEEDED}; \
     }
 
 // covergroups
 // Depends on whether the agent is device or host mode, the "csrng_cmd_cp" are slightly different:
-// In device mode: acmd INV, GENB, GENU are in the illegal bin.
-covergroup device_cmd_cg with function sample(csrng_item item, bit sts);
+// In device mode: acmd INV, is in the illegal bin.
+covergroup device_cmd_cg with function sample(csrng_item item, csrng_cmd_sts_e sts);
   option.name         = "csrng_device_cmd_cg";
   option.per_instance = 1;
 
@@ -26,6 +27,7 @@ covergroup device_cmd_cg with function sample(csrng_item item, bit sts);
     bins res = {RES};
     bins gen = {GEN};
     bins uni = {UNI};
+    bins upd = {UPD};
     illegal_bins il = default;
   }
   csrng_clen_cp: coverpoint item.clen {
@@ -38,8 +40,9 @@ covergroup device_cmd_cg with function sample(csrng_item item, bit sts);
     bins mubi_false = {MuBi4False};
   }
   csrng_sts: coverpoint sts {
-    bins pass = {0};
-    bins fail = {1};
+    bins pass = {CMD_STS_SUCCESS};
+    bins fail = {CMD_STS_INVALID_ACMD, CMD_STS_INVALID_GEN_CMD,
+                 CMD_STS_INVALID_CMD_SEQ, CMD_STS_RESEED_CNT_EXCEEDED};
   }
 
   csrng_cmd_cross: cross csrng_cmd_cp, csrng_clen_cp, csrng_sts, csrng_flag_cp {
@@ -48,7 +51,7 @@ covergroup device_cmd_cg with function sample(csrng_item item, bit sts);
   }
 endgroup
 
-covergroup host_cmd_cg with function sample(csrng_item item, bit sts);
+covergroup host_cmd_cg with function sample(csrng_item item, csrng_cmd_sts_e sts);
   option.name         = "csrng_host_cmd_cg";
   option.per_instance = 1;
 
@@ -59,8 +62,6 @@ covergroup host_cmd_cg with function sample(csrng_item item, bit sts);
     bins gen = {GEN};
     bins upd = {UPD};
     bins uni = {UNI};
-    bins genb = {GENB};
-    bins genu = {GENU};
     illegal_bins il = default;
   }
   csrng_clen_cp: coverpoint item.clen {
@@ -73,19 +74,19 @@ covergroup host_cmd_cg with function sample(csrng_item item, bit sts);
     bins mubi_false = {MuBi4False};
   }
   csrng_sts: coverpoint sts {
-    bins pass = {0};
-    bins fail = {1};
+    bins pass = {CMD_STS_SUCCESS};
+    bins fail = {CMD_STS_INVALID_ACMD, CMD_STS_INVALID_GEN_CMD,
+                 CMD_STS_INVALID_CMD_SEQ, CMD_STS_RESEED_CNT_EXCEEDED};
   }
 
   csrng_cmd_clen_flag_cross: cross csrng_cmd_cp, csrng_clen_cp, csrng_flag_cp;
 
   csrng_cmd_clen_flag_sts_cross: cross csrng_cmd_cp, csrng_clen_cp, csrng_flag_cp, csrng_sts {
-    // Illegal commands (INV, GENB, GENU) don't get a response, thus don't have a status.
-    ignore_bins illegal_cmds = binsof(csrng_cmd_cp) intersect {INV, GENB, GENU};
-    // All legal commands get a response, and the status must be OK.  Legal commands with an error
-    // status are thus illegal.
-    illegal_bins legal_cmds_with_error_sts = !binsof(csrng_cmd_cp) intersect {INV, GENB, GENU}
-                                             with (csrng_sts);
+    // Illegal command INV doesn't get a response, thus doesn't have a status.
+    ignore_bins illegal_cmds = binsof(csrng_cmd_cp) intersect {INV};
+    // Ignore status error responses for legal commands.
+    ignore_bins legal_cmds_with_error_sts = !binsof(csrng_cmd_cp) intersect {INV} &&
+                                            !binsof(csrng_sts) intersect {CMD_STS_SUCCESS};
   }
 
 endgroup
@@ -94,7 +95,7 @@ endgroup
 // different:
 // In device mode: csrng agent can drive `sts` to pass or fail randomly.
 // In host mode: DUT will also return pass for genbits data.
-covergroup device_genbits_cg with function sample(csrng_item item, bit sts);
+covergroup device_genbits_cg with function sample(csrng_item item, csrng_cmd_sts_e sts);
   option.name         = "csrng_device_genbits_cg";
   option.per_instance = 1;
 
@@ -104,7 +105,7 @@ covergroup device_genbits_cg with function sample(csrng_item item, bit sts);
   csrng_genbits_cross: cross csrng_glen, csrng_sts;
 endgroup
 
-covergroup host_genbits_cg with function sample(csrng_item item, bit sts);
+covergroup host_genbits_cg with function sample(csrng_item item, csrng_cmd_sts_e sts);
   option.name         = "csrng_host_genbits_cg";
   option.per_instance = 1;
 
@@ -113,7 +114,7 @@ covergroup host_genbits_cg with function sample(csrng_item item, bit sts);
 
   csrng_genbits_cross: cross csrng_glen, csrng_sts {
     // Generate may not return fail as status.
-    illegal_bins sts_fail = binsof(csrng_sts) intersect {1};
+    ignore_bins sts_fail = binsof(csrng_sts.fail);
   }
 endgroup
 
@@ -138,7 +139,7 @@ class csrng_agent_cov extends dv_base_agent_cov#(csrng_agent_cfg);
     end
   endfunction
 
-  function void sample_csrng_cmds(csrng_item item, bit sts);
+  function void sample_csrng_cmds(csrng_item item, csrng_cmd_sts_e sts);
     if (cfg.if_mode == dv_utils_pkg::Device) begin
       m_device_cmd_cg.sample(item, cfg.vif.cmd_rsp.csrng_rsp_sts);
       if (item.acmd == csrng_pkg::GEN) begin

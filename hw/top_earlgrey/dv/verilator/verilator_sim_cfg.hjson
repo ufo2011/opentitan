@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -40,12 +40,6 @@
       name: sv_flist_gen_dir
       value: "{build_dir}"
     }
-    // This defaults to 'ip' in `hw/data/common_project_cfg.hjson`. Override
-    // since we are building the top level.
-    {
-      name: design_level
-      value: top
-    }
   ]
 
   // Common run parameters. Each test entry can override any of these as needed.
@@ -57,13 +51,13 @@
     {
       name: sw_test_mode
       sw_images: ["//sw/device/lib/testing/test_rom:test_rom:0",
-                  "//hw/ip/otp_ctrl/data:img_rma:3"]
+                  "//hw/top_earlgrey/data/otp:img_rma:3"]
       run_opts: [
         // The following shell snippet converts the SW images specification to what's
         // needed as a run time switch to Verilator.
         '''{eval_cmd} \
         opts=;  \
-        types=(rom flash otbn otp); \
+        types=(rom rram otbn otp); \
         exts=(scr.39.vmem elf elf vmem); \
         images=`echo {sw_images}`; \
         for image in $images; do \
@@ -82,18 +76,18 @@
   // List of test specifications.
   //
   // If you are adding a test that has been generated from a Bazel
-  // `opentitan_functest` macro, you can specify the test using its Bazel label
+  // `opentitan_test` macro, you can specify the test using its Bazel label
   // followed by an index separated with a ':', which is used by the testbench
   // to know what type of image is it:
   // - 0 for Boot ROM,
-  // - 1 for SW test (loaded in flash),
+  // - 1 for SW test (loaded in RRAM),
   // - 2 for OTBN test,
   // - 3 for OTP.
   // This allows an arbitrary number of SW images to be supplied to the TB.
   //
   // For example, if the Bazel label for a test is:
-  // `//sw/device/tests:example_test_from_flash`, then you would specify this as
-  // `//sw/device/tests:example_test_from_flash:1`.
+  // `//sw/device/tests:example_test`, then you would specify this as
+  // `//sw/device/tests:example_test:1`.
   tests: [
     {
       name: aes_smoketest
@@ -138,6 +132,10 @@
       sw_images: ["//sw/device/tests:kmac_mode_kmac_test:1"]
     }
     {
+      name: kmac_save_restore_smoketest
+      sw_images: ["//sw/device/tests:kmac_save_restore_smoketest:1"]
+    }
+    {
       name: crt_test
       sw_images: ["//sw/device/tests:crt_test:1"]
     }
@@ -169,10 +167,6 @@
     {
       name: uart_smoketest
       sw_images: ["//sw/device/tests:uart_smoketest:1"]
-    }
-    {
-      name: flash_ctrl_test
-      sw_images: ["//sw/device/tests:flash_ctrl_test:1"]
     }
     {
       name: pmp_smoketest_napot

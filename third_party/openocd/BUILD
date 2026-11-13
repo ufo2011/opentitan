@@ -1,10 +1,10 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-package(default_visibility = ["//visibility:private"])
-
 load("@rules_foreign_cc//foreign_cc:configure.bzl", "configure_make")
+
+package(default_visibility = ["//visibility:private"])
 
 # Extract the `openocd` binary from :build_openocd. Although the binary itself
 # is executable, Bazel does not believe it is runnable. If you want to run
@@ -21,7 +21,7 @@ genrule(
     outs = ["openocd.sh"],
     cmd = """
     echo '#!/bin/bash' > $@
-    echo './$(execpath :openocd_bin) $$@' >> $@
+    echo './$(execpath :openocd_bin) "$$@"' >> $@
     """,
     executable = True,
     tools = [":openocd_bin"],
@@ -29,8 +29,20 @@ genrule(
 )
 
 filegroup(
-    name = "jtag_adapter_cfg",
+    name = "jtag_ftdi_cfg",
+    srcs = ["//util/openocd/board:cw340_ftdi.cfg"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "jtag_olimex_cfg",
     srcs = ["@openocd//:tcl/interface/ftdi/olimex-arm-usb-tiny-h.cfg"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "jtag_cmsis_dap_adapter_cfg",
+    srcs = ["@openocd//:tcl/interface/cmsis-dap.cfg"],
     visibility = ["//visibility:public"],
 )
 
@@ -50,7 +62,14 @@ configure_make(
         "--disable-vsllink",
         "--enable-remote-bitbang",
     ],
-    copts = ["-Wno-error=unused-variable"],
+    copts = [
+        "-Wno-error=unused-variable",
+        "-Wno-unused-but-set-variable",
+        "-Wno-strict-prototypes",
+        "-Wno-unused-but-set-parameter",
+        "-Wno-fuse-ld-path",
+    ],
+    env = {"CCACHE": "none"},
     lib_source = "@openocd//:all_srcs",
     out_binaries = ["openocd"],
 )

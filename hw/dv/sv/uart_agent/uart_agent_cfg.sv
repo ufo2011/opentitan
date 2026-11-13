@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,9 +24,6 @@ class uart_agent_cfg extends dv_base_agent_cfg;
   bit en_logger           = 1'b0; // enable logger on tx
   bit use_rx_for_logger   = 1'b0; // use rx instead of tx
   bit write_logs_to_file  = 1'b1;
-
-  // reset is controlled at upper seq-level as no reset pin on uart interface
-  bit under_reset;
 
   // interface handle used by driver, monitor & the sequencer
   virtual uart_if vif;
@@ -62,7 +59,7 @@ class uart_agent_cfg extends dv_base_agent_cfg;
 
   function void set_baud_rate(baud_rate_e b);
     baud_rate = b;
-    vif.uart_clk_period_ns = (get_baud_rate_period_ns(b) * 1ns);
+    vif.uart_clk_period = (get_baud_rate_period_ns(b) * 1ns);
   endfunction
 
   function void set_parity(bit en_parity, bit odd_parity);
@@ -79,12 +76,21 @@ class uart_agent_cfg extends dv_base_agent_cfg;
     return max_drift_cycle_pct;
   endfunction
 
+  // Update dv_base_agent_cfg::in_reset to match the fact the interface has just gone into reset.
+  // This is needed because the uart interface doesn't have a reset pin, so its "notional reset"
+  // needs to be controlled from a higher level.
   virtual function void reset_asserted();
-    under_reset = 1;
+    in_reset = 1;
   endfunction
 
+  // Update dv_base_agent_cfg::in_reset to match the fact the interface has just left reset. This is
+  // needed because the uart interface doesn't have a reset pin, so its "notional reset" needs to be
+  // controlled from a higher level.
+  //
+  // As well as updating in_reset, this function clears an interface and may re-enable some
+  // monitoring.
   virtual function void reset_deasserted(bit re_enable_chk_mon = 1);
-    under_reset = 0;
+    in_reset = 0;
     vif.reset_uart_rx();
     if (re_enable_chk_mon) begin
       en_rx_checks  = 1;

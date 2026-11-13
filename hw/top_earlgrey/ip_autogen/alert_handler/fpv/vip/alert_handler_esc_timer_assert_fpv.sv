@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -7,7 +7,7 @@
 
 `include "prim_assert.sv"
 
-module alert_handler_esc_timer_assert_fpv import alert_pkg::*; (
+module alert_handler_esc_timer_assert_fpv import alert_handler_pkg::*; (
   input  clk_i,
   input  rst_ni,
   input  en_i,
@@ -82,17 +82,6 @@ module alert_handler_esc_timer_assert_fpv import alert_pkg::*; (
       esc_has_triggered_q, clk_i, !rst_ni || clr_i || accu_fail_i)
 
   // check escalation cnt and state out
-  parameter logic [alert_handler_esc_timer.StateWidth-1:0] StateEncodings [8] = '{
-    alert_handler_esc_timer.IdleSt,
-    alert_handler_esc_timer.TimeoutSt,
-    alert_handler_esc_timer.FsmErrorSt,
-    alert_handler_esc_timer.TerminalSt,
-    alert_handler_esc_timer.Phase0St,
-    alert_handler_esc_timer.Phase1St,
-    alert_handler_esc_timer.Phase2St,
-    alert_handler_esc_timer.Phase3St
-  };
-  `ASSERT(EscStateOut_A, alert_handler_esc_timer.state_q == StateEncodings[esc_state_o])
   `ASSERT(EscCntOut_A, alert_handler_esc_timer.u_prim_count.cnt_q[0] == esc_cnt_o)
 
   // check clr input

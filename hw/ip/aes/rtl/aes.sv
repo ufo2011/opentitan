@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -11,6 +11,7 @@ module aes
   import aes_reg_pkg::*;
 #(
   parameter bit          AES192Enable          = 1, // Can be 0 (disable), or 1 (enable).
+  parameter bit          AESGCMEnable          = 1, // Can be 0 (disable), or 1 (enable).
   parameter bit          SecMasking            = 1, // Can be 0 (no masking), or
                                                     // 1 (first-order masking) of the cipher
                                                     // core. Masking requires the use of a
@@ -24,12 +25,14 @@ module aes
                                                     // FORCE_MASKS bit in Auxiliary Control
                                                     // Register. Useful for SCA only.
   parameter bit          SecSkipPRNGReseeding  = 0, // The current SCA setup doesn't provide enough
-                                                    // resources to implement the infrastucture
+                                                    // resources to implement the infrastructure
                                                     // required for PRNG reseeding (CSRNG, EDN).
                                                     // To enable SCA resistance evaluations, we
                                                     // need to skip reseeding requests.
                                                     // Useful for SCA only.
   parameter logic [NumAlerts-1:0] AlertAsyncOn = {NumAlerts{1'b1}},
+  // Number of cycles a differential skew is tolerated on the alert signal
+  parameter int unsigned         AlertSkewCycles          = 1,
   parameter clearing_lfsr_seed_t RndCnstClearingLfsrSeed  = RndCnstClearingLfsrSeedDefault,
   parameter clearing_lfsr_perm_t RndCnstClearingLfsrPerm  = RndCnstClearingLfsrPermDefault,
   parameter clearing_lfsr_perm_t RndCnstClearingSharePerm = RndCnstClearingSharePermDefault,
@@ -43,6 +46,10 @@ module aes
   // Idle indicator for clock manager
   output prim_mubi_pkg::mubi4_t                     idle_o,
 
+  // Status indicators for DMA integrations
+  output logic                                      output_valid_o,
+  output logic                                      input_ready_o,
+
   // Life cycle
   input  lc_ctrl_pkg::lc_tx_t                       lc_escalate_en_i,
 
@@ -52,8 +59,8 @@ module aes
   output edn_pkg::edn_req_t                         edn_o,
   input  edn_pkg::edn_rsp_t                         edn_i,
 
-  // Key manager (keymgr) key sideload interface
-  input  keymgr_pkg::hw_key_req_t                   keymgr_key_i,
+  // Key manager (keymgr_dpe) key sideload interface
+  input  keymgr_dpe_pkg::hw_key_req_t               keymgr_key_i,
 
   // Bus interface
   input  tlul_pkg::tl_h2d_t                         tl_i,
@@ -104,8 +111,7 @@ module aes
     .hw2reg,
     .shadowed_storage_err_o(shadowed_storage_err),
     .shadowed_update_err_o(shadowed_update_err),
-    .intg_err_o(intg_err_alert),
-    .devmode_i(1'b1)
+    .intg_err_o(intg_err_alert)
   );
 
   // SEC_CM: LC_ESCALATE_EN.INTERSIG.MUBI
@@ -175,6 +181,7 @@ module aes
   // AES core
   aes_core #(
     .AES192Enable             ( AES192Enable             ),
+    .AESGCMEnable             ( AESGCMEnable             ),
     .SecMasking               ( SecMasking               ),
     .SecSBoxImpl              ( SecSBoxImpl              ),
     .SecStartTriggerDelay     ( SecStartTriggerDelay     ),
@@ -187,48 +194,49 @@ module aes
     .RndCnstMaskingLfsrSeed   ( RndCnstMaskingLfsrSeed   ),
     .RndCnstMaskingLfsrPerm   ( RndCnstMaskingLfsrPerm   )
   ) u_aes_core (
-    .clk_i                  ( clk_i                ),
-    .rst_ni                 ( rst_ni               ),
-    .rst_shadowed_ni        ( rst_shadowed_ni      ),
-    .entropy_clearing_req_o ( entropy_clearing_req ),
-    .entropy_clearing_ack_i ( entropy_clearing_ack ),
-    .entropy_clearing_i     ( edn_data             ),
-    .entropy_masking_req_o  ( entropy_masking_req  ),
-    .entropy_masking_ack_i  ( entropy_masking_ack  ),
-    .entropy_masking_i      ( edn_data             ),
+    .clk_i                  ( clk_i                             ),
+    .rst_ni                 ( rst_ni                            ),
+    .rst_shadowed_ni        ( rst_shadowed_ni                   ),
+    .entropy_clearing_req_o ( entropy_clearing_req              ),
+    .entropy_clearing_ack_i ( entropy_clearing_ack              ),
+    .entropy_clearing_i     ( edn_data                          ),
+    .entropy_masking_req_o  ( entropy_masking_req               ),
+    .entropy_masking_ack_i  ( entropy_masking_ack               ),
+    .entropy_masking_i      ( edn_data                          ),
 
-    .keymgr_key_i           ( keymgr_key_i         ),
+    .keymgr_key_i           ( keymgr_key_i                      ),
 
-    .lc_escalate_en_i       ( lc_escalate_en       ),
+    .lc_escalate_en_i       ( lc_escalate_en                    ),
 
-    .shadowed_storage_err_i ( shadowed_storage_err ),
-    .shadowed_update_err_i  ( shadowed_update_err  ),
-    .intg_err_alert_i       ( intg_err_alert       ),
-    .alert_recov_o          ( alert[0]             ),
-    .alert_fatal_o          ( alert[1]             ),
+    .shadowed_storage_err_i ( shadowed_storage_err              ),
+    .shadowed_update_err_i  ( shadowed_update_err               ),
+    .intg_err_alert_i       ( intg_err_alert                    ),
+    .alert_recov_o          ( alert[AlertRecovCtrlUpdateErrIdx] ),
+    .alert_fatal_o          ( alert[AlertFatalFaultIdx]         ),
 
-    .reg2hw                 ( reg2hw               ),
-    .hw2reg                 ( hw2reg               )
+    .reg2hw                 ( reg2hw                            ),
+    .hw2reg                 ( hw2reg                            )
   );
 
   assign idle_o = prim_mubi_pkg::mubi4_bool_to_mubi(reg2hw.status.idle.q);
+  assign output_valid_o = reg2hw.status.output_valid.q;
+  assign input_ready_o = reg2hw.status.input_ready.q;
 
   ////////////
   // Alerts //
   ////////////
 
   logic [NumAlerts-1:0] alert_test;
-  assign alert_test = {
-    reg2hw.alert_test.fatal_fault.q &
-    reg2hw.alert_test.fatal_fault.qe,
-    reg2hw.alert_test.recov_ctrl_update_err.q &
-    reg2hw.alert_test.recov_ctrl_update_err.qe
-  };
+  assign alert_test[AlertRecovCtrlUpdateErrIdx] = reg2hw.alert_test.recov_ctrl_update_err.q &
+                                                  reg2hw.alert_test.recov_ctrl_update_err.qe;
+  assign alert_test[AlertFatalFaultIdx]         = reg2hw.alert_test.fatal_fault.q &
+                                                  reg2hw.alert_test.fatal_fault.qe;
 
   for (genvar i = 0; i < NumAlerts; i++) begin : gen_alert_tx
     prim_alert_sender #(
       .AsyncOn(AlertAsyncOn[i]),
-      .IsFatal(i)
+      .SkewCycles(AlertSkewCycles),
+      .IsFatal(i == AlertFatalFaultIdx)
     ) u_prim_alert_sender (
       .clk_i,
       .rst_ni,
@@ -249,6 +257,8 @@ module aes
   `ASSERT_KNOWN(TlODValidKnown, tl_o.d_valid)
   `ASSERT_KNOWN(TlOAReadyKnown, tl_o.a_ready)
   `ASSERT_KNOWN(IdleKnown, idle_o)
+  `ASSERT_KNOWN(OutputValidKnown, output_valid_o)
+  `ASSERT_KNOWN(InputReadyKnown, input_ready_o)
   `ASSERT_KNOWN(EdnReqKnown, edn_o)
   `ASSERT_KNOWN(AlertTxKnown, alert_tx_o)
 
@@ -293,6 +303,24 @@ module aes
               u_aes_cipher_control_fsm_i.u_aes_cipher_control_fsm.u_state_regs,
           alert_tx_o[1])
     end
+  end
+
+  if (AESGCMEnable) begin : gen_ghash_fsm_sva
+    `ASSERT_PRIM_FSM_ERROR_TRIGGER_ALERT(AesGhashFsmCheck_A,
+        u_aes_core.gen_ghash.u_aes_ghash.u_state_regs,
+        alert_tx_o[1])
+  end
+
+  if (AESGCMEnable && SecMasking) begin : gen_ghash_onehot_sva
+    for (genvar s = 0; s < 2; s++) begin : gen_ghash_onehot_add_in_sva
+      `ASSERT_PRIM_ONEHOT_ERROR_TRIGGER_ALERT(GhashAadOnehotCheck_A,
+          u_aes_core.gen_ghash.u_aes_ghash.gen_masked_add.gen_add_in_muxes[s].
+              u_prim_onehot_check_add_in_sel,
+          alert_tx_o[1])
+    end
+    `ASSERT_PRIM_ONEHOT_ERROR_TRIGGER_ALERT(GhashMultOnehotCheck_A,
+        u_aes_core.gen_ghash.u_aes_ghash.gen_gf_mult1_mux.u_prim_onehot_check_gf_mult1_in_sel,
+        alert_tx_o[1])
   end
 
   // Alert assertions for reg_we onehot check

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -432,18 +432,18 @@ void ISSWrapper::edn_urnd_step(uint32_t edn_urnd_data) {
   run_command(oss.str(), nullptr);
 }
 
-void ISSWrapper::set_keymgr_value(const std::array<uint32_t, 12> &key0_arr,
-                                  const std::array<uint32_t, 12> &key1_arr,
+void ISSWrapper::set_keymgr_value(const std::array<uint32_t, 16> &key0_arr,
+                                  const std::array<uint32_t, 16> &key1_arr,
                                   bool valid) {
   std::ostringstream oss;
 
   oss << "set_keymgr_value 0x" << std::hex << std::setfill('0');
-  for (int i = 0; i < 12; ++i) {
-    oss << std::setw(8) << key0_arr[11 - i];
+  for (int i = 0; i < 16; ++i) {
+    oss << std::setw(8) << key0_arr[15 - i];
   }
   oss << " 0x";
-  for (int i = 0; i < 12; ++i) {
-    oss << std::setw(8) << key1_arr[11 - i];
+  for (int i = 0; i < 16; ++i) {
+    oss << std::setw(8) << key1_arr[15 - i];
   }
   oss << " " << valid << "\n";
 
@@ -499,6 +499,24 @@ void ISSWrapper::set_software_errs_fatal(bool new_val) {
   run_command(oss.str(), nullptr);
 }
 
+void ISSWrapper::set_wfi_enabled(bool new_val) {
+  std::ostringstream oss;
+
+  oss << "set_wfi_enabled " << new_val << "\n";
+
+  run_command(oss.str(), nullptr);
+}
+
+void ISSWrapper::set_urnd_ctrl_enabled(bool new_val) {
+  std::ostringstream oss;
+
+  oss << "set_urnd_ctrl_enabled " << new_val << "\n";
+
+  run_command(oss.str(), nullptr);
+}
+
+void ISSWrapper::wfi_resume() { run_command("wfi_resume\n", nullptr); }
+
 void ISSWrapper::initial_secure_wipe() {
   run_command("initial_secure_wipe\n", nullptr);
 }
@@ -536,9 +554,15 @@ void ISSWrapper::send_err_escalation(uint32_t err_val, bool lock_immediately) {
   run_command(oss.str(), nullptr);
 }
 
-void ISSWrapper::send_rma_req() {
+void ISSWrapper::send_stall_request(bool enforced) {
   std::ostringstream oss;
-  oss << "send_rma_req\n";
+  oss << "send_stall_request " << enforced << "\n";
+  run_command(oss.str(), nullptr);
+}
+
+void ISSWrapper::set_rma_req(uint8_t rma_req) {
+  std::ostringstream oss;
+  oss << "set_rma_req " << std::hex << "0x" << (int)rma_req << "\n";
   run_command(oss.str(), nullptr);
 }
 

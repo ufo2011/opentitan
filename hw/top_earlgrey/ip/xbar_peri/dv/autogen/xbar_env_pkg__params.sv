@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -28,61 +28,55 @@ tl_device_t xbar_devices[$] = '{
     '{"i2c2", '{
         '{32'h400a0000, 32'h400a007f}
     }},
-    '{"pattgen", '{
-        '{32'h400e0000, 32'h400e003f}
+    '{"gpio0", '{
+        '{32'h40040000, 32'h400403ff}
     }},
-    '{"pwm_aon", '{
-        '{32'h40450000, 32'h4045007f}
-    }},
-    '{"gpio", '{
-        '{32'h40040000, 32'h4004003f}
+    '{"gpio1", '{
+        '{32'h40050000, 32'h400503ff}
     }},
     '{"spi_device", '{
-        '{32'h40050000, 32'h40051fff}
+        '{32'h40060000, 32'h40061fff}
     }},
     '{"rv_timer", '{
         '{32'h40100000, 32'h401001ff}
     }},
-    '{"pwrmgr_aon", '{
+    '{"pwrmgr", '{
         '{32'h40400000, 32'h4040007f}
     }},
-    '{"rstmgr_aon", '{
+    '{"rstmgr", '{
         '{32'h40410000, 32'h4041007f}
     }},
-    '{"clkmgr_aon", '{
+    '{"clkmgr", '{
         '{32'h40420000, 32'h4042007f}
     }},
-    '{"pinmux_aon", '{
+    '{"pinmux", '{
         '{32'h40460000, 32'h40460fff}
     }},
     '{"otp_ctrl__core", '{
         '{32'h40130000, 32'h40131fff}
     }},
-    '{"otp_ctrl__prim", '{
-        '{32'h40132000, 32'h4013201f}
-    }},
-    '{"lc_ctrl", '{
+    '{"lc_ctrl__regs", '{
         '{32'h40140000, 32'h401400ff}
     }},
     '{"sensor_ctrl", '{
-        '{32'h40490000, 32'h4049003f}
+        '{32'h40490000, 32'h4049007f}
     }},
     '{"alert_handler", '{
         '{32'h40150000, 32'h401507ff}
     }},
-    '{"sram_ctrl_ret_aon__regs", '{
-        '{32'h40500000, 32'h4050001f}
+    '{"sram_ctrl_ret__regs", '{
+        '{32'h40500000, 32'h4050003f}
     }},
-    '{"sram_ctrl_ret_aon__ram", '{
-        '{32'h40600000, 32'h40600fff}
+    '{"sram_ctrl_ret__ram", '{
+        '{32'h40600000, 32'h40601fff}
     }},
-    '{"aon_timer_aon", '{
+    '{"aon_timer", '{
         '{32'h40470000, 32'h4047003f}
     }},
-    '{"sysrst_ctrl_aon", '{
+    '{"sysrst_ctrl", '{
         '{32'h40430000, 32'h404300ff}
     }},
-    '{"adc_ctrl_aon", '{
+    '{"adc_ctrl", '{
         '{32'h40440000, 32'h4044007f}
     }},
     '{"ast", '{
@@ -99,24 +93,22 @@ tl_host_t xbar_hosts[$] = '{
         "i2c0",
         "i2c1",
         "i2c2",
-        "pattgen",
-        "gpio",
+        "gpio0",
+        "gpio1",
         "spi_device",
         "rv_timer",
-        "pwrmgr_aon",
-        "rstmgr_aon",
-        "clkmgr_aon",
-        "pinmux_aon",
+        "pwrmgr",
+        "rstmgr",
+        "clkmgr",
+        "pinmux",
         "otp_ctrl__core",
-        "otp_ctrl__prim",
-        "lc_ctrl",
+        "lc_ctrl__regs",
         "sensor_ctrl",
         "alert_handler",
         "ast",
-        "sram_ctrl_ret_aon__ram",
-        "sram_ctrl_ret_aon__regs",
-        "aon_timer_aon",
-        "adc_ctrl_aon",
-        "sysrst_ctrl_aon",
-        "pwm_aon"}}
+        "sram_ctrl_ret__ram",
+        "sram_ctrl_ret__regs",
+        "aon_timer",
+        "adc_ctrl",
+        "sysrst_ctrl"}}
 };

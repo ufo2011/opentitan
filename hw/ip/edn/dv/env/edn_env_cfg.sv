@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,11 +7,11 @@ class edn_env_cfg extends cip_base_env_cfg #(.RAL_T(edn_reg_block));
   // external component cfgs
   csrng_agent_cfg   m_csrng_agent_cfg;
   push_pull_agent_cfg#(.HostDataWidth(edn_pkg::FIPS_ENDPOINT_BUS_WIDTH))
-      m_endpoint_agent_cfg[MAX_NUM_ENDPOINTS];
+      m_endpoint_agent_cfg[`NUM_END_POINTS];
 
   `uvm_object_utils_begin(edn_env_cfg)
     `uvm_field_object(m_csrng_agent_cfg, UVM_DEFAULT)
-    for (int i = 0; i < MAX_NUM_ENDPOINTS; i++) begin
+    for (int i = 0; i < `NUM_END_POINTS; i++) begin
       `uvm_field_object(m_endpoint_agent_cfg[i], UVM_DEFAULT)
     end
   `uvm_object_utils_end
@@ -25,28 +25,40 @@ class edn_env_cfg extends cip_base_env_cfg #(.RAL_T(edn_reg_block));
   // Variables
   uint   reseed_cnt, generate_cnt, generate_between_reseeds_cnt;
 
+  bit abort_sw_cmd = 0;
+  bit backdoor_disable = 1'b0;
+  bit base_vseq_edn_enabled = 1'b0;
+
+  int min_auto_reseeds = 2;
+
   // Knobs & Weights
   uint   enable_pct, boot_req_mode_pct, auto_req_mode_pct, cmd_fifo_rst_pct,
          force_disable_pct,
          min_num_boot_reqs, max_num_boot_reqs,
          min_num_ep_reqs, max_num_ep_reqs,
-         invalid_mubi4_pct;
+         invalid_mubi4_pct, disable_regwen_pct;
 
   bit    use_invalid_mubi;
 
+  rand int       glen_auto_mode;
   rand mubi4_t   enable, boot_req_mode, auto_req_mode, cmd_fifo_rst;
   rand uint      num_endpoints, num_boot_reqs;
   rand bit       force_disable;
-  rand bit [csrng_pkg::CSRNG_CMD_WIDTH - 1:0]   boot_ins_cmd, boot_gen_cmd;
+  rand bit [csrng_pkg::CmdBusWidth - 1:0] boot_ins_cmd, boot_gen_cmd;
 
-  rand fatal_err_e      which_fatal_err;
-  rand err_code_e       which_err_code;
-  rand which_fifo_e     which_fifo;
-  rand which_fifo_err_e which_fifo_err;
-  rand invalid_mubi_e   which_invalid_mubi;
+  rand fatal_err_e                    which_fatal_err;
+  rand err_code_e                     which_err_code;
+  rand which_fifo_e                   which_fifo;
+  rand which_fifo_err_e               which_fifo_err;
+  rand invalid_mubi_e                 which_invalid_mubi;
+  rand csrng_pkg::csrng_cmd_sts_e     which_cmd_sts_err;
+  rand bit                            disable_regwen;
 
   // Constraints
-  // TODO: utilize suggestions in PR9535 to generate "other" values when testing alerts
+  constraint glen_auto_mode_c {glen_auto_mode dist {
+    1 :/ 50,
+    [2:100] :/ 49,
+    4095 :/ 1 };}
   constraint force_disable_c {force_disable dist {
     1 :/ force_disable_pct,
     0 :/ (100 - force_disable_pct) };}
@@ -58,14 +70,30 @@ class edn_env_cfg extends cip_base_env_cfg #(.RAL_T(edn_reg_block));
     MuBi4False :/ (100 - cmd_fifo_rst_pct) };}
   constraint num_endpoints_c {num_endpoints dist {
     MIN_NUM_ENDPOINTS :/ 40,
-    MAX_NUM_ENDPOINTS :/ 40,
-    [MIN_NUM_ENDPOINTS + 1:MAX_NUM_ENDPOINTS - 1] :/ 20 };}
+    `NUM_END_POINTS   :/ 40,
+    [MIN_NUM_ENDPOINTS:`NUM_END_POINTS] :/ 20 };}
   constraint req_mode_c {{boot_req_mode, auto_req_mode} dist {
     {MuBi4True, MuBi4False}  :/ boot_req_mode_pct,
     {MuBi4False, MuBi4True}  :/ auto_req_mode_pct,
     {MuBi4False, MuBi4False} :/ (100 - boot_req_mode_pct - auto_req_mode_pct) };
 
     num_boot_reqs inside { [min_num_boot_reqs:max_num_boot_reqs] };}
+
+  constraint which_err_code_c {which_err_code dist {
+    // Certain error codes are more interesting for coverage, so give each of them a higher weight.
+    edn_ack_sm_err  :/ 5,
+    edn_main_sm_err :/ 5,
+    edn_cntr_err    :/ 5
+    // All other error codes will implicitly get a weight of 1.
+  };}
+
+  // CMD_STS_SUCCESS is not an error so ignore it.
+  constraint which_cmd_sts_err_c {{which_cmd_sts_err != csrng_pkg::CMD_STS_SUCCESS};}
+
+  constraint disable_regwen_c {disable_regwen dist {
+    1 :/ disable_regwen_pct,
+    0 :/ (100 - disable_regwen_pct)
+  };}
 
   // Functions
   function void post_randomize();
@@ -82,28 +110,23 @@ class edn_env_cfg extends cip_base_env_cfg #(.RAL_T(edn_reg_block));
     end
   endfunction // post_randomize
 
-  virtual function void initialize(bit [31:0] csr_base_addr = '1);
+  virtual function void initialize(bit inherit_ral_models = 1'b0);
     list_of_alerts = edn_env_pkg::LIST_OF_ALERTS;
     tl_intg_alert_name = "fatal_alert";
     sec_cm_alert_name = "fatal_alert";
-    super.initialize(csr_base_addr);
+    super.initialize(inherit_ral_models);
 
     // create config objects
     m_csrng_agent_cfg = csrng_agent_cfg::type_id::create("m_csrng_genbits_agent_cfg");
 
-    for (int i = 0; i < MAX_NUM_ENDPOINTS; i++) begin
+    for (int i = 0; i < `NUM_END_POINTS; i++) begin
       m_endpoint_agent_cfg[i] = push_pull_agent_cfg#(.HostDataWidth(edn_pkg::
                                 FIPS_ENDPOINT_BUS_WIDTH))::type_id::create
                                 ($sformatf("m_endpoint_agent_cfg[%0d]", i));
     end
 
     // set num_interrupts & num_alerts
-    begin
-      uvm_reg rg = ral.get_reg_by_name("intr_state");
-      if (rg != null) begin
-        num_interrupts = ral.intr_state.get_n_used_bits();
-      end
-    end
+    num_interrupts = ral.intr_state.get_n_used_bits();
 
     // get edn assert interface handle
     if (!uvm_config_db#(virtual edn_assert_if)::
@@ -138,8 +161,8 @@ class edn_env_cfg extends cip_base_env_cfg #(.RAL_T(edn_reg_block));
         boot_req_mode_pct)};
     str = {str,  $sformatf("\n\t |***** auto_req_mode_pct            : %10d *****| \t",
         auto_req_mode_pct)};
-    str = {str,  $sformatf("\n\t |***** MAX_NUM_ENDPOINTS            : %10d *****| \t",
-        MAX_NUM_ENDPOINTS)};
+    str = {str,  $sformatf("\n\t |***** `NUM_END_POINTS              : %10d *****| \t",
+        `NUM_END_POINTS)};
     str = {str,  $sformatf("\n\t |***** min_num_boot_reqs            : %10d *****| \t",
         min_num_boot_reqs)};
     str = {str,  $sformatf("\n\t |***** max_num_boot_reqs            : %10d *****| \t",

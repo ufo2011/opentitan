@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include "sw/device/lib/dif/dif_base.h"
 #include "sw/device/lib/dif/dif_test_base.h"
 
-#include "sensor_ctrl_regs.h"  // Generated.
+#include "hw/top/sensor_ctrl_regs.h"  // Generated.
 
 namespace dif_sensor_ctrl_unittest {
 namespace {
@@ -30,7 +30,7 @@ class SensorCtrlTest : public Test, public MmioTest {
 
 TEST_F(SensorCtrlTest, BadArgs) {
   uint32_t good_idx = 0;
-  uint32_t bad_idx = SENSOR_CTRL_PARAM_NUM_ALERT_EVENTS + 1;
+  uint32_t bad_idx = SENSOR_CTRL_PARAM_NUM_ALERT_EVENTS;
   dif_toggle_t toggle_arg{};
   dif_sensor_ctrl_events_t events_arg{};
   dif_sensor_ctrl_io_power_status_t power_arg{};
@@ -38,9 +38,21 @@ TEST_F(SensorCtrlTest, BadArgs) {
   EXPECT_DIF_BADARG(dif_sensor_ctrl_lock_cfg(nullptr));
 
   EXPECT_DIF_BADARG(
+      dif_sensor_ctrl_get_ast_event_trigger(nullptr, good_idx, &toggle_arg));
+  EXPECT_DIF_BADARG(dif_sensor_ctrl_get_ast_event_trigger(&sensor_ctrl, bad_idx,
+                                                          &toggle_arg));
+  EXPECT_DIF_BADARG(
+      dif_sensor_ctrl_get_ast_event_trigger(&sensor_ctrl, good_idx, nullptr));
+
+  EXPECT_DIF_BADARG(
       dif_sensor_ctrl_set_ast_event_trigger(nullptr, good_idx, toggle_arg));
   EXPECT_DIF_BADARG(
       dif_sensor_ctrl_set_ast_event_trigger(&sensor_ctrl, bad_idx, toggle_arg));
+
+  EXPECT_DIF_BADARG(
+      dif_sensor_ctrl_set_alert_en(nullptr, good_idx, toggle_arg));
+  EXPECT_DIF_BADARG(
+      dif_sensor_ctrl_set_alert_en(&sensor_ctrl, bad_idx, toggle_arg));
 
   EXPECT_DIF_BADARG(
       dif_sensor_ctrl_set_alert_fatal(nullptr, good_idx, toggle_arg));
@@ -79,6 +91,48 @@ TEST_F(SensorCtrlTest, TriggerEvents) {
     EXPECT_DIF_OK(dif_sensor_ctrl_set_ast_event_trigger(&sensor_ctrl, i,
                                                         kDifToggleDisabled));
   }
+
+  for (size_t i = 0; i < SENSOR_CTRL_PARAM_NUM_ALERT_EVENTS; i++) {
+    dif_toggle_t enable = kDifToggleDisabled;
+    EXPECT_READ32(SENSOR_CTRL_ALERT_TRIG_REG_OFFSET, 1 << i);
+    EXPECT_DIF_OK(
+        dif_sensor_ctrl_get_ast_event_trigger(&sensor_ctrl, i, &enable));
+    EXPECT_EQ(enable, kDifToggleEnabled);
+  }
+
+  for (size_t i = 0; i < SENSOR_CTRL_PARAM_NUM_ALERT_EVENTS; i++) {
+    dif_toggle_t enable = kDifToggleEnabled;
+    EXPECT_READ32(SENSOR_CTRL_ALERT_TRIG_REG_OFFSET, ~(1 << i));
+    EXPECT_DIF_OK(
+        dif_sensor_ctrl_get_ast_event_trigger(&sensor_ctrl, i, &enable));
+    EXPECT_EQ(enable, kDifToggleDisabled);
+  }
+}
+
+TEST_F(SensorCtrlTest, AlertEnable) {
+  for (size_t i = 0; i < SENSOR_CTRL_PARAM_NUM_ALERT_EVENTS; i++) {
+    EXPECT_READ32(SENSOR_CTRL_CFG_REGWEN_REG_OFFSET, 1);
+    EXPECT_WRITE32(SENSOR_CTRL_ALERT_EN_0_REG_OFFSET + i * 4,
+                   kMultiBitBool4True);
+    EXPECT_DIF_OK(
+        dif_sensor_ctrl_set_alert_en(&sensor_ctrl, i, kDifToggleEnabled));
+  }
+
+  for (size_t i = 0; i < SENSOR_CTRL_PARAM_NUM_ALERT_EVENTS; i++) {
+    EXPECT_READ32(SENSOR_CTRL_CFG_REGWEN_REG_OFFSET, 1);
+    EXPECT_WRITE32(SENSOR_CTRL_ALERT_EN_0_REG_OFFSET + i * 4,
+                   kMultiBitBool4False);
+    EXPECT_DIF_OK(
+        dif_sensor_ctrl_set_alert_en(&sensor_ctrl, i, kDifToggleDisabled));
+  }
+
+  EXPECT_READ32(SENSOR_CTRL_CFG_REGWEN_REG_OFFSET, 0);
+  EXPECT_EQ(dif_sensor_ctrl_set_alert_en(&sensor_ctrl, 0, kDifToggleDisabled),
+            kDifLocked);
+
+  EXPECT_READ32(SENSOR_CTRL_CFG_REGWEN_REG_OFFSET, 0);
+  EXPECT_EQ(dif_sensor_ctrl_set_alert_en(&sensor_ctrl, 0, kDifToggleEnabled),
+            kDifLocked);
 }
 
 TEST_F(SensorCtrlTest, AlertFatality) {

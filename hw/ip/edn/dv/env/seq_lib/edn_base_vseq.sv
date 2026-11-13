@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,16 +16,11 @@ class edn_base_vseq extends cip_base_vseq #(
   bit [entropy_src_pkg::FIPS_BUS_WIDTH - 1:0]   fips;
   mubi4_t                                       flags;
   bit [3:0]                                     clen, additional_data;
-  bit [18:0]                                    glen;
-  bit [csrng_pkg::CSRNG_CMD_WIDTH - 1:0]        cmd_data;
+  bit [11:0]                                    glen;
+  bit [csrng_pkg::CmdBusWidth - 1:0]            cmd_data;
 
-  rand bit                                      set_regwen;
   rand bit                                      write_reserved_err_code_test_reg;
   virtual edn_cov_if                            cov_vif;
-
-  constraint regwen_c {
-    set_regwen == 0;
-  }
 
   virtual task body();
     cov_vif.cg_cfg_sample(.cfg(cfg));
@@ -40,13 +35,16 @@ class edn_base_vseq extends cip_base_vseq #(
 
     if (do_edn_init) begin
       // Initialize DUT and start device sequence
-      edn_init();
       device_init();
+      edn_init();
     end
   endtask
 
   virtual task device_init();
     csrng_device_seq   m_dev_seq;
+
+    // Let CSRNG agent know that EDN interface is no longer disabled.
+    cfg.edn_vif.drive_edn_disable(0);
 
     m_dev_seq = csrng_device_seq::type_id::create("m_dev_seq");
     fork
@@ -56,23 +54,51 @@ class edn_base_vseq extends cip_base_vseq #(
 
   virtual task edn_init(string reset_kind = "HARD");
 
-    if (cfg.use_invalid_mubi) begin
-      // Turn off DUT assertions so that the corresponding alert can fire
-      cfg.edn_assert_vif.assert_off_alert();
-    end
+    additional_data = 0;
 
     if (cfg.boot_req_mode == MuBi4True) begin
       `DV_CHECK_STD_RANDOMIZE_FATAL(flags)
       `DV_CHECK_STD_RANDOMIZE_FATAL(glen)
-      wr_cmd(.cmd_type("boot_ins"), .acmd(csrng_pkg::INS), .clen(0), .flags(flags), .glen(glen));
+      wr_cmd(.cmd_type(edn_env_pkg::BootIns), .acmd(csrng_pkg::INS), .clen(0), .flags(flags),
+             .glen(glen), .mode(edn_env_pkg::BootReqMode));
       `DV_CHECK_STD_RANDOMIZE_FATAL(flags)
       if (cfg.force_disable) begin
-        wr_cmd(.cmd_type("boot_gen"), .acmd(csrng_pkg::GEN), .clen(0), .flags(flags),
-               .glen(1'b1));
+        wr_cmd(.cmd_type(edn_env_pkg::BootGen), .acmd(csrng_pkg::GEN), .clen(0), .flags(flags),
+               .glen(1'b1), .mode(edn_env_pkg::BootReqMode));
       end
       else begin
-        wr_cmd(.cmd_type("boot_gen"), .acmd(csrng_pkg::GEN), .clen(0), .flags(flags),
-               .glen(cfg.num_boot_reqs));
+        wr_cmd(.cmd_type(edn_env_pkg::BootGen), .acmd(csrng_pkg::GEN), .clen(0), .flags(flags),
+               .glen(cfg.num_boot_reqs), .mode(edn_env_pkg::BootReqMode));
+      end
+    end
+
+    if (cfg.auto_req_mode == MuBi4True) begin
+      // Verify CMD_FIFO_RST bit
+      for (int i = 0; i < 13; i++) begin
+        `DV_CHECK_STD_RANDOMIZE_FATAL(cmd_data)
+        csr_wr(.ptr(ral.generate_cmd), .value(cmd_data));
+      end
+      csr_wr(.ptr(ral.ctrl.cmd_fifo_rst), .value(MuBi4True));
+      csr_wr(.ptr(ral.ctrl.cmd_fifo_rst), .value(MuBi4False));
+
+      `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(clen, clen dist { 0 :/ 20, [1:12] :/ 80 };)
+      `DV_CHECK_STD_RANDOMIZE_FATAL(flags)
+      `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(glen, glen dist { 0 :/ 20, [1:$] :/ 80 };)
+      wr_cmd(.cmd_type(edn_env_pkg::AutoRes), .acmd(csrng_pkg::RES), .clen(clen), .flags(flags),
+             .glen(glen), .mode(edn_env_pkg::AutoReqMode));
+      for (int i = 0; i < clen; i++) begin
+        `DV_CHECK_STD_RANDOMIZE_FATAL(cmd_data)
+        wr_cmd(.cmd_type(edn_env_pkg::AutoRes), .cmd_data(cmd_data),
+               .mode(edn_env_pkg::AutoReqMode));
+      end
+      `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(clen, clen dist { 0 :/ 20, [1:12] :/ 80 };)
+      `DV_CHECK_STD_RANDOMIZE_FATAL(flags)
+      wr_cmd(.cmd_type(edn_env_pkg::AutoGen), .acmd(csrng_pkg::GEN), .clen(clen), .flags(flags),
+             .glen(cfg.glen_auto_mode), .mode(edn_env_pkg::AutoReqMode));
+      for (int i = 0; i < clen; i++) begin
+        `DV_CHECK_STD_RANDOMIZE_FATAL(cmd_data)
+        wr_cmd(.cmd_type(edn_env_pkg::AutoGen), .cmd_data(cmd_data),
+               .mode(edn_env_pkg::AutoReqMode));
       end
     end
 
@@ -81,47 +107,17 @@ class edn_base_vseq extends cip_base_vseq #(
     ral.ctrl.boot_req_mode.set(cfg.boot_req_mode);
     ral.ctrl.auto_req_mode.set(cfg.auto_req_mode);
     csr_update(.csr(ral.ctrl));
+    // Signal that the EDN has been enabled for the first time.
+    cfg.base_vseq_edn_enabled = 1'b1;
 
-    if (cfg.auto_req_mode == MuBi4True) begin
-      // Verify CMD_FIFO_RST bit
-      for (int i = 0; i < 13; i++) begin
-        `DV_CHECK_STD_RANDOMIZE_FATAL(cmd_data)
-        csr_wr(.ptr(ral.generate_cmd), .value(cmd_data));
-      end
-      ral.ctrl.cmd_fifo_rst.set(MuBi4True);
-      csr_update(.csr(ral.ctrl));
-      // TODO: Verify can't write until reset
-      ral.ctrl.cmd_fifo_rst.set(MuBi4False);
-      csr_update(.csr(ral.ctrl));
-
-      `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(clen, clen dist { 0 :/ 20, [1:12] :/ 80 };)
-      `DV_CHECK_STD_RANDOMIZE_FATAL(flags)
-      `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(glen, glen dist { 0 :/ 20, [1:$] :/ 80 };)
-      cov_vif.cg_cs_cmds_sample(.clen(clen), .flags(flags), .glen(glen));
-      wr_cmd(.cmd_type("reseed"), .acmd(csrng_pkg::RES), .clen(clen), .flags(flags), .glen(glen));
-      for (int i = 0; i < clen; i++) begin
-        `DV_CHECK_STD_RANDOMIZE_FATAL(cmd_data)
-        wr_cmd(.cmd_type("reseed"), .cmd_data(cmd_data));
-      end
-      `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(clen, clen dist { 0 :/ 20, [1:12] :/ 80 };)
-      `DV_CHECK_STD_RANDOMIZE_FATAL(flags)
-      glen = 1;
-      cov_vif.cg_cs_cmds_sample(.clen(clen), .flags(flags), .glen(glen));
-      wr_cmd(.cmd_type("generate"), .acmd(csrng_pkg::GEN), .clen(clen), .flags(flags), .glen(glen));
-      for (int i = 0; i < clen; i++) begin
-        `DV_CHECK_STD_RANDOMIZE_FATAL(cmd_data)
-        wr_cmd(.cmd_type("generate"), .cmd_data(cmd_data));
-      end
-    end
-
-    // If set_regwen is set, write random value to the EDN, and expect the write won't be taken.
-    if (set_regwen) begin
+    // If cfg.disable_regwen is set, write random value to the EDN, and expect the write won't be taken.
+    if (cfg.disable_regwen) begin
       csr_wr(.ptr(ral.regwen), .value(0));
       csr_wr(.ptr(ral.ctrl), .value($urandom));
     end
 
     // Read and check ctrl register value. Check in scb.
-    if ($urandom_range(0, 19) == 19 || set_regwen) begin
+    if ($urandom_range(0, 19) == 19 || cfg.disable_regwen) begin
       bit [TL_DW-1:0] val;
       csr_rd(.ptr(ral.ctrl), .value(val));
     end
@@ -129,79 +125,105 @@ class edn_base_vseq extends cip_base_vseq #(
     if (write_reserved_err_code_test_reg) begin
       `DV_CHECK_RANDOMIZE_WITH_FATAL(ral.err_code_test.err_code_test,
           !(value inside
-          {EdnSfifoRescmdErrTest, EdnSfifoGencmdErrTest, EdnErrTest, EdnAckSmErrTest,
+          {EdnSfifoRescmdErrTest, EdnSfifoGencmdErrTest, EdnAckSmErrTest,
            EdnMainSmErrTest, EdnCntrErrTest, EdnFifoWriteErrTest, EdnFifoReadErrTest,
            EdnFifoStateErrTest});)
       csr_update(ral.err_code_test);
     end
   endtask
 
-  virtual task dut_shutdown();
-    // check for pending edn operations and wait for them to complete
-    // TODO
-  endtask
-
-  virtual task instantiate_csrng();
+  virtual task instantiate_csrng(edn_env_pkg::hw_req_mode_e mode);
     `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(clen, clen dist { 0 :/ 20, [1:12] :/ 80 };)
     `DV_CHECK_STD_RANDOMIZE_FATAL(flags)
     `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(glen, glen dist { 0 :/ 20, [1:$] :/ 80 };)
-    cov_vif.cg_cs_cmds_sample(.clen(clen), .flags(flags), .glen(glen));
-    wr_cmd(.cmd_type("sw"), .acmd(csrng_pkg::INS), .clen(clen), .flags(flags), .glen(glen));
+    wr_cmd(.cmd_type(edn_env_pkg::Sw), .acmd(csrng_pkg::INS), .clen(clen), .flags(flags),
+           .glen(glen), .mode(mode));
     for (int i = 0; i < clen; i++) begin
       `DV_CHECK_STD_RANDOMIZE_FATAL(cmd_data)
-      wr_cmd(.cmd_type("sw"), .cmd_data(cmd_data));
+      wr_cmd(.cmd_type(edn_env_pkg::Sw), .cmd_data(cmd_data), .mode(mode));
     end
   endtask
 
-  virtual task wr_cmd(string cmd_type = "", csrng_pkg::acmd_e acmd = csrng_pkg::INV,
+  virtual task wr_cmd(edn_env_pkg::cmd_type_e cmd_type, csrng_pkg::acmd_e acmd = csrng_pkg::INV,
                       bit[3:0] clen = '0, bit[3:0] flags = MuBi4False, bit[17:0] glen = '0,
-                      bit [csrng_pkg::CSRNG_CMD_WIDTH - 1:0] cmd_data = '0);
+                      bit [csrng_pkg::CmdBusWidth - 1:0] cmd_data = '0,
+                      edn_env_pkg::hw_req_mode_e mode, bit wait_for_ack = 1);
+
+    if (!additional_data) begin
+      cov_vif.cg_cs_cmds_sample(.acmd(acmd), .clen(clen), .flags(flags),
+                                .glen(glen), .mode(mode), .cmd_src(cmd_type));
+    end
 
     case (cmd_type)
-      "boot_ins": csr_wr(.ptr(ral.boot_ins_cmd), .value({glen, flags, clen, 1'b0, acmd}));
-      "boot_gen": csr_wr(.ptr(ral.boot_gen_cmd), .value({glen, flags, clen, 1'b0, acmd}));
-      "generate": begin
-                    if (additional_data) begin
-                      csr_wr(.ptr(ral.generate_cmd), .value(cmd_data));
-                      additional_data -= 1;
-                    end
-                    else begin
-                      csr_wr(.ptr(ral.generate_cmd), .value({glen, flags, clen, 1'b0, acmd}));
-                      additional_data = clen;
-                    end
-                  end
-      "reseed"  : begin
-                    if (additional_data) begin
-                      csr_wr(.ptr(ral.reseed_cmd), .value(cmd_data));
-                      additional_data -= 1;
-                    end
-                    else begin
-                      csr_wr(.ptr(ral.reseed_cmd), .value({glen, flags, clen, 1'b0, acmd}));
-                      additional_data = clen;
-                    end
-                  end
-      "sw"      : begin
-                    if (additional_data) begin
-                      csr_wr(.ptr(ral.sw_cmd_req), .value(cmd_data));
-                      additional_data -= 1;
-                    end
-                    else begin
-                      csr_spinwait(.ptr(ral.sw_cmd_sts.cmd_rdy), .exp_data(1'b1));
-                      csr_wr(.ptr(ral.sw_cmd_req), .value({glen, flags, clen, 1'b0, acmd}));
-                      additional_data = clen;
-                    end
-                    if (!additional_data) begin
-                      wait_cmd_req_done();
-                    end
-                  end
+      edn_env_pkg::BootIns: csr_wr(.ptr(ral.boot_ins_cmd),
+                                   .value({glen, flags, clen, 1'b0, acmd}));
+      edn_env_pkg::BootGen: csr_wr(.ptr(ral.boot_gen_cmd), .value({glen, flags, clen, 1'b0, acmd}));
+      edn_env_pkg::AutoGen: begin
+        if (additional_data) begin
+          csr_wr(.ptr(ral.generate_cmd), .value(cmd_data));
+          additional_data -= 1;
+        end
+        else begin
+          csr_wr(.ptr(ral.generate_cmd), .value({glen, flags, clen, 1'b0, acmd}));
+          additional_data = clen;
+        end
+      end
+      edn_env_pkg::AutoRes: begin
+        if (additional_data) begin
+          csr_wr(.ptr(ral.reseed_cmd), .value(cmd_data));
+          additional_data -= 1;
+        end
+        else begin
+          csr_wr(.ptr(ral.reseed_cmd), .value({glen, flags, clen, 1'b0, acmd}));
+          additional_data = clen;
+        end
+      end
+      edn_env_pkg::Sw: begin
+        if (additional_data) begin
+          // Use a spinwait delay that is high enough to leave room for other requests in between polling
+          // requests to the sw_cmd_sts register.
+          `DV_SPINWAIT_EXIT(
+            csr_spinwait(.ptr(ral.sw_cmd_sts.cmd_reg_rdy), .exp_data(1'b1),
+                         .spinwait_delay_ns(1000));,
+            wait(cfg.abort_sw_cmd);
+            wait_no_outstanding_access();,
+            "Aborted SW command"
+          )
+          if (!cfg.abort_sw_cmd) begin
+            csr_wr(.ptr(ral.sw_cmd_req), .value(cmd_data));
+          end
+          additional_data -= 1;
+        end
+        else begin
+          // Use a spinwait delay that is high enough to leave room for other requests in between polling
+          // requests to the sw_cmd_sts register.
+          `DV_SPINWAIT_EXIT(
+            csr_spinwait(.ptr(ral.sw_cmd_sts.cmd_rdy), .exp_data(1'b1),
+                         .spinwait_delay_ns(1000));,
+            wait(cfg.abort_sw_cmd);
+            wait_no_outstanding_access();,
+            "Aborted SW command"
+          )
+          if (!cfg.abort_sw_cmd) begin
+            csr_wr(.ptr(ral.sw_cmd_req), .value({glen, flags, clen, 1'b0, acmd}));
+            additional_data = clen;
+          end
+        end
+        if (!additional_data && !cfg.abort_sw_cmd && wait_for_ack) begin
+          wait_cmd_req_done();
+        end
+      end
       default   : `uvm_fatal(`gfn, $sformatf("Invalid cmd_type: %0s", cmd_type))
     endcase
   endtask
 
   virtual task wait_cmd_req_done();
+    bit [TL_DW-1:0] val;
     // Expect/Clear interrupt bit
     csr_spinwait(.ptr(ral.intr_state.edn_cmd_req_done), .exp_data(1'b1));
     check_interrupts(.interrupts((1 << CmdReqDone)), .check_set(1'b1));
+    // Read the sw_cmd_sts reg such that the scoreboard can check if the values are correct.
+    csr_rd(.ptr(ral.sw_cmd_sts), .value(val));
   endtask
 
   task force_fifo_err(string path1, string path2, bit value1, bit value2,
@@ -220,9 +242,13 @@ class edn_base_vseq extends cip_base_vseq #(
     csr_spinwait(.ptr(reg_field), .exp_data(exp_data));
     // Clear interrupt_enable
     csr_wr(.ptr(ral.intr_enable), .value(32'd0));
+    // This assertion has to be disabled, since FIFO clear on edn_disable leads
+    // to unstable h_data (when FIFO write error introduced unaccounted values in FIFO)
+    $assertoff(0, "tb.csrng_if.cmd_push_if.H_DataStableWhenValidAndNotReady_A");
     ral.ctrl.edn_enable.set(prim_mubi_pkg::MuBi4False);
     ral.ctrl.cmd_fifo_rst.set(prim_mubi_pkg::MuBi4True);
     csr_update(.csr(ral.ctrl));
+    $asserton(0, "tb.csrng_if.cmd_push_if.H_DataStableWhenValidAndNotReady_A");
     // Expect/Clear interrupt bit
     check_interrupts(.interrupts((1 << FifoErr)), .check_set(1'b1));
     `DV_CHECK(uvm_hdl_release(path1));
@@ -290,7 +316,7 @@ class edn_base_vseq extends cip_base_vseq #(
   endtask // force_path_err
 
   // Find the first or last index in the original string that the target character appears
-  function automatic int find_index (string target, string original_str, string which_index);
+  function automatic int find_index (byte target, string original_str, string which_index);
     int        index;
     case (which_index)
       "first": begin

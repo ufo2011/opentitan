@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -29,8 +29,8 @@ BINARIES = [
 BAZEL_BINARIES = [
     '//sw/device/lib/testing/test_rom',
     '//sw/device/sca:aes_serial',
-    '//sw/device/tests:aes_smoketest_prog',
     '//sw/device/examples/hello_world',
+    '//sw/device/tests:aes_smoketest_sim_verilator',
 ]
 
 
@@ -103,12 +103,6 @@ def main():
     delete_path(REPO_TOP / 'hw' / topname / 'data/autogen')
     delete_path(REPO_TOP / 'hw' / topname / 'dv/autogen')
     delete_path(REPO_TOP / 'hw' / topname / 'dv/env/autogen')
-    delete_path(REPO_TOP / 'hw' / topname / 'ip/ast/rtl')
-    delete_path(REPO_TOP / 'hw' / topname / 'ip/clkmgr')
-    delete_path(REPO_TOP / 'hw' / topname / 'ip/flash_ctrl')
-    delete_path(REPO_TOP / 'hw' / topname / 'ip/pinmux')
-    delete_path(REPO_TOP / 'hw' / topname / 'ip/pwrmgr')
-    delete_path(REPO_TOP / 'hw' / topname / 'ip/rstmgr')
     delete_path(REPO_TOP / 'hw' / topname / 'ip/sensor_ctrl/rtl')
     delete_path(REPO_TOP / 'hw' / topname / 'ip/xbar_main')
     delete_path(REPO_TOP / 'hw' / topname / 'ip/xbar_peri')
@@ -141,15 +135,13 @@ def main():
     # Patch hjson files for Bazel
     print("Transplanting autogen-ed hjson files")
     REG_FILES = [
-        'ip_autogen/alert_handler/data/alert_handler.hjson',
-        'ip/clkmgr/data/autogen/clkmgr.hjson',
-        'ip/flash_ctrl/data/autogen/flash_ctrl.hjson',
-        'ip/pwrmgr/data/autogen/pwrmgr.hjson',
-        'ip/rstmgr/data/autogen/rstmgr.hjson',
-        'ip/pinmux/data/autogen/pinmux.hjson',
-        'ip_autogen/rv_plic/data/rv_plic.hjson',
-        'ip/ast/data/ast.hjson',
         'ip/sensor_ctrl/data/sensor_ctrl.hjson',
+        'ip_autogen/clkmgr/data/clkmgr.hjson',
+        'ip_autogen/flash_ctrl/data/flash_ctrl.hjson',
+        'ip_autogen/pinmux/data/pinmux.hjson',
+        'ip_autogen/pwrmgr/data/pwrmgr.hjson',
+        'ip_autogen/rstmgr/data/rstmgr.hjson',
+        'ip_autogen/rv_plic/data/rv_plic.hjson',
     ]
     for reg_file in REG_FILES:
         src = REPO_TOP / 'hw' / topname / reg_file
@@ -173,6 +165,12 @@ def main():
         new.write_text(text)
         (old.parent / new.name).write_text(text)
 
+    # Hack to make bindgen generate less for English Breakfast.
+    new = REPO_TOP / 'sw/host/ot_hal/bindgen/BUILD'
+    text = new.read_text()
+    text = text.replace('_TOPLEVEL = "earlgrey"', '_TOPLEVEL = "englishbreakfast"')
+    new.write_text(text)
+
     if not args.build:
         return
 
@@ -180,7 +178,9 @@ def main():
     shell_out([
         REPO_TOP / 'bazelisk.sh',
         'build',
+        '--features=-rv32_bitmanip',
         '--copt=-DOT_IS_ENGLISH_BREAKFAST_REDUCED_SUPPORT_FOR_INTERNAL_USE_ONLY_',
+        '--define=DISABLE_VERILATOR_BUILD=true',
     ] + BAZEL_BINARIES)
 
 

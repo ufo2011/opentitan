@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,16 +7,24 @@ load("@ot_python_deps//:requirements.bzl", "requirement")
 
 package(default_visibility = ["//visibility:public"])
 
+filegroup(
+    name = "doc_files",
+    srcs = glob(["**/*.md"]),
+)
+
 py_library(
     name = "topgen",
     srcs = [
         "__init__.py",
         "gen_top_docs.py",
+        "secure_prng.py",
         "validate.py",
     ],
     deps = [
         ":merge",
+        ":typing",
         requirement("tabulate"),
+        requirement("pycryptodome"),
     ],
 )
 
@@ -25,6 +33,14 @@ py_library(
     srcs = ["c_test.py"],
     deps = [
         ":lib",
+    ],
+)
+
+py_library(
+    name = "typing",
+    srcs = ["typing.py"],
+    deps = [
+        "//util/reggen:ip_block",
     ],
 )
 
@@ -50,10 +66,13 @@ py_library(
         "intermodule.py",
         "lib.py",
         "resets.py",
+        "rust.py",
     ],
     deps = [
+        "//util:version_file",
         "//util/reggen:inter_signal",
         "//util/reggen:ip_block",
+        "//util/reggen:md_helpers",
         "//util/reggen:validate",
         requirement("hjson"),
         requirement("mako"),

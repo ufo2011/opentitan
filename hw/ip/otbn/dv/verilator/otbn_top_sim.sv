@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@ module otbn_top_sim (
 );
   import otbn_pkg::*;
   import edn_pkg::*;
-  import keymgr_pkg::otbn_key_req_t;
+  import keymgr_dpe_pkg::wide_hw_key_req_t;
 
   // Size of the instruction memory, in bytes
   parameter int ImemSizeByte = otbn_reg_pkg::OTBN_IMEM_SIZE;
@@ -25,9 +25,9 @@ module otbn_top_sim (
   logic      otbn_done, otbn_done_r, otbn_done_rr;
   core_err_bits_t core_err_bits;
   err_bits_t otbn_err_bits, otbn_err_bits_r, otbn_err_bits_rr;
-  logic      otbn_start;
+  logic      otbn_start, otbn_start_r;
 
-  // Intialise otbn_start_done to 1 so that we only signal otbn_start after we have seen a reset. If
+  // Initialise otbn_start_done to 1 so that we only signal otbn_start after we have seen a reset. If
   // you don't do this, we start OTBN before the reset, which can generate confusing trace messages.
   logic      otbn_start_done = 1'b1;
 
@@ -48,34 +48,38 @@ module otbn_top_sim (
   logic                     dmem_rerror;
 
   // Entropy Distribution Network (EDN)
-  logic                     edn_rnd_req, edn_urnd_req;
-  logic                     edn_rnd_ack, edn_urnd_ack;
-  logic [EdnDataWidth-1:0]  edn_rnd_data, edn_urnd_data;
+  logic                     edn_rnd_req;
+  logic                     edn_rnd_ack;
+  logic [EdnDataWidth-1:0]  edn_rnd_data;
   logic                     edn_rnd_data_valid;
   logic                     edn_urnd_data_valid;
+
+  edn_req_t                 urnd_req;
+  edn_rsp_t                 urnd_rsp;
 
   // Instruction counter (feeds into otbn.INSN_CNT in full block)
   logic [31:0]              insn_cnt;
   logic [1:0][SideloadKeyWidth-1:0] sideload_key_shares;
-  assign sideload_key_shares[0] = {12{32'hDEADBEEF}};
-  assign sideload_key_shares[1] = {12{32'hBAADF00D}};
-  otbn_key_req_t keymgr_key;
+  assign sideload_key_shares[0] = {16{32'hDEADBEEF}};
+  assign sideload_key_shares[1] = {16{32'hBAADF00D}};
+  wide_hw_key_req_t keymgr_key;
   assign keymgr_key.key[0] = sideload_key_shares[0];
   assign keymgr_key.key[1] = sideload_key_shares[1];
   assign keymgr_key.valid  = 1'b1;
 
   logic secure_wipe_running;
+  logic wfi_pending;
+  logic wfi_pending_q;
 
   otbn_core #(
     .ImemSizeByte             ( ImemSizeByte ),
     .DmemSizeByte             ( DmemSizeByte ),
-    .SecMuteUrnd              ( 1'b0         ),
     .SecSkipUrndReseedAtStart ( 1'b0         )
   ) u_otbn_core (
     .clk_i                       ( IO_CLK                     ),
     .rst_ni                      ( IO_RST_N                   ),
 
-    .start_i                     ( otbn_start                 ),
+    .start_i                     ( otbn_start_r               ),
     .done_o                      ( otbn_done                  ),
     .locking_o                   (                            ),
     .secure_wipe_running_o       ( secure_wipe_running        ),
@@ -104,9 +108,16 @@ module otbn_top_sim (
     .edn_rnd_fips_i              ( 1'b1                       ),
     .edn_rnd_err_i               ( 1'b0                       ),
 
-    .edn_urnd_req_o              ( edn_urnd_req               ),
-    .edn_urnd_ack_i              ( edn_urnd_ack               ),
-    .edn_urnd_data_i             ( edn_urnd_data              ),
+    .edn_urnd_i                  ( urnd_rsp                   ),
+    .edn_urnd_o                  ( urnd_req                   ),
+
+    // Always enable the WFI instruction for this testbench.
+    .wfi_enabled_i               ( 1'b1                       ),
+    .wfi_pending_o               ( wfi_pending                ),
+    .wfi_resume_i                ( wfi_pending_q              ),
+
+    // Always enable the URND control feature for this testbench.
+    .urnd_ctrl_enabled_i         ( 1'b1                       ),
 
     .insn_cnt_o                  ( insn_cnt                   ),
     .insn_cnt_clear_i            ( 1'b0                       ),
@@ -123,8 +134,24 @@ module otbn_top_sim (
     .software_errs_fatal_i       ( 1'b0                       ),
 
     .sideload_key_shares_i       ( sideload_key_shares        ),
-    .sideload_key_shares_valid_i ( 2'b11                      )
+    .sideload_key_shares_valid_i ( 2'b11                      ),
+
+    .kmac_app_req_o(    ),
+    .kmac_app_rsp_i( '0 ),
+
+    .keymgr_app_i( '0 ),
+    .keymgr_app_o(    )
   );
+
+  // Any WFI pause ends after 1 cycle. Pulse wfi_resume_i once because when unpausing the WFI
+  // instruction it still must retire to deassert wfi_pending_o.
+  always_ff @(posedge IO_CLK, negedge IO_RST_N) begin
+    if (!IO_RST_N) begin
+      wfi_pending_q <= 1'b0;
+    end else begin
+      wfi_pending_q <= wfi_pending & ~wfi_pending_q;
+    end
+  end
 
   // The values returned by the mock EDN must match those set in `standalonesim.py`.
   localparam logic [1:0][WLEN-1:0] FixedEdnVals = {{4{64'hCCCC_CCCC_BBBB_BBBB}},
@@ -151,32 +178,19 @@ module otbn_top_sim (
 
   assign edn_rnd_data_valid = edn_rnd_req & edn_rnd_ack;
 
-  edn_req_t urnd_req;
-  edn_rsp_t urnd_rsp;
-
-  assign urnd_req.edn_req = edn_urnd_req;
-
-  otbn_mock_edn #(
-    .Width        ( WLEN         ),
-    .FixedEdnVals ( FixedEdnVals )
-  ) u_mock_urnd_edn(
-    .clk_i      ( IO_CLK       ),
-    .rst_ni     ( IO_RST_N     ),
-
-    .edn_req_i  ( urnd_req ),
-    .edn_rsp_o  ( urnd_rsp ),
-
-    .edn_ack_o  ( edn_urnd_ack  ),
-    .edn_data_o ( edn_urnd_data )
+  otbn_mock_edn_bivium u_mock_edn_bivium (
+    .clk_i     ( IO_CLK   ),
+    .rst_ni    ( IO_RST_N ),
+    .edn_req_i ( urnd_req ),
+    .edn_rsp_o ( urnd_rsp )
   );
 
-  assign edn_urnd_data_valid = edn_urnd_req & edn_urnd_ack;
+  assign edn_urnd_data_valid = u_otbn_core.u_otbn_rnd.urnd_reseed_ack_o;
 
   bind otbn_core otbn_trace_if #(.ImemAddrWidth, .DmemAddrWidth) i_otbn_trace_if (.*);
   bind otbn_core otbn_tracer u_otbn_tracer(.*, .otbn_trace(i_otbn_trace_if));
 
   assign u_otbn_core.i_otbn_trace_if.scramble_state_err_i = '0;
-  assign u_otbn_core.i_otbn_trace_if.ext_mubi_err_i = '0;
   assign u_otbn_core.i_otbn_trace_if.missed_gnt_i = '0;
 
   // Convert from core_err_bits_t to err_bits_t
@@ -196,7 +210,8 @@ module otbn_top_sim (
     illegal_insn:         core_err_bits.illegal_insn,
     call_stack:           core_err_bits.call_stack,
     bad_insn_addr:        core_err_bits.bad_insn_addr,
-    bad_data_addr:        core_err_bits.bad_data_addr
+    bad_data_addr:        core_err_bits.bad_data_addr,
+    mai_error:            core_err_bits.mai_error
   };
 
   // Track when OTBN is done with its initial secure wipe of the internal state.  We use this to
@@ -219,6 +234,7 @@ module otbn_top_sim (
   always @(posedge IO_CLK or negedge IO_RST_N) begin
     if (!IO_RST_N) begin
       otbn_start       <= 1'b0;
+      otbn_start_r     <= 1'b0;
       otbn_start_done  <= 1'b0;
       otbn_done_r      <= 1'b0;
       otbn_done_rr     <= 1'b0;
@@ -232,6 +248,7 @@ module otbn_top_sim (
         otbn_start <= 1'b0;
       end
 
+      otbn_start_r <= otbn_start;
       otbn_done_r <= otbn_done;
       otbn_done_rr <= otbn_done_r;
       otbn_err_bits_r <= otbn_err_bits;
@@ -251,30 +268,37 @@ module otbn_top_sim (
   prim_ram_1p_scr #(
     .Width              ( ExtWLEN       ),
     .Depth              ( DmemSizeWords ),
+    .InstDepth          ( DmemSizeWords ),
     .DataBitsPerMask    ( 39            ),
     .EnableParity       ( 0             ),
     .ReplicateKeyStream ( 1             )
   ) u_dmem (
-    .clk_i        ( IO_CLK            ),
-    .rst_ni       ( IO_RST_N          ),
+    .clk_i            ( IO_CLK            ),
+    .rst_ni           ( IO_RST_N          ),
 
-    .key_valid_i  ( 1'b1              ),
-    .key_i        ( TestScrambleKey   ),
-    .nonce_i      ( TestScrambleNonce ),
+    .key_valid_i      ( 1'b1              ),
+    .key_i            ( TestScrambleKey   ),
+    .nonce_i          ( TestScrambleNonce ),
 
-    .req_i        ( dmem_req          ),
-    .gnt_o        (                   ),
-    .write_i      ( dmem_write        ),
-    .addr_i       ( dmem_index        ),
-    .wdata_i      ( dmem_wdata        ),
-    .wmask_i      ( dmem_wmask        ),
-    .intg_error_i ( 1'b0              ),
+    .req_i            ( dmem_req          ),
+    .gnt_o            (                   ),
+    .write_i          ( dmem_write        ),
+    .addr_i           ( dmem_index        ),
+    .wdata_i          ( dmem_wdata        ),
+    .wmask_i          ( dmem_wmask        ),
+    .intg_error_i     ( 1'b0              ),
 
-    .rdata_o      ( dmem_rdata        ),
-    .rvalid_o     ( dmem_rvalid       ),
-    .raddr_o      (                   ),
-    .rerror_o     (                   ),
-    .cfg_i        ( '0                )
+    .rdata_o          ( dmem_rdata                              ),
+    .rvalid_o         ( dmem_rvalid                             ),
+    .raddr_o          (                                         ),
+    .rerror_o         (                                         ),
+    .cfg_i            ( prim_ram_1p_pkg::RAM_1P_CFG_REQ_DEFAULT ),
+    .cfg_o            (                                         ),
+
+    .wr_collision_o   (                   ),
+    .write_pending_o  (                   ),
+
+    .alert_o          (                   )
   );
 
   // No integrity errors in Verilator testbench
@@ -292,29 +316,36 @@ module otbn_top_sim (
   prim_ram_1p_scr #(
     .Width           ( 39            ),
     .Depth           ( ImemSizeWords ),
+    .InstDepth       ( ImemSizeWords ),
     .DataBitsPerMask ( 39            ),
     .EnableParity    ( 0             )
   ) u_imem (
-    .clk_i        ( IO_CLK                  ),
-    .rst_ni       ( IO_RST_N                ),
+    .clk_i            ( IO_CLK                  ),
+    .rst_ni           ( IO_RST_N                ),
 
-    .key_valid_i  ( 1'b1                    ),
-    .key_i        ( TestScrambleKey         ),
-    .nonce_i      ( TestScrambleNonce       ),
+    .key_valid_i      ( 1'b1                    ),
+    .key_i            ( TestScrambleKey         ),
+    .nonce_i          ( TestScrambleNonce       ),
 
-    .req_i        ( imem_req                ),
-    .gnt_o        (                         ),
-    .write_i      ( 1'b0                    ),
-    .addr_i       ( imem_index              ),
-    .wdata_i      ( '0                      ),
-    .wmask_i      ( '0                      ),
-    .intg_error_i ( 1'b0                    ),
+    .req_i            ( imem_req                ),
+    .gnt_o            (                         ),
+    .write_i          ( 1'b0                    ),
+    .addr_i           ( imem_index              ),
+    .wdata_i          ( '0                      ),
+    .wmask_i          ( '0                      ),
+    .intg_error_i     ( 1'b0                    ),
 
-    .rdata_o      ( imem_rdata              ),
-    .rvalid_o     ( imem_rvalid             ),
-    .raddr_o      (                         ),
-    .rerror_o     (                         ),
-    .cfg_i        ( '0                      )
+    .rdata_o          ( imem_rdata                              ),
+    .rvalid_o         ( imem_rvalid                             ),
+    .raddr_o          (                                         ),
+    .rerror_o         (                                         ),
+    .cfg_i            ( prim_ram_1p_pkg::RAM_1P_CFG_REQ_DEFAULT ),
+    .cfg_o            (                                         ),
+
+    .wr_collision_o   (                         ),
+    .write_pending_o  (                         ),
+
+    .alert_o          (                         )
   );
 
   // When OTBN is done let a few more cycles run then finish simulation
@@ -360,6 +391,10 @@ module otbn_top_sim (
 
     .cmd_i                 ( otbn_pkg::CmdExecute ),
     .cmd_en_i              ( otbn_start ),
+
+    // Match the CTRL configuration bits tied off on u_otbn_core above.
+    .wfi_enabled_i         ( 1'b1 ),
+    .urnd_ctrl_enabled_i   ( 1'b1 ),
 
     .lc_escalate_en_i      ( lc_ctrl_pkg::Off ),
     .lc_rma_req_i          ( lc_ctrl_pkg::Off ),
@@ -427,7 +462,8 @@ module otbn_top_sim (
   end
 
   bit err_latched;
-  assign err_latched = model_err_latched | done_mismatch_latched | err_bits_mismatch_latched;
+  assign err_latched = |{done_mismatch_latched, err_bits_mismatch_latched, cnt_mismatch_latched,
+                         model_err_latched};
 
   int bad_cycles;
   always_ff @(negedge IO_CLK or negedge IO_RST_N) begin

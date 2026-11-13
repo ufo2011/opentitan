@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,6 +42,7 @@ extern "C" {
  * state and OTP configuration.
  * @return: Any error encountered during initialization.
  */
+OT_WARN_UNUSED_RESULT
 rom_error_t shutdown_init(lifecycle_state_t lc_state);
 
 /**
@@ -87,6 +88,7 @@ typedef enum shutdown_error_redact {
 typedef enum shutdown_log_prefix {
   kShutdownLogPrefixBootFault = LOG_PREFIX_('B', 'F', 'V'),
   kShutdownLogPrefixLifecycle = LOG_PREFIX_('L', 'C', 'V'),
+  kShutdownLogPrefixVersion = LOG_PREFIX_('V', 'E', 'R'),
 } shutdown_log_prefix_t;
 
 /**
@@ -105,6 +107,7 @@ shutdown_error_redact_t shutdown_redact_policy(void);
  * @param severity: The redaction severity.
  * @return: The redacted error code.
  */
+OT_WARN_UNUSED_RESULT
 uint32_t shutdown_redact(rom_error_t reason, shutdown_error_redact_t severity);
 
 /**
@@ -117,8 +120,7 @@ uint32_t shutdown_redact(rom_error_t reason, shutdown_error_redact_t severity);
 // from within a test program.
 noreturn
 #endif
-    void
-    shutdown_finalize(rom_error_t reason);
+    void shutdown_finalize(rom_error_t reason);
 
 #ifdef __cplusplus
 }

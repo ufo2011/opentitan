@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ class spi_host_idlecsbactive_vseq extends spi_host_tx_rx_vseq;
     fork
       begin : isolation_fork
         fork
-          start_reactive_seq();
+          start_agent_reactive_seqs();
         join_none
 
         begin

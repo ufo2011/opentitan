@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,237 +10,63 @@
 #include "gtest/gtest.h"
 #include "sw/device/lib/base/mock_abs_mmio.h"
 #include "sw/device/silicon_creator/lib/base/chip.h"
+#include "sw/device/silicon_creator/lib/bootstrap_unittest_util.h"
 #include "sw/device/silicon_creator/lib/drivers/mock_flash_ctrl.h"
 #include "sw/device/silicon_creator/lib/drivers/mock_otp.h"
 #include "sw/device/silicon_creator/lib/drivers/mock_rstmgr.h"
 #include "sw/device/silicon_creator/lib/drivers/mock_spi_device.h"
 #include "sw/device/silicon_creator/testing/rom_test.h"
 
-#include "flash_ctrl_regs.h"
-#include "gpio_regs.h"
+#include "hw/top/flash_ctrl_regs.h"
+#include "hw/top/gpio_regs.h"
+#include "hw/top/otp_ctrl_regs.h"
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "otp_ctrl_regs.h"
-
-bool operator==(flash_ctrl_perms_t lhs, flash_ctrl_perms_t rhs) {
-  return std::memcmp(&lhs, &rhs, sizeof(flash_ctrl_perms_t)) == 0;
-}
 
 namespace bootstrap_unittest {
 namespace {
 
-using ::testing::DoAll;
+using bootstrap_unittest_util::BootstrapTest;
+using bootstrap_unittest_util::ChipEraseCmd;
+using bootstrap_unittest_util::PageProgramCmd;
+using bootstrap_unittest_util::ResetCmd;
+using bootstrap_unittest_util::SectorEraseCmd;
+
+using ::testing::_;
 using ::testing::NotNull;
 using ::testing::Return;
-using ::testing::SetArgPointee;
 
 MATCHER_P(HasBytes, bytes, "") {
   return std::memcmp(arg, bytes.data(), bytes.size()) == 0;
 }
 
-class BootstrapTest : public rom_test::RomTest {
- protected:
-  /**
-   * Sets an expectation for a bootstrap request check.
-   *
-   * @param requested Whether bootstrap is requested.
-   */
-  void ExpectBootstrapRequestCheck(bool requested) {
-    EXPECT_CALL(otp_,
-                read32(OTP_CTRL_PARAM_OWNER_SW_CFG_ROM_BOOTSTRAP_EN_OFFSET))
-        .WillOnce(Return(kHardenedBoolTrue));
-    uint32_t pins = SW_STRAP_BOOTSTRAP;
-    if (!requested) {
-      pins = ~pins;
-    }
-    EXPECT_ABS_READ32(TOP_EARLGREY_GPIO_BASE_ADDR + GPIO_DATA_IN_REG_OFFSET,
-                      pins);
-  }
-
-  /**
-   * Sets an expectation for a spi flash command.
-   *
-   * @param cmd Command struct to output.
-   */
-  void ExpectSpiCmd(spi_device_cmd_t cmd) {
-    EXPECT_CALL(spi_device_, CmdGet(NotNull()))
-        .WillOnce(DoAll(SetArgPointee<0>(cmd), Return(kErrorOk)));
-  }
-
-  /**
-   * Sets an expectation for getting the SPI flash status register.
-   *
-   * @param wel Value of the WEL bit.
-   */
-  void ExpectSpiFlashStatusGet(bool wel) {
-    EXPECT_CALL(spi_device_, FlashStatusGet())
-        .WillOnce(Return(wel << kSpiDeviceWelBit));
-  }
-
-  /**
-   * Sets an expectation for enabling write for the data partition.
-   */
-  void ExpectFlashCtrlWriteEnable() {
-    EXPECT_CALL(flash_ctrl_, DataDefaultPermsSet((flash_ctrl_perms_t){
-                                 .read = kMultiBitBool4False,
-                                 .write = kMultiBitBool4True,
-                                 .erase = kMultiBitBool4False,
-                             }));
-  }
-
-  /**
-   * Sets an expectation for disabling all permissions for the data partition.
-   */
-  void ExpectFlashCtrlAllDisable() {
-    EXPECT_CALL(flash_ctrl_, DataDefaultPermsSet((flash_ctrl_perms_t){
-                                 .read = kMultiBitBool4False,
-                                 .write = kMultiBitBool4False,
-                                 .erase = kMultiBitBool4False,
-                             }));
-  }
-
-  /**
-   * Sets expectations for a chip erase.
-   *
-   * @param err0 Result of erase for the first bank.
-   * @param err1 Result of erase for the second bank.
-   */
-  void ExpectFlashCtrlChipErase(rom_error_t err0, rom_error_t err1) {
-    EXPECT_CALL(flash_ctrl_, BankErasePermsSet(kHardenedBoolTrue));
-    EXPECT_CALL(flash_ctrl_, DataErase(0, kFlashCtrlEraseTypeBank))
-        .WillOnce(Return(err0));
-    EXPECT_CALL(flash_ctrl_, DataErase(FLASH_CTRL_PARAM_BYTES_PER_BANK,
-                                       kFlashCtrlEraseTypeBank))
-        .WillOnce(Return(err1));
-    EXPECT_CALL(flash_ctrl_, BankErasePermsSet(kHardenedBoolFalse));
-  }
-
-  /**
-   * Sets expectations for a sector erase.
-   *
-   * @param err0 Result of erase for the first page.
-   * @param err1 Result of erase for the second page.
-   * @param addr Erase start address.
-   */
-  void ExpectFlashCtrlSectorErase(rom_error_t err0, rom_error_t err1,
-                                  uint32_t addr) {
-    EXPECT_CALL(flash_ctrl_, DataDefaultPermsSet((flash_ctrl_perms_t){
-                                 .read = kMultiBitBool4False,
-                                 .write = kMultiBitBool4False,
-                                 .erase = kMultiBitBool4True,
-                             }));
-    EXPECT_CALL(flash_ctrl_, DataErase(addr, kFlashCtrlEraseTypePage))
-        .WillOnce(Return(err0));
-    EXPECT_CALL(flash_ctrl_, DataErase(addr + FLASH_CTRL_PARAM_BYTES_PER_PAGE,
-                                       kFlashCtrlEraseTypePage))
-        .WillOnce(Return(err1));
-    ExpectFlashCtrlAllDisable();
-  }
-
-  /**
-   * Sets expectations for a chip erase verification.
-   *
-   * @param err0 Result of erase verification for the first bank.
-   * @param err1 Result of erase verification for the second bank.
-   */
-  void ExpectFlashCtrlEraseVerify(rom_error_t err0, rom_error_t err1) {
-    EXPECT_CALL(flash_ctrl_, DataEraseVerify(0, kFlashCtrlEraseTypeBank))
-        .WillOnce(Return(err0));
-    EXPECT_CALL(flash_ctrl_, DataEraseVerify(FLASH_CTRL_PARAM_BYTES_PER_BANK,
-                                             kFlashCtrlEraseTypeBank))
-        .WillOnce(Return(err1));
-  }
-
-  rom_test::MockAbsMmio mmio_;
-  rom_test::MockFlashCtrl flash_ctrl_;
-  rom_test::MockOtp otp_;
-  rom_test::MockRstmgr rstmgr_;
-  rom_test::MockSpiDevice spi_device_;
-};
-
 TEST_F(BootstrapTest, RequestedDisabled) {
-  EXPECT_CALL(otp_, read32(OTP_CTRL_PARAM_OWNER_SW_CFG_ROM_BOOTSTRAP_EN_OFFSET))
-      .WillOnce(Return(kHardenedBoolFalse));
+  EXPECT_CALL(otp_,
+              read32(OTP_CTRL_PARAM_OWNER_SW_CFG_ROM_BOOTSTRAP_DIS_OFFSET))
+      .WillOnce(Return(kHardenedBoolTrue));
 
   EXPECT_EQ(bootstrap_requested(), kHardenedBoolFalse);
 }
 
 TEST_F(BootstrapTest, RequestedEnabled) {
-  EXPECT_CALL(otp_, read32(OTP_CTRL_PARAM_OWNER_SW_CFG_ROM_BOOTSTRAP_EN_OFFSET))
-      .WillOnce(Return(kHardenedBoolTrue));
-  EXPECT_ABS_READ32(TOP_EARLGREY_GPIO_BASE_ADDR + GPIO_DATA_IN_REG_OFFSET,
+  EXPECT_CALL(otp_,
+              read32(OTP_CTRL_PARAM_OWNER_SW_CFG_ROM_BOOTSTRAP_DIS_OFFSET))
+      .WillOnce(Return(kHardenedBoolFalse));
+  EXPECT_ABS_READ32(TOP_EARLGREY_GPIO0_BASE_ADDR + GPIO_DATA_IN_REG_OFFSET,
                     SW_STRAP_BOOTSTRAP);
   EXPECT_EQ(bootstrap_requested(), kHardenedBoolTrue);
 
-  EXPECT_CALL(otp_, read32(OTP_CTRL_PARAM_OWNER_SW_CFG_ROM_BOOTSTRAP_EN_OFFSET))
-      .WillOnce(Return(kHardenedBoolTrue));
-  EXPECT_ABS_READ32(TOP_EARLGREY_GPIO_BASE_ADDR + GPIO_DATA_IN_REG_OFFSET,
+  EXPECT_CALL(otp_,
+              read32(OTP_CTRL_PARAM_OWNER_SW_CFG_ROM_BOOTSTRAP_DIS_OFFSET))
+      .WillOnce(Return(kHardenedBoolFalse));
+  EXPECT_ABS_READ32(TOP_EARLGREY_GPIO0_BASE_ADDR + GPIO_DATA_IN_REG_OFFSET,
                     ~SW_STRAP_BOOTSTRAP);
   EXPECT_EQ(bootstrap_requested(), kHardenedBoolFalse);
 }
 
-/**
- * Returns a struct that represents a CHIP_ERASE command.
- *
- * @return A `spi_device_cmd_t` that represents a CHIP_ERASE command.
- */
-spi_device_cmd_t ChipEraseCmd() {
-  return {
-      .opcode = kSpiDeviceOpcodeChipErase,
-      .address = kSpiDeviceNoAddress,
-      .payload_byte_count = 0,
-      .payload = {},
-  };
-}
-
-/**
- * Returns a struct that represents a SECTOR_ERASE command.
- *
- * @param address Address field of the command.
- * @return A `spi_device_cmd_t` that represents a SECTOR_ERASE command.
- */
-spi_device_cmd_t SectorEraseCmd(uint32_t address) {
-  return {
-      .opcode = kSpiDeviceOpcodeSectorErase,
-      .address = address,
-      .payload_byte_count = 0,
-      .payload = {},
-  };
-}
-
-/**
- * Returns a struct that represents a PAGE_PROGRAM command.
- *
- * @param address Address field of the command.
- * @param payload_byte_count Payload size in bytes.
- * @return A `spi_device_cmd_t` that represents a PAGE_PROGRAM command.
- */
-spi_device_cmd_t PageProgramCmd(uint32_t address, size_t payload_byte_count) {
-  spi_device_cmd_t cmd{
-      .opcode = kSpiDeviceOpcodePageProgram,
-      .address = address,
-      .payload_byte_count = payload_byte_count,
-  };
-  EXPECT_LE(payload_byte_count, kSpiDevicePayloadAreaNumBytes);
-  for (size_t i = 0; i < payload_byte_count; ++i) {
-    cmd.payload[i] = static_cast<uint8_t>(i);
-  }
-
-  return cmd;
-}
-
-spi_device_cmd_t ResetCmd() {
-  return {
-      .opcode = kSpiDeviceOpcodeReset,
-      .address = kSpiDeviceNoAddress,
-      .payload_byte_count = 0,
-      .payload = {},
-  };
-}
-
 TEST_F(BootstrapTest, PayloadOverflowErase) {
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
-  EXPECT_CALL(spi_device_, CmdGet(NotNull()))
+  EXPECT_CALL(spi_device_, InitBootstrap());
+  EXPECT_CALL(spi_device_, CmdGet(NotNull(), true))
       .WillOnce(Return(kErrorSpiDevicePayloadOverflow));
 
   EXPECT_EQ(bootstrap(), kErrorSpiDevicePayloadOverflow);
@@ -249,7 +75,7 @@ TEST_F(BootstrapTest, PayloadOverflowErase) {
 TEST_F(BootstrapTest, PayloadOverflowProgram) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -257,7 +83,7 @@ TEST_F(BootstrapTest, PayloadOverflowProgram) {
   ExpectFlashCtrlEraseVerify(kErrorOk, kErrorOk);
   EXPECT_CALL(spi_device_, FlashStatusClear());
   // Program
-  EXPECT_CALL(spi_device_, CmdGet(NotNull()))
+  EXPECT_CALL(spi_device_, CmdGet(NotNull(), true))
       .WillOnce(Return(kErrorSpiDevicePayloadOverflow));
 
   EXPECT_EQ(bootstrap(), kErrorSpiDevicePayloadOverflow);
@@ -266,7 +92,7 @@ TEST_F(BootstrapTest, PayloadOverflowProgram) {
 TEST_F(BootstrapTest, BootstrapSimple) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -297,7 +123,7 @@ TEST_F(BootstrapTest, BootstrapSimple) {
 TEST_F(BootstrapTest, BootstrapOddPayload) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -331,7 +157,7 @@ TEST_F(BootstrapTest, BootstrapOddPayload) {
 TEST_F(BootstrapTest, BootstrapMisalignedAddrLongPayload) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -365,7 +191,7 @@ TEST_F(BootstrapTest, BootstrapMisalignedAddrLongPayload) {
 TEST_F(BootstrapTest, BootstrapMisalignedAddrShortPayload) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -396,7 +222,7 @@ TEST_F(BootstrapTest, BootstrapMisalignedAddrShortPayload) {
 TEST_F(BootstrapTest, BootstrapStartWithSectorErase) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(SectorEraseCmd(0));
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -429,7 +255,7 @@ TEST_F(BootstrapTest, BootstrapStartWithSectorErase) {
 TEST_F(BootstrapTest, BootstrapProgramWithErase) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -473,7 +299,7 @@ TEST_F(BootstrapTest, BootstrapProgramWithErase) {
 TEST_F(BootstrapTest, MisalignedEraseAddress) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -505,7 +331,7 @@ TEST_F(BootstrapTest, MisalignedEraseAddress) {
 TEST_F(BootstrapTest, IgnoredCommands) {
   // Phase 1: Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());  // Ignored, missing WREN.
   ExpectSpiFlashStatusGet(false);
   ExpectSpiCmd(ResetCmd());  // Ignored, not supported.
@@ -533,7 +359,7 @@ TEST_F(BootstrapTest, IgnoredCommands) {
 
 TEST_F(BootstrapTest, EraseBank0Error) {
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorUnknown, kErrorOk);
@@ -543,7 +369,7 @@ TEST_F(BootstrapTest, EraseBank0Error) {
 
 TEST_F(BootstrapTest, EraseBank1Error) {
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorUnknown);
@@ -554,7 +380,7 @@ TEST_F(BootstrapTest, EraseBank1Error) {
 TEST_F(BootstrapTest, EraseVerifyBank0Error) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -567,7 +393,7 @@ TEST_F(BootstrapTest, EraseVerifyBank0Error) {
 TEST_F(BootstrapTest, EraseVerifyBank1Error) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -580,7 +406,7 @@ TEST_F(BootstrapTest, EraseVerifyBank1Error) {
 TEST_F(BootstrapTest, DataWriteError) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -608,7 +434,7 @@ TEST_F(BootstrapTest, DataWriteError) {
 TEST_F(BootstrapTest, DataWriteErrorMisalignedAddr) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -634,7 +460,7 @@ TEST_F(BootstrapTest, DataWriteErrorMisalignedAddr) {
 TEST_F(BootstrapTest, BadProgramAddress) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);
@@ -652,7 +478,7 @@ TEST_F(BootstrapTest, BadProgramAddress) {
 TEST_F(BootstrapTest, BadEraseAddress) {
   // Erase
   ExpectBootstrapRequestCheck(true);
-  EXPECT_CALL(spi_device_, Init());
+  EXPECT_CALL(spi_device_, InitBootstrap());
   ExpectSpiCmd(ChipEraseCmd());
   ExpectSpiFlashStatusGet(true);
   ExpectFlashCtrlChipErase(kErrorOk, kErrorOk);

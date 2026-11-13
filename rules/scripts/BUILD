@@ -1,33 +1,28 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@ot_python_deps//:requirements.bzl", "requirement")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files(glob(["**"]))
 
-py_binary(
-    name = "gdb_test_coordinator",
-    srcs = [
-        "gdb_test_coordinator.py",
-    ],
-    deps = [
-        requirement("typer"),
-        requirement("rich"),
-    ],
-)
-
 py_library(
     name = "bitstreams_workspace",
     srcs = [
         "bitstreams_workspace.py",
     ],
+    data = [":bitstreams_manifest_schema"],
     deps = [
         requirement("jsonschema"),
     ],
+)
+
+filegroup(
+    name = "bitstreams_manifest_schema",
+    srcs = ["bitstreams_manifest.schema.json"],
 )
 
 py_test(
@@ -38,4 +33,21 @@ py_test(
     deps = [
         ":bitstreams_workspace",
     ],
+)
+
+sh_binary(
+    name = "modid_check",
+    srcs = ["modid_check.sh"],
+)
+
+py_binary(
+    name = "qemu_pass",
+    srcs = ["qemu_pass.py"],
+    data = ["//third_party/qemu:qemu-system-riscv32"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_binary(
+    name = "hash_files",
+    srcs = ["hash_files.py"],
 )

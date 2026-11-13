@@ -1,10 +1,11 @@
-/* Copyright lowRISC contributors. */
+/* Copyright lowRISC contributors (OpenTitan project). */
 /* Licensed under the Apache License, Version 2.0, see LICENSE for details. */
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  *   This library contains:
  *   - P-384 specific routines for point addition in projective space
  *   - P-384 domain parameters
+ *   - P-384 specific routines for multiplication and reduction of large values
  */
 
  .section .text
@@ -26,6 +27,7 @@
  * Clobbered registers: w18 to w20
  * Clobbered flag groups: FG0
  */
+.globl mul384
 mul384:
   bn.mulqacc.z          w10.0, w16.0,   0
   bn.mulqacc            w10.0, w16.1,  64
@@ -64,13 +66,54 @@ mul384:
   bn.mulqacc.so w20.L,  w11.1, w17.0,  64
   bn.mulqacc.so w20.U,  w11.1, w17.1,   0
 
+  bn.wsrw       ACC, w31                  /* clear ACC */
+  bn.mulqacc.wo w31, w31.0, w31.0, 0, FG0 /* clear flags, dummy instruction */
+
   ret
 
+/**
+ * Unrolled 572=448x128 bit multiplication.
+ *
+ * Returns c = a x b.
+ *
+ * This routine runs in constant time.
+ *
+ * Flags: Flags have no meaning beyond the scope of this subroutine.
+ *
+ * @param[in] [w11, w10]: a, first operand, max. length 448 bit, a < m.
+ * @param[in] w16: b, second operand, max. length 128 bit, b < m.
+ * @param[in] w31: all-zero.
+ * @param[out] [w20:w18]: c, result, max. length 572 bit.
+ *
+ * Clobbered registers: w18 to w20
+ * Clobbered flag groups: FG0
+ */
+mul448x128:
+  bn.mulqacc.z          w10.0, w16.0, 0
+  bn.mulqacc            w10.0, w16.1, 64
+  bn.mulqacc.so  w18.L, w10.1, w16.0, 64
+  bn.mulqacc            w10.1, w16.1, 0
+  bn.mulqacc            w10.2, w16.0, 0
+  bn.mulqacc            w10.2, w16.1, 64
+  bn.mulqacc.so  w18.U, w10.3, w16.0, 64
+  bn.mulqacc            w10.3, w16.1, 0
+  bn.mulqacc            w11.0, w16.0, 0
+  bn.mulqacc            w11.1, w16.0, 64
+  bn.mulqacc.so  w19.L, w11.0, w16.1, 64
+  bn.mulqacc            w11.2, w16.0, 0
+  bn.mulqacc            w11.1, w16.1, 0
+  bn.mulqacc.so  w19.U, w11.2, w16.1, 64
+  bn.mulqacc.wo    w20, w31.0, w31.0, 0
+
+  bn.wsrw       ACC, w31                  /* clear ACC */
+  bn.mulqacc.wo w31, w31.0, w31.0, 0, FG0 /* clear flags, dummy instruction */
+
+  ret
 
 /**
- * 384-bit modular multiplication based on Solinas reduction algorithm.
+ * Solinas reduction algorithm.
  *
- * Returns c = a x b % p.
+ * Returns c = a mod m = (x + 2^384 * y) mod m.
  *
  * This subroutine is specialized to the coordinate field of P-384 and cannot
  * be used for other moduli.
@@ -90,8 +133,7 @@ mul384:
  *
  * Flags: Flags have no meaning beyond the scope of this subroutine.
  *
- * @param[in] [w11, w10]: a, first operand, max. length 384 bit, b < m.
- * @param[in] [w17, w16]: b, second operand, max. length 384 bit, b < m.
+ * @param[in] [w20:w18]: a, input to reduce, max. length 768 bit.
  * @param[in] [w13, w12]: m, modulus, 2^383 <= m < 2^384.
  * @param[in] w31: all-zero.
  * @param[out] [w17, w16]: c, result, max. length 384 bit.
@@ -99,12 +141,8 @@ mul384:
  * Clobbered registers: w16 to w24
  * Clobbered flag groups: FG0
  */
-.globl p384_mulmod_p
-p384_mulmod_p:
-  /* Compute the raw 768-bit product:
-       ab = [w20:w18] <= a * b */
-  jal     x1, mul384
-
+.globl p384_reduce_p
+p384_reduce_p:
   /* Solinas reduction step. Based on the observation that:
      (x + 2^384 * y) mod (2^384 - K) = (x + K * y) mod (2^384 - K).
 
@@ -196,13 +234,12 @@ p384_mulmod_p:
   bn.sel w16, w18, w16, C
   bn.sel w17, w19, w17, C
 
-  /* return result: c =[w17, w16] =  a * b % m. */
   ret
 
 /**
- * 384-bit modular multiplication based on Solinas reduction algorithm.
+ * Solinas reduction algorithm.
  *
- * Returns c = a x b % m.
+ * Returns c = a mod m = (x + 2^384 * y) mod m.
  *
  * This subroutine is intended for use with the group order (n) of P-384, but
  * will work for any modulus m such that 2^384 - 2^191 < m < 2^384.
@@ -220,8 +257,7 @@ p384_mulmod_p:
  *
  * Flags: Flags have no meaning beyond the scope of this subroutine.
  *
- * @param[in] [w11, w10]: a, first operand, max. length 384 bit, b < m.
- * @param[in] [w17, w16]: b, second operand, max. length 384 bit, b < m.
+ * @param[in] [w20:w18]: a, input to reduce, max. length 768 bit.
  * @param[in] [w13, w12]: m, modulus, 2^383 <= m < 2^384.
  * @param[in] w14: k, Solinas constant (2^384 - modulus), max. length 191 bit.
  * @param[in] w31: all-zero.
@@ -230,15 +266,8 @@ p384_mulmod_p:
  * Clobbered registers: w16 to w24
  * Clobbered flag groups: FG0
  */
-.globl p384_mulmod_n
-p384_mulmod_n:
-  /* Compute the raw 768-bit product:
-       ab = [w20:w18] <= a * b */
-  jal     x1, mul384
-
-  /* Solinas reduction step. Based on the observation that:
-     (x + 2^384 * y) mod (2^384 - K) = (x + K * y) mod (2^384 - K). */
-
+.globl p384_reduce_n
+p384_reduce_n:
   /* Extract the high 128 bits from the middle term and the low 128 bits from
      the high term:
        w21 <= ab[639:384] */
@@ -258,6 +287,9 @@ p384_mulmod_n:
   bn.mulqacc            w21.2, w14.2,   0
   bn.mulqacc            w21.3, w14.1,   0
   bn.mulqacc.wo w24,    w21.3, w14.2,  64
+
+  bn.wsrw       ACC, w31                  /* clear ACC */
+  bn.mulqacc.wo w31, w31.0, w31.0, 0, FG0 /* clear flags, dummy instruction */
 
   /* Construct a 256-bit mask:
        w22 <= 2^256 - 1 */
@@ -288,6 +320,9 @@ p384_mulmod_n:
      changing the accumulator. */
   bn.mulqacc.wo w24,    w31.0, w31.0,   0
 
+  bn.wsrw       ACC, w31                  /* clear ACC */
+  bn.mulqacc.wo w31, w31.0, w31.0, 0, FG0 /* clear flags, dummy instruction */
+
   /* Add product to the result to complete the reduction step:
        [w20:w18] = ab[383:0] + (ab[767:384] * K) */
   bn.add  w19, w19, w23
@@ -317,6 +352,9 @@ p384_mulmod_n:
   bn.mulqacc.so w23.U,  w21.2, w14.1,  64
   bn.mulqacc.wo w24,    w21.2, w14.2,   0
 
+  bn.wsrw       ACC, w31                  /* clear ACC */
+  bn.mulqacc.wo w31, w31.0, w31.0, 0, FG0 /* clear flags, dummy instruction */
+
   /* Isolate the lower 384 bits:
        w19 <= r[383:256] */
   bn.and  w19, w19, w22 >> 128
@@ -336,8 +374,105 @@ p384_mulmod_n:
   bn.sel w16, w18, w16, C
   bn.sel w17, w19, w17, C
 
-  /* return result: c =[w17, w16] =  a * b % m. */
   ret
+
+/**
+ * 384-bit modular multiplication based on Solinas reduction algorithm.
+ *
+ * Returns c = a x b % p.
+ *
+ * This subroutine is specialized to the coordinate field of P-384 and cannot
+ * be used for other moduli.
+ *
+ * For mor information on the reduction algorith, see 'p384_reduce_p'.
+ *
+ * This routine runs in constant time.
+ *
+ * Flags: Flags have no meaning beyond the scope of this subroutine.
+ *
+ * @param[in] [w11, w10]: a, first operand, max. length 384 bit, b < m.
+ * @param[in] [w17, w16]: b, second operand, max. length 384 bit, b < m.
+ * @param[in] [w13, w12]: m, modulus, 2^383 <= m < 2^384.
+ * @param[in] w31: all-zero.
+ * @param[out] [w17, w16]: c, result, max. length 384 bit.
+ *
+ * Clobbered registers: w16 to w24
+ * Clobbered flag groups: FG0
+ */
+.globl p384_mulmod_p
+p384_mulmod_p:
+  /* Compute the raw 768-bit product:
+       ab = [w20:w18] <= a * b */
+  jal     x1, mul384
+
+  /* return [w17, w16] = ab mod m = [w20:w18] mod m */
+  jal     x0, p384_reduce_p
+
+/**
+ * 384-bit modular multiplication based on Solinas reduction algorithm.
+ *
+ * Returns c = a * b mod m.
+ *
+ * This subroutine is intended for use with the group order (n) of P-384, but
+ * will work for any modulus m such that 2^384 - 2^191 < m < 2^384.
+ *
+ * For mor information on the reduction algorith, see 'p384_reduce_n'.
+ *
+ * This routine runs in constant time.
+ *
+ * Flags: Flags have no meaning beyond the scope of this subroutine.
+ *
+ * @param[in] [w11, w10]: a, first operand, max. length 384 bit, b < m.
+ * @param[in] [w17, w16]: b, second operand, max. length 384 bit, b < m.
+ * @param[in] [w13, w12]: m, modulus, 2^383 <= m < 2^384.
+ * @param[in] w14: k, Solinas constant (2^384 - modulus), max. length 191 bit.
+ * @param[in] w31: all-zero.
+ * @param[out] [w17, w16]: c, result, max. length 384 bit.
+ *
+ * Clobbered registers: w16 to w24
+ * Clobbered flag groups: FG0
+ */
+.globl p384_mulmod_n
+p384_mulmod_n:
+  /* Compute the raw 768-bit product:
+       ab = [w20:w18] <= a * b */
+  jal     x1, mul384
+
+  /* return [w17, w16] = ab mod m = [w20:w18] mod m */
+  jal     x0, p384_reduce_n
+
+/**
+ * 448x128=572-bit modular multiplication based on Solinas reduction algorithm.
+ *
+ * Returns c = a * b mod m.
+ *
+ * This subroutine is intended for use with the group order (n) of P-384, but
+ * will work for any modulus m such that 2^384 - 2^191 < m < 2^384.
+ *
+ * For mor information on the reduction algorith, see 'p384_reduce_n'.
+ *
+ * This routine runs in constant time.
+ *
+ * Flags: Flags have no meaning beyond the scope of this subroutine.
+ *
+ * @param[in] [w11, w10]: a, first operand, max. length 384 bit, b < m.
+ * @param[in] w16: b, second operand, max. length 128 bit, b < m.
+ * @param[in] [w13, w12]: m, modulus, 2^383 <= m < 2^384.
+ * @param[in] w14: k, Solinas constant (2^384 - modulus), max. length 191 bit.
+ * @param[in] w31: all-zero.
+ * @param[out] [w17, w16]: c, result, max. length 384 bit.
+ *
+ * Clobbered registers: w16 to w24
+ * Clobbered flag groups: FG0
+ */
+.globl p384_mulmod448x128_n
+p384_mulmod448x128_n:
+  /* Compute the raw 768-bit product:
+       ab = [w20:w18] <= a * b */
+  jal     x1, mul448x128
+
+  /* return [w17, w16] = ab mod m = [w20:w18] mod m */
+  jal     x0, p384_reduce_n
 
 /**
  * P-384 point addition in projective space
@@ -422,10 +557,8 @@ proj_add_p384:
   bn.addc   w17, w11, w17
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w6, w16
-  bn.mov    w7, w17
+  bn.sel    w6, w16, w10, C
+  bn.sel    w7, w17, w11, C
 
   /* 5: [w9, w8] = t4 <= X2+Y2 = dmem[x27+0]+dmem[x27+64] */
   bn.lid    x22, 0(x27)
@@ -436,10 +569,8 @@ proj_add_p384:
   bn.addc   w17, w11, w17
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w8, w16
-  bn.mov    w9, w17
+  bn.sel    w8, w16, w10, C
+  bn.sel    w9, w17, w11, C
 
   /* 6: [w7, w6] = t3 <= t3*t4 = [w7, w6]*[w9, w8] */
   bn.mov    w10, w6
@@ -455,20 +586,16 @@ proj_add_p384:
   bn.addc   w17, w1, w3
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w8, w16
-  bn.mov    w9, w17
+  bn.sel    w8, w16, w10, C
+  bn.sel    w9, w17, w11, C
 
   /* 8: [w7, w6] = t3 <= t3-t4 = [w7, w6]-[w9, w8] */
   bn.sub    w16, w6, w8
   bn.subb   w17, w7, w9
   bn.add    w10, w16, w12
   bn.addc   w11, w17, w13
-  bn.sel    w16, w10, w16, C
-  bn.sel    w17, w11, w17, C
-  bn.mov    w6, w16
-  bn.mov    w7, w17
+  bn.sel    w6, w10, w16, C
+  bn.sel    w7, w11, w17, C
 
   /* 9: [w9, w8] = t4 <= Y1+Z1 = dmem[x26+64]+dmem[x26+128] */
   bn.lid    x22, 64(x26)
@@ -479,10 +606,8 @@ proj_add_p384:
   bn.addc   w17, w11, w17
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w8, w16
-  bn.mov    w9, w17
+  bn.sel    w8, w16, w10, C
+  bn.sel    w9, w17, w11, C
 
   /* 10: [w26, w25] = X3 <= Y2+Z2 = dmem[x27+64]+dmem[x27+128] */
   bn.lid    x22, 64(x27)
@@ -493,10 +618,8 @@ proj_add_p384:
   bn.addc   w17, w11, w17
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w25, w16
-  bn.mov    w26, w17
+  bn.sel    w25, w16, w10, C
+  bn.sel    w26, w17, w11, C
 
   /* 11: [w9, w8] = t4 <= t4*X3 = [w9, w8]*[w26, w25] */
   bn.mov    w10, w8
@@ -512,20 +635,16 @@ proj_add_p384:
   bn.addc   w17, w3, w5
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w25, w16
-  bn.mov    w26, w17
+  bn.sel    w25, w16, w10, C
+  bn.sel    w26, w17, w11, C
 
   /* 13: [w9, w8] = t4 <= t4-X3 = [w9, w8]-[w26, w25] */
   bn.sub    w16, w8, w25
   bn.subb   w17, w9, w26
   bn.add    w10, w16, w12
   bn.addc   w11, w17, w13
-  bn.sel    w16, w10, w16, C
-  bn.sel    w17, w11, w17, C
-  bn.mov    w8, w16
-  bn.mov    w9, w17
+  bn.sel    w8, w10, w16, C
+  bn.sel    w9, w11, w17, C
 
   /* 14: [w26, w25] = X3 <= X1+Z1 = dmem[x26+0]+dmem[x26+128] */
   bn.lid    x22, 0(x26)
@@ -536,10 +655,8 @@ proj_add_p384:
   bn.addc   w17, w11, w17
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w25, w16
-  bn.mov    w26, w17
+  bn.sel    w25, w16, w10, C
+  bn.sel    w26, w17, w11, C
 
   /* 15: [w28, w27] = Y3 <= X2+Z2 = dmem[x27+0]+dmem[x27+128] */
   bn.lid    x22, 0(x27)
@@ -550,10 +667,8 @@ proj_add_p384:
   bn.addc   w17, w11, w17
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w27, w16
-  bn.mov    w28, w17
+  bn.sel    w27, w16, w10, C
+  bn.sel    w28, w17, w11, C
 
   /* 16: [w26, w25] = X3 <= X3*Y3 = [w26, w25]*[w28, w27] */
   bn.mov    w10, w25
@@ -569,20 +684,16 @@ proj_add_p384:
   bn.addc   w17, w1, w5
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w27, w16
-  bn.mov    w28, w17
+  bn.sel    w27, w16, w10, C
+  bn.sel    w28, w17, w11, C
 
   /* 18: [w28, w27] = Y3 <= X3-Y3 = [w26, w25]-[w28, w27] */
   bn.sub    w16, w25, w27
   bn.subb   w17, w26, w28
   bn.add    w10, w16, w12
   bn.addc   w11, w17, w13
-  bn.sel    w16, w10, w16, C
-  bn.sel    w17, w11, w17, C
-  bn.mov    w27, w16
-  bn.mov    w28, w17
+  bn.sel    w27, w10, w16, C
+  bn.sel    w28, w11, w17, C
 
   /* 19: [w30, w29] = Z3 <= b*t2 = dmem[x28+0]*[w5, w4] */
   bn.lid    x22, 0(x28)
@@ -598,50 +709,40 @@ proj_add_p384:
   bn.subb   w17, w28, w30
   bn.add    w10, w16, w12
   bn.addc   w11, w17, w13
-  bn.sel    w16, w10, w16, C
-  bn.sel    w17, w11, w17, C
-  bn.mov    w25, w16
-  bn.mov    w26, w17
+  bn.sel    w25, w10, w16, C
+  bn.sel    w26, w11, w17, C
 
   /* 21: [w30, w29] = Z3 <= X3+X3 = [w26, w25]+[w26, w25] */
   bn.add    w16, w25, w25
   bn.addc   w17, w26, w26
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w29, w16
-  bn.mov    w30, w17
+  bn.sel    w29, w16, w10, C
+  bn.sel    w30, w17, w11, C
 
   /* 22: [w26, w25] = X3 <= X3+Z3 = [w26, w25]+[w30, w29] */
   bn.add    w16, w25, w29
   bn.addc   w17, w26, w30
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w25, w16
-  bn.mov    w26, w17
+  bn.sel    w25, w16, w10, C
+  bn.sel    w26, w17, w11, C
 
   /* 23: [w30, w29] = Z3 <= t1-X3 = [w3, w2]-[w26, w25] */
   bn.sub    w16, w2, w25
   bn.subb   w17, w3, w26
   bn.add    w10, w16, w12
   bn.addc   w11, w17, w13
-  bn.sel    w16, w10, w16, C
-  bn.sel    w17, w11, w17, C
-  bn.mov    w29, w16
-  bn.mov    w30, w17
+  bn.sel    w29, w10, w16, C
+  bn.sel    w30, w11, w17, C
 
   /* 24: [w26, w25] = X3 <= t1+X3 = [w3, w2]+[w26, w25] */
   bn.add    w16, w2, w25
   bn.addc   w17, w3, w26
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w25, w16
-  bn.mov    w26, w17
+  bn.sel    w25, w16, w10, C
+  bn.sel    w26, w17, w11, C
 
   /* 25: [w28, w27] = Y3 <= b*Y3 = dmem[x28+0]*[w28, w27] */
   bn.lid    x22, 0(x28)
@@ -657,90 +758,72 @@ proj_add_p384:
   bn.addc   w17, w5, w5
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w2, w16
-  bn.mov    w3, w17
+  bn.sel    w2, w16, w10, C
+  bn.sel    w3, w17, w11, C
 
   /* 27: [w5, w4] = t2 <= t1+t2 = [w3, w2]+[w5, w4] */
   bn.add    w16, w2, w4
   bn.addc   w17, w3, w5
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w4, w16
-  bn.mov    w5, w17
+  bn.sel    w4, w16, w10, C
+  bn.sel    w5, w17, w11, C
 
   /* 28: [w28, w27] = Y3 <= Y3-t2 = [w28, w27]-[w5, w4] */
   bn.sub    w16, w27, w4
   bn.subb   w17, w28, w5
   bn.add    w10, w16, w12
   bn.addc   w11, w17, w13
-  bn.sel    w16, w10, w16, C
-  bn.sel    w17, w11, w17, C
-  bn.mov    w27, w16
-  bn.mov    w28, w17
+  bn.sel    w27, w10, w16, C
+  bn.sel    w28, w11, w17, C
 
   /* 29: [w28, w27] = Y3 <= Y3-t0 = [w28, w27]-[w1, w0] */
   bn.sub    w16, w27, w0
   bn.subb   w17, w28, w1
   bn.add    w10, w16, w12
   bn.addc   w11, w17, w13
-  bn.sel    w16, w10, w16, C
-  bn.sel    w17, w11, w17, C
-  bn.mov    w27, w16
-  bn.mov    w28, w17
+  bn.sel    w27, w10, w16, C
+  bn.sel    w28, w11, w17, C
 
   /* 30: [w3, w2] = t1 <= Y3+Y3 = [w28, w27]+[w28, w27] */
   bn.add    w16, w27, w27
   bn.addc   w17, w28, w28
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w2, w16
-  bn.mov    w3, w17
+  bn.sel    w2, w16, w10, C
+  bn.sel    w3, w17, w11, C
 
   /* 31: [w28, w27] = Y3 <= t1+Y3 = [w3, w2]+[w28, w27] */
   bn.add    w16, w2, w27
   bn.addc   w17, w3, w28
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w27, w16
-  bn.mov    w28, w17
+  bn.sel    w27, w16, w10, C
+  bn.sel    w28, w17, w11, C
 
   /* 32: [w3, w2] = t1 <= t0+t0 = [w1, w0]+[w1, w0] */
   bn.add    w16, w0, w0
   bn.addc   w17, w1, w1
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w2, w16
-  bn.mov    w3, w17
+  bn.sel    w2, w16, w10, C
+  bn.sel    w3, w17, w11, C
 
   /* 33: [w1, w0] = t0 <= t1+t0 = [w3, w2]+[w1, w0] */
   bn.add    w16, w2, w0
   bn.addc   w17, w3, w1
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w0, w16
-  bn.mov    w1, w17
+  bn.sel    w0, w16, w10, C
+  bn.sel    w1, w17, w11, C
 
   /* 34: [w1, w0] = t0 <= t0-t2 = [w1, w0]-[w5, w4] */
   bn.sub    w16, w0, w4
   bn.subb   w17, w1, w5
   bn.add    w10, w16, w12
   bn.addc   w11, w17, w13
-  bn.sel    w16, w10, w16, C
-  bn.sel    w17, w11, w17, C
-  bn.mov    w0, w16
-  bn.mov    w1, w17
+  bn.sel    w0, w10, w16, C
+  bn.sel    w1, w11, w17, C
 
   /* 35: [w3, w2] = t1 <= t4*Y3 = [w9, w8]*[w28, w27] */
   bn.mov    w10, w8
@@ -774,10 +857,8 @@ proj_add_p384:
   bn.addc   w17, w28, w5
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w27, w16
-  bn.mov    w28, w17
+  bn.sel    w27, w16, w10, C
+  bn.sel    w28, w17, w11, C
 
   /* 39: [w26, w25] = X3 <= t3*X3 = [w7, w6]*[w26, w25] */
   bn.mov    w10, w6
@@ -793,10 +874,8 @@ proj_add_p384:
   bn.subb   w17, w26, w3
   bn.add    w10, w16, w12
   bn.addc   w11, w17, w13
-  bn.sel    w16, w10, w16, C
-  bn.sel    w17, w11, w17, C
-  bn.mov    w25, w16
-  bn.mov    w26, w17
+  bn.sel    w25, w10, w16, C
+  bn.sel    w26, w11, w17, C
 
   /* 41: [w30, w29] = Z3 <= t4*Z3 = [w9, w8]*[w30, w29] */
   bn.mov    w10, w8
@@ -821,15 +900,75 @@ proj_add_p384:
   bn.addc   w17, w30, w3
   bn.sub    w10, w16, w12
   bn.subb   w11, w17, w13
-  bn.sel    w16, w16, w10, C
-  bn.sel    w17, w17, w11, C
-  bn.mov    w29, w16
-  bn.mov    w30, w17
+  bn.sel    w29, w16, w10, C
+  bn.sel    w30, w17, w11, C
 
   ret
 
+/**
+ * Convert projective coordinates of a P-384 curve point to affine coordinates
+ *
+ * returns P = (x_a, y_a) = (x/z mod p, y/z mod p)
+ *              where P is a valid P-384 curve point,
+ *                    x_a and y_a are the resulting affine coordinates of the
+ *                      curve point,
+ *                    x,y and z are a set of projective coordinates of the
+ *                      point and
+ *                    p is the modulus of the P-384 underlying finite field.
+ *
+ * This routine computes the affine coordinates for a set of projective
+ * coordinates of a valid P-384 curve point. The routine performs the required
+ * divisions by computing the multiplicative modular inverse of the
+ * projective z-coordinate in the underlying finite field of the P-384 curve.
+ * For inverse computation Fermat's little theorem is used, i.e.
+ * we compute z^-1 = z^(p-2) mod p.
+ *
+ * Flags: Flags have no meaning beyond the scope of this subroutine.
+ *
+ * @param[in]  [w26,w25]: x, x-coordinate of curve point (projective).
+ * @param[in]  [w28,w27]: y, y-coordinate of curve point (projective).
+ * @param[in]  [w30,w29]: z, z-coordinate of curve point (projective).
+ * @param[in]  [w13, w12]: p, modulus of P-384.
+ * @param[in]  w31: all-zero.
+ * @param[out] [w1, w0]: z^-1. inverse of z-coordinate of curve point.
+ * @param[out] [w26, w25]: x_a, affine x-coordinate of resulting point.
+ * @param[out] [w28, w27]: y_a, affine y-coordinate of resulting point.
+ *
+ * clobbered registers: w0 to w28
+ * clobbered flag groups: FG0
+ */
+ .globl proj_to_affine_p384
+proj_to_affine_p384:
+  /* [w17, w16] <= z_inv = z^-1 mod p. */
+  jal x1, mod_inv_p_p384
+
+  /* store inverse [w1,w0] <= [w17,w16] = z_inv*/
+  bn.mov w0, w16
+  bn.mov w1, w17
+
+  /* convert x-coordinate to affine space
+     [w26,w25] <= [w17,w16] = x_a <= x/z = x*z_inv = [w26,w25]*[w1,w0] mod p */
+  bn.mov    w10, w25
+  bn.mov    w11, w26
+  jal       x1, p384_mulmod_p
+  bn.mov    w25, w16
+  bn.mov    w26, w17
+
+  /* convert y-coordinate to affine space
+     [w28,w27] <= [w17,w16] = y_a <= y/z = y*z_inv = [w28,w27]*[w1,w0] mod p */
+  bn.mov    w10, w27
+  bn.mov    w11, w28
+  bn.mov    w16, w0
+  bn.mov    w17, w1
+  jal       x1, p384_mulmod_p
+  bn.mov    w27, w16
+  bn.mov    w28, w17
+
+  ret
 
 .section .data
+
+.balign 32
 
 /* P-384 domain parameter b */
 .globl p384_b

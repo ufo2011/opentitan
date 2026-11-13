@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,9 @@
 #include "sw/device/lib/base/bitfield.h"
 #include "sw/device/lib/base/macros.h"
 #include "sw/device/lib/dif/dif_base.h"
+#include "sw/device/lib/runtime/hart.h"
 
-#include "adc_ctrl_regs.h"  // Generated.
+#include "hw/top/adc_ctrl_regs.h"  // Generated.
 
 static_assert(ADC_CTRL_PARAM_NUM_ADC_CHANNEL == 2,
               "Expected two ADC Controller channels.");
@@ -350,7 +351,7 @@ dif_result_t dif_adc_ctrl_get_triggered_value(const dif_adc_ctrl_t *adc_ctrl,
   case kDifAdcCtrlChannel##channel_:                                              \
     value_reg = mmio_region_read32(                                               \
         adc_ctrl->base_addr, ADC_CTRL_ADC_CHN_VAL_##channel_##_REG_OFFSET);       \
-    *value = bitfield_field32_read(                                               \
+    *value = (uint16_t)bitfield_field32_read(                                     \
         value_reg,                                                                \
         ADC_CTRL_ADC_CHN_VAL_##channel_##_ADC_CHN_VALUE_INTR_##channel_##_FIELD); \
     break;
@@ -379,7 +380,7 @@ dif_result_t dif_adc_ctrl_get_latest_value(const dif_adc_ctrl_t *adc_ctrl,
   case kDifAdcCtrlChannel##channel_:                                         \
     value_reg = mmio_region_read32(                                          \
         adc_ctrl->base_addr, ADC_CTRL_ADC_CHN_VAL_##channel_##_REG_OFFSET);  \
-    *value = bitfield_field32_read(                                          \
+    *value = (uint16_t)bitfield_field32_read(                                \
         value_reg,                                                           \
         ADC_CTRL_ADC_CHN_VAL_##channel_##_ADC_CHN_VALUE_##channel_##_FIELD); \
     break;
@@ -418,13 +419,24 @@ dif_result_t dif_adc_ctrl_irq_get_causes(const dif_adc_ctrl_t *adc_ctrl,
   return kDifOk;
 }
 
+dif_result_t dif_adc_ctrl_get_filter_status(const dif_adc_ctrl_t *adc_ctrl,
+                                            uint32_t *status) {
+  if (adc_ctrl == NULL || status == NULL) {
+    return kDifBadArg;
+  }
+
+  *status = mmio_region_read32(adc_ctrl->base_addr,
+                               ADC_CTRL_FILTER_STATUS_REG_OFFSET);
+  return kDifOk;
+}
+
 dif_result_t dif_adc_ctrl_irq_clear_causes(const dif_adc_ctrl_t *adc_ctrl,
                                            uint32_t causes) {
   if (adc_ctrl == NULL || causes > kDifAdcCtrlIrqCauseAll) {
     return kDifBadArg;
   }
 
-  uint32_t filter_causes = (~kDifAdcCtrlIrqCauseOneshot) & causes;
+  uint32_t filter_causes = (~(uint32_t)kDifAdcCtrlIrqCauseOneshot) & causes;
   if (filter_causes) {
     mmio_region_write32(adc_ctrl->base_addr, ADC_CTRL_FILTER_STATUS_REG_OFFSET,
                         filter_causes);
@@ -439,7 +451,7 @@ dif_result_t dif_adc_ctrl_irq_clear_causes(const dif_adc_ctrl_t *adc_ctrl,
 dif_result_t dif_adc_ctrl_filter_match_wakeup_set_enabled(
     const dif_adc_ctrl_t *adc_ctrl, dif_adc_ctrl_filter_t filter,
     dif_toggle_t enabled) {
-  if (adc_ctrl == NULL || filter >= ADC_CTRL_PARAM_NUM_ADC_FILTER ||
+  if (adc_ctrl == NULL || filter >= (ADC_CTRL_PARAM_NUM_ADC_FILTER + 1) ||
       !dif_is_valid_toggle(enabled)) {
     return kDifBadArg;
   }
@@ -457,7 +469,7 @@ dif_result_t dif_adc_ctrl_filter_match_wakeup_set_enabled(
 dif_result_t dif_adc_ctrl_filter_match_wakeup_get_enabled(
     const dif_adc_ctrl_t *adc_ctrl, dif_adc_ctrl_filter_t filter,
     dif_toggle_t *is_enabled) {
-  if (adc_ctrl == NULL || filter >= ADC_CTRL_PARAM_NUM_ADC_FILTER ||
+  if (adc_ctrl == NULL || filter >= (ADC_CTRL_PARAM_NUM_ADC_FILTER + 1) ||
       is_enabled == NULL) {
     return kDifBadArg;
   }
@@ -500,5 +512,15 @@ dif_result_t dif_adc_ctrl_irq_cause_get_enabled(const dif_adc_ctrl_t *adc_ctrl,
   *enabled_causes =
       mmio_region_read32(adc_ctrl->base_addr, ADC_CTRL_ADC_INTR_CTL_REG_OFFSET);
 
+  return kDifOk;
+}
+
+dif_result_t dif_adc_ctrl_wait_cdc_sync(const dif_adc_ctrl_t *adc_ctrl,
+                                        uint32_t aon_freq_hz) {
+  if (adc_ctrl == NULL) {
+    return kDifBadArg;
+  }
+  // Wait 5 AON ticks.
+  busy_spin_micros(5 * 1000000 / aon_freq_hz);
   return kDifOk;
 }

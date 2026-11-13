@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //==================================================
@@ -9,7 +9,7 @@
 // ExclMode: default
 //==================================================
 CHECKSUM: "2576807815 1068541917"
-INSTANCE: tb.dut.top_earlgrey.u_edn1
+INSTANCE: tb.dut.top_earlgrey.earlgrey_pd_main.u_edn1
 ANNOTATION: "[UNR] Tied off and unused."
 Toggle edn_i[1].edn_req "logic edn_i[1].edn_req"
 ANNOTATION: "[UNR] Tied off and unused."

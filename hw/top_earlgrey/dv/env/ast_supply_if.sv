@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,10 @@ interface ast_supply_if (
   input logic core_sleeping_trigger,
   input logic low_power_trigger
 );
+
+  timeunit 1ps;
+  timeprecision 1ps;
+
   import uvm_pkg::*;
 
   // The amount of time to hold the glitch. Should be enough to span more than one aon_clk cycles
@@ -27,12 +31,12 @@ interface ast_supply_if (
   localparam int CyclesBeforeReenablingAssert = 7;
 
   // index of key0 input pin in top_earlgrey
-  localparam int DioSysrstCtrlAonEcRstL = 10;
+  localparam int DioSysrstCtrlEcRstL = 10;
   // index of key input pin in top_earlgrey
-  localparam int MioInSysrstCtrlAonKey0In = 46;
+  localparam int MioInSysrstCtrlKey0In = 46;
 
   function static void force_vcaon_pok(bit value);
-    force u_ast.u_rglts_pdm_3p3v.vcaon_pok_h_o = value;
+    force top_earlgrey.earlgrey_pd_aon.u_ast_part_secondary.u_rglts_pdm_3p3v.vcaon_pok_h_o = value;
   endfunction
 
   // Create glitch in vcaon_pok_h_o some cycles after this is invoked. Hold vcaon_pok_h_o low for
@@ -48,24 +52,35 @@ interface ast_supply_if (
 
   // Wait some clock cycles due to various flops in the logic.
   task automatic reenable_vcmain_assertion();
+`ifndef GATE_LEVEL
     repeat (CyclesBeforeReenablingAssert) @(posedge clk);
     `uvm_info("ast_supply_if", "re-enabling vcmain_supp_i related SVA", UVM_MEDIUM)
-    $asserton(1, top_earlgrey.u_pwrmgr_aon.u_slow_fsm.IntRstReq_A);
+    $asserton(1, top_earlgrey.earlgrey_pd_aon.u_pwrmgr.u_slow_fsm.IntRstReq_A);
+`endif
   endtask
 
   task static force_vcmain_pok(bit value);
-    `uvm_info("ast_supply_if", $sformatf("forcing vcmain_pok_h_o to %b", value), UVM_MEDIUM)
+`ifndef GATE_LEVEL
+    `uvm_info("ast_supply_if", $sformatf("forcing ast_pwst.vcmain_pok to %b", value), UVM_MEDIUM)
     if (!value) begin
       `uvm_info("ast_supply_if", "disabling vcmain_supp_i related SVA", UVM_MEDIUM)
-      $assertoff(1, top_earlgrey.u_pwrmgr_aon.u_slow_fsm.IntRstReq_A);
+      $assertoff(1, top_earlgrey.earlgrey_pd_aon.u_pwrmgr.u_slow_fsm.IntRstReq_A);
     end
-    force u_ast.u_rglts_pdm_3p3v.vcmain_pok_h_o = value;
+    force top_earlgrey.earlgrey_pd_aon.u_ast_part_secondary.ast_pwst.main_pok = value;
+`endif
+  endtask
+
+  task static release_vcmain_pok();
+`ifndef GATE_LEVEL
+    `uvm_info("ast_supply_if", $sformatf("Releasing ast_pwst.main_pok"), UVM_MEDIUM)
+    release top_earlgrey.earlgrey_pd_aon.u_ast_part_secondary.ast_pwst.main_pok;
+`endif
   endtask
 
 `define GLITCH_VCMAIN_POK                 \
     force_vcmain_pok(1'b0);               \
-    repeat (GlitchCycles) @(posedge clk); \
-    force_vcmain_pok(1'b1)
+    #1ps; \
+    release_vcmain_pok();
 
   // Create glitch in vcmain_pok_h_o some cycles after core_sleeping trigger transitions high.
   // This is useful for non-deep sleep-related triggers.
@@ -96,7 +111,7 @@ interface ast_supply_if (
 
   task static force_key0_i(bit value);
     `uvm_info("ast_supply_if", $sformatf("forcing key0 input to %b", value), UVM_MEDIUM)
-    force top_earlgrey.mio_in_i[MioInSysrstCtrlAonKey0In] = value;
+    force top_earlgrey.mio_in_i[MioInSysrstCtrlKey0In] = value;
   endtask
 
 endinterface

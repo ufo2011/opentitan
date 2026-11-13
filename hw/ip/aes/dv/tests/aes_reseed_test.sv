@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,6 @@ class aes_reseed_test extends aes_base_test;
    virtual function void build_phase(uvm_phase phase);
      super.build_phase(phase);
      configure_env();
-     // TODO fix manual mode so we can randomize speeds
-     `DV_CHECK_RANDOMIZE_WITH_FATAL(cfg, cfg.host_resp_speed  == VeryFast;)
   endfunction
 
   virtual function void configure_env();
@@ -27,15 +25,18 @@ class aes_reseed_test extends aes_base_test;
     cfg.ctr_weight               = 10;
     cfg.ofb_weight               = 10;
     cfg.cfb_weight               = 10;
+    cfg.gcm_weight               = `EN_GCM ? 10 : 0;
 
-    cfg.message_len_min          = 7;   // bytes
+    cfg.message_len_min          = 7;    // bytes
     cfg.message_len_max          = 1023; // bytes
+    cfg.aad_len_min              = 0;    //
+    cfg.aad_len_max              = 1023; // bytes
 
     cfg.fixed_data_en            = 0;
     cfg.fixed_key_en             = 0;
 
     cfg.fixed_operation_en       = 0;
-    cfg.fixed_operation          = 0;
+    cfg.fixed_operation          = aes_pkg::AES_ENC;
 
     cfg.fixed_keylen_en          = 0;
     cfg.fixed_keylen             = 3'b010;

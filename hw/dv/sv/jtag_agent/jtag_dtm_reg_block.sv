@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,14 +8,14 @@
 class jtag_dtm_base_reg extends dv_base_reg;
   `uvm_object_utils(jtag_dtm_base_reg)
 
-  function new(string       name = "jtag_dtm_base_reg",
+  function new(string       name = "",
                int unsigned n_bits = 32,
                int          has_coverage = UVM_NO_COVERAGE);
     super.new(name, n_bits, has_coverage);
   endfunction : new
 
   // When reading DTM CSR, we write the previous value that we through we wrote before, to maintain
-  // consistency, since the JTAG protocol parallely writes and reads the DR at all times. This
+  // consistency, since the JTAG protocol parallelly writes and reads the DR at all times. This
   // function is used to return the data we want to write to the DTM DR on reads. For the most part,
   // it is the mirrored value. But in some cases, we may not want to rewrite some fields.
   virtual function uvm_reg_data_t get_wdata_for_read();
@@ -30,7 +30,7 @@ class jtag_dtm_reg_bypass extends jtag_dtm_base_reg;
 
   `uvm_object_utils(jtag_dtm_reg_bypass)
 
-  function new(string       name = "jtag_dtm_reg_bypass",
+  function new(string       name = "",
                int unsigned n_bits = 32,
                int          has_coverage = UVM_NO_COVERAGE);
     super.new(name, n_bits, has_coverage);
@@ -44,14 +44,12 @@ class jtag_dtm_reg_bypass extends jtag_dtm_base_reg;
       .size(1),
       .lsb_pos(0),
       .access("RO"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    bypass.set_original_access("RO");
-
   endfunction : build
 endclass : jtag_dtm_reg_bypass
 
@@ -64,7 +62,7 @@ class jtag_dtm_reg_idcode extends jtag_dtm_base_reg;
 
   `uvm_object_utils(jtag_dtm_reg_idcode)
 
-  function new(string       name = "jtag_dtm_reg_idcode",
+  function new(string       name = "",
                int unsigned n_bits = 32,
                int          has_coverage = UVM_NO_COVERAGE);
     super.new(name, n_bits, has_coverage);
@@ -78,13 +76,12 @@ class jtag_dtm_reg_idcode extends jtag_dtm_base_reg;
       .size(1),
       .lsb_pos(0),
       .access("RO"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h1),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    rsvd.set_original_access("RO");
 
     // Note: The reset value of manufld must be set based on the design.
     manufld = (dv_base_reg_field::type_id::create("manufld"));
@@ -93,13 +90,12 @@ class jtag_dtm_reg_idcode extends jtag_dtm_base_reg;
       .size(11),
       .lsb_pos(1),
       .access("RO"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    manufld.set_original_access("RO");
 
     // Note: The reset value of partnumber must be set based on the design.
     partnumber = (dv_base_reg_field::type_id::create("partnumber"));
@@ -108,13 +104,12 @@ class jtag_dtm_reg_idcode extends jtag_dtm_base_reg;
       .size(16),
       .lsb_pos(12),
       .access("RO"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    partnumber.set_original_access("RO");
 
     // Note: The reset value of version must be set based on the design.
     version = (dv_base_reg_field::type_id::create("version"));
@@ -123,14 +118,12 @@ class jtag_dtm_reg_idcode extends jtag_dtm_base_reg;
       .size(4),
       .lsb_pos(28),
       .access("RO"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    version.set_original_access("RO");
-
   endfunction : build
 endclass : jtag_dtm_reg_idcode
 
@@ -147,7 +140,7 @@ class jtag_dtm_reg_dtmcs extends jtag_dtm_base_reg;
 
   `uvm_object_utils(jtag_dtm_reg_dtmcs)
 
-  function new(string       name = "jtag_dtm_reg_dtmcs",
+  function new(string       name = "",
                int unsigned n_bits = 32,
                int          has_coverage = UVM_NO_COVERAGE);
     super.new(name, n_bits, has_coverage);
@@ -161,13 +154,12 @@ class jtag_dtm_reg_dtmcs extends jtag_dtm_base_reg;
       .size(4),
       .lsb_pos(0),
       .access("RO"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h1),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    version.set_original_access("RO");
 
     // Note: The reset value of abits must be set based on the design.
     abits = (dv_base_reg_field::type_id::create("abits"));
@@ -176,13 +168,16 @@ class jtag_dtm_reg_dtmcs extends jtag_dtm_base_reg;
       .size(6),
       .lsb_pos(4),
       .access("RO"),
+      .mubi_access("NONE"),
       .volatile(0),
-      .reset(32'h7),
+`ifdef USE_DMI_INTERFACE
+      .reset(32'h10),
+`else
+      .reset(32'h07),
+`endif
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    abits.set_original_access("RO");
 
     dmistat = (dv_base_reg_field::type_id::create("dmistat"));
     dmistat.configure(
@@ -190,13 +185,12 @@ class jtag_dtm_reg_dtmcs extends jtag_dtm_base_reg;
       .size(2),
       .lsb_pos(10),
       .access("RO"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    dmistat.set_original_access("RO");
 
     idle = (dv_base_reg_field::type_id::create("idle"));
     idle.configure(
@@ -204,13 +198,12 @@ class jtag_dtm_reg_dtmcs extends jtag_dtm_base_reg;
       .size(3),
       .lsb_pos(12),
       .access("RO"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h1),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    idle.set_original_access("RO");
 
     zero0 = (dv_base_reg_field::type_id::create("zero0"));
     zero0.configure(
@@ -218,13 +211,12 @@ class jtag_dtm_reg_dtmcs extends jtag_dtm_base_reg;
       .size(1),
       .lsb_pos(15),
       .access("RO"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    zero0.set_original_access("RO");
 
     dmireset = (dv_base_reg_field::type_id::create("dmireset"));
     dmireset.configure(
@@ -232,13 +224,12 @@ class jtag_dtm_reg_dtmcs extends jtag_dtm_base_reg;
       .size(1),
       .lsb_pos(16),
       .access("W1C"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    dmireset.set_original_access("W1C");
 
     dmihardreset = (dv_base_reg_field::type_id::create("dmihardreset"));
     dmihardreset.configure(
@@ -246,13 +237,13 @@ class jtag_dtm_reg_dtmcs extends jtag_dtm_base_reg;
       .size(1),
       .lsb_pos(17),
       .access("W1C"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
 
-    dmihardreset.set_original_access("W1C");
     // Writing 1 to this field will clear the dmi register, causing read-check mismatches.
     csr_excl.add_excl(dmihardreset.get_full_name(), CsrExclWrite, CsrNonInitTests);
 
@@ -262,14 +253,12 @@ class jtag_dtm_reg_dtmcs extends jtag_dtm_base_reg;
       .size(14),
       .lsb_pos(18),
       .access("RO"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(0),
       .individually_accessible(0));
-
-    zero1.set_original_access("RO");
-
   endfunction : build
 endclass : jtag_dtm_reg_dtmcs
 
@@ -281,8 +270,12 @@ class jtag_dtm_reg_dmi extends jtag_dtm_base_reg;
 
   `uvm_object_utils(jtag_dtm_reg_dmi)
 
-  function new(string       name = "jtag_dtm_reg_dmi",
+  function new(string       name = "",
+`ifdef USE_DMI_INTERFACE
+               int unsigned n_bits = 50,
+`else
                int unsigned n_bits = 41,
+`endif
                int          has_coverage = UVM_NO_COVERAGE);
     super.new(name, n_bits, has_coverage);
   endfunction : new
@@ -295,17 +288,12 @@ class jtag_dtm_reg_dmi extends jtag_dtm_base_reg;
       .size(2),
       .lsb_pos(0),
       .access("RW"),
+      .mubi_access("NONE"),
       .volatile(1),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    op.set_original_access("RW");
-    // Writing to op can affect the DM hardware, and result in unintended consequences.
-    // Reading op may not result in expected value to be returned, since read op value always
-    // differs from the written op value.
-    csr_excl.add_excl(op.get_full_name(), CsrExclAll, CsrAllTests);
 
     data = (dv_base_reg_field::type_id::create("data"));
     data.configure(
@@ -313,28 +301,29 @@ class jtag_dtm_reg_dmi extends jtag_dtm_base_reg;
       .size(32),
       .lsb_pos(2),
       .access("RW"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    data.set_original_access("RW");
 
     address = (dv_base_reg_field::type_id::create("address"));
     address.configure(
       .parent(this),
+`ifdef USE_DMI_INTERFACE
+      .size(16 /* Same as abits. */),
+`else
       .size(7 /* Same as abits. */),
+`endif
       .lsb_pos(34),
       .access("RW"),
+      .mubi_access("NONE"),
       .volatile(0),
       .reset(32'h0),
       .has_reset(1),
       .is_rand(1),
       .individually_accessible(0));
-
-    address.set_original_access("RW");
-
   endfunction : build
 
   // On reads, we do not want to write the op field.
@@ -353,13 +342,18 @@ class jtag_dtm_reg_block extends dv_base_reg_block;
 
   `uvm_object_utils(jtag_dtm_reg_block)
 
-  function new(string name = "jtag_dtm_reg_block",
+  function new(string name = "",
                int    has_coverage = UVM_NO_COVERAGE);
     super.new(name, has_coverage);
   endfunction : new
 
   virtual function void build(uvm_reg_addr_t base_addr,
-                              csr_excl_item csr_excl = null);
+                              csr_excl_item  csr_excl,
+                              int unsigned   addr_width,
+                              int unsigned   data_width,
+                              int unsigned   be_width);
+    super.build(base_addr, csr_excl, addr_width, data_width, be_width);
+
     // create default map
     this.default_map = create_map(.name("default_map"),
                                   .base_addr(base_addr),
@@ -398,6 +392,10 @@ class jtag_dtm_reg_block extends dv_base_reg_block;
     dmi.build(csr_excl);
     default_map.add_reg(.rg(dmi),
                         .offset(32'h11));
+
+    // Disable automated CSR tests based on the dmi register. This acts as a window into a different
+    // bus and we don't guarantee "standard register behaviour" for any of its fields.
+    csr_excl.add_excl(dmi.get_full_name(), CsrExclAll, CsrAllTests);
 
     bypass1 = (jtag_dtm_reg_bypass::
                   type_id::create("bypass1"));

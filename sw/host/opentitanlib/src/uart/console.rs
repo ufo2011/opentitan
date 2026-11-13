@@ -1,62 +1,103 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{anyhow, Result};
+use std::time::Duration;
+
+use anyhow::{Result, anyhow};
 use regex::{Captures, Regex};
-use std::fs::File;
-use std::io::{Read, Write};
-use std::os::unix::io::AsRawFd;
-use std::time::{Duration, Instant, SystemTime};
 
-use crate::io::uart::{Uart, UartError};
-use crate::util::file;
+use crate::io::console::{ConsoleDevice, ConsoleError, ConsoleExt};
 
-#[derive(Default)]
 pub struct UartConsole {
-    pub logfile: Option<File>,
-    pub timeout: Option<Duration>,
-    pub deadline: Option<Instant>,
-    pub exit_success: Option<Regex>,
-    pub exit_failure: Option<Regex>,
-    pub timestamp: bool,
-    pub buffer: String,
-    pub newline: bool,
+    timeout: Option<Duration>,
+    exit_success: Option<Regex>,
+    exit_failure: Option<Regex>,
+    buffer: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExitStatus {
-    None,
-    CtrlC,
     Timeout,
     ExitSuccess,
     ExitFailure,
 }
 
-// Creates a vtable for implementors of Read and AsRawFd traits.
-pub trait ReadAsRawFd: Read + AsRawFd {}
-impl<T: Read + AsRawFd> ReadAsRawFd for T {}
-
 impl UartConsole {
-    const CTRL_C: u8 = 3;
-    const BUFFER_LEN: usize = 1024;
+    const BUFFER_LEN: usize = 32768;
+
+    pub fn new(
+        timeout: Option<Duration>,
+        exit_success: Option<Regex>,
+        exit_failure: Option<Regex>,
+    ) -> Self {
+        Self {
+            timeout,
+            exit_success,
+            exit_failure,
+            buffer: String::new(),
+        }
+    }
 
     // Runs an interactive console until CTRL_C is received.
-    pub fn interact(
-        &mut self,
-        uart: &dyn Uart,
-        mut stdin: Option<&mut dyn ReadAsRawFd>,
-        mut stdout: Option<&mut dyn Write>,
-    ) -> Result<ExitStatus> {
-        if let Some(timeout) = &self.timeout {
-            self.deadline = Some(Instant::now() + *timeout);
-        }
-        loop {
-            match self.interact_once(uart, &mut stdin, &mut stdout)? {
-                ExitStatus::None => {}
-                status => return Ok(status),
+    pub fn interact<T>(&mut self, device: &T, quiet: bool) -> Result<ExitStatus>
+    where
+        T: ConsoleDevice + ?Sized,
+    {
+        crate::util::runtime::block_on(self.interact_async(device, quiet))
+    }
+
+    // Runs an interactive console until CTRL_C is received.  Uses `mio` library to simultaneously
+    // wait for data from UART or from stdin, without need for timeouts and repeated calls.
+    pub async fn interact_async<T>(&mut self, device: &T, quiet: bool) -> Result<ExitStatus>
+    where
+        T: ConsoleDevice + ?Sized,
+    {
+        let device = device.coverage();
+        let device: &dyn ConsoleDevice = if quiet { &device } else { &device.logged() };
+
+        let timeout = self.timeout;
+        let rx = async {
+            loop {
+                self.uart_read(device).await?;
+                if self
+                    .exit_success
+                    .as_ref()
+                    .map(|rx| rx.is_match(&self.buffer))
+                    == Some(true)
+                {
+                    return Ok(ExitStatus::ExitSuccess);
+                }
+                if self
+                    .exit_failure
+                    .as_ref()
+                    .map(|rx| rx.is_match(&self.buffer))
+                    == Some(true)
+                {
+                    return Ok(ExitStatus::ExitFailure);
+                }
             }
+        };
+        let timeout = async {
+            if let Some(timeout) = timeout {
+                tokio::time::sleep(timeout).await;
+            } else {
+                std::future::pending().await
+            }
+        };
+
+        tokio::select! {
+            v = rx => v,
+            _ = timeout => Ok(ExitStatus::Timeout),
         }
+    }
+
+    /// Returns `true` if any regular expressions are used to match the streamed output.  If so,
+    /// then this struct will keep a window of the most recent output, and take care not to read
+    /// any more characters from the underlying stream should one of the regular expressions
+    /// match.
+    fn uses_regex(&self) -> bool {
+        self.exit_success.is_some() || self.exit_failure.is_some()
     }
 
     // Maintain a buffer for the exit regexes to match against.
@@ -67,109 +108,28 @@ impl UartConsole {
         }
     }
 
-    // Read from the uart and process the data read.
-    fn uart_read(
-        &mut self,
-        uart: &dyn Uart,
-        timeout: Duration,
-        stdout: &mut Option<&mut dyn Write>,
-    ) -> Result<()> {
-        let mut buf = [0u8; 256];
-        let len = uart.read_timeout(&mut buf, timeout)?;
+    // Read from the console device and process the data read.
+    async fn uart_read<T>(&mut self, device: &T) -> Result<()>
+    where
+        T: ConsoleDevice + ?Sized,
+    {
+        let mut ch = 0;
+
+        // Read one byte at a time to avoid the risk of consuming output past a match.
+        let len =
+            std::future::poll_fn(|cx| device.poll_read(cx, std::slice::from_mut(&mut ch))).await?;
+
         if len == 0 {
             return Ok(());
         }
-        for i in 0..len {
-            if self.timestamp && self.newline {
-                let t = humantime::format_rfc3339_millis(SystemTime::now());
-                stdout
-                    .as_mut()
-                    .map_or(Ok(()), |out| out.write_fmt(format_args!("[{}]", t)))?;
-                self.newline = false;
-            }
-            self.newline = buf[i] == b'\n';
-            stdout.as_mut().map_or(Ok(()), |out| {
-                out.write_all(if self.newline {
-                    b"\r\n"
-                } else {
-                    &buf[i..i + 1]
-                })
-            })?;
-        }
-        stdout.as_mut().map_or(Ok(()), |out| out.flush())?;
 
-        // If we're logging, save it to the logfile.
-        self.logfile
-            .as_mut()
-            .map_or(Ok(()), |f| f.write_all(&buf[..len]))?;
-        self.append_buffer(&buf[..len]);
+        if self.uses_regex() {
+            self.append_buffer(std::slice::from_ref(&ch));
+        }
         Ok(())
     }
 
-    fn process_input(
-        &self,
-        uart: &dyn Uart,
-        stdin: &mut Option<&mut (dyn ReadAsRawFd)>,
-    ) -> Result<ExitStatus> {
-        if let Some(ref mut input) = stdin.as_mut() {
-            if file::wait_fd_read_timeout(input.as_raw_fd(), Duration::from_millis(0)).is_ok() {
-                let mut buf = [0u8; 256];
-                let len = input.read(&mut buf)?;
-                if len == 1 && buf[0] == UartConsole::CTRL_C {
-                    return Ok(ExitStatus::CtrlC);
-                }
-                if len > 0 {
-                    uart.write(&buf[..len])?;
-                }
-            }
-        }
-        Ok(ExitStatus::None)
-    }
-
-    pub fn interact_once(
-        &mut self,
-        uart: &dyn Uart,
-        stdin: &mut Option<&mut (dyn ReadAsRawFd)>,
-        stdout: &mut Option<&mut dyn Write>,
-    ) -> Result<ExitStatus> {
-        if let Some(deadline) = &self.deadline {
-            if Instant::now() > *deadline {
-                return Ok(ExitStatus::Timeout);
-            }
-        }
-        // This _should_ really use unix `poll` in the conventional way
-        // to learn when the console or uart file descriptors become ready,
-        // but some UART backends will bury their implementation in libusb
-        // and make discovering the file descriptor difficult or impossible.
-        //
-        // As a pragmatic implementation detail, we wait for the UART
-        // for a short period of time and then service the console.
-        //
-        // TODO: as we write more backends, re-evaluate whether there is a
-        // better way to approach waiting on the UART and keyboard.
-
-        // Check for input on the uart.
-        self.uart_read(uart, Duration::from_millis(10), stdout)?;
-        if self
-            .exit_success
-            .as_ref()
-            .map(|rx| rx.is_match(&self.buffer))
-            == Some(true)
-        {
-            return Ok(ExitStatus::ExitSuccess);
-        }
-        if self
-            .exit_failure
-            .as_ref()
-            .map(|rx| rx.is_match(&self.buffer))
-            == Some(true)
-        {
-            return Ok(ExitStatus::ExitFailure);
-        }
-        self.process_input(uart, stdin)
-    }
-
-    pub fn captures(&self, status: ExitStatus) -> Option<Captures> {
+    pub fn captures(&self, status: ExitStatus) -> Option<Captures<'_>> {
         match status {
             ExitStatus::ExitSuccess => self
                 .exit_success
@@ -183,22 +143,51 @@ impl UartConsole {
         }
     }
 
-    pub fn wait_for(uart: &dyn Uart, rx: &str, timeout: Duration) -> Result<String> {
-        let mut console = UartConsole {
-            timeout: Some(timeout),
-            exit_success: Some(Regex::new(rx)?),
-            ..Default::default()
-        };
-        let mut stdout = std::io::stdout();
-        let result = console.interact(uart, None, Some(&mut stdout))?;
+    /// Wait on the console until the regex matches the input.
+    ///
+    /// The input is processed one byte at a time, and is accumulated until match happens.
+    pub fn wait_for_bytes<T>(device: &T, rx: &str, timeout: Duration) -> Result<Vec<String>>
+    where
+        T: ConsoleDevice + ?Sized,
+    {
+        let mut console = UartConsole::new(Some(timeout), Some(Regex::new(rx)?), None);
+        let result = console.interact(device, false)?;
+        println!();
         match result {
             ExitStatus::ExitSuccess => {
-                let cap = console.captures(ExitStatus::ExitSuccess).expect("capture");
-                let s = cap.get(0).expect("capture group").as_str().to_owned();
-                Ok(s)
+                let caps = console.captures(ExitStatus::ExitSuccess).expect("capture");
+                let mut vec = Vec::new();
+                for c in caps.iter() {
+                    match c {
+                        None => vec.push(String::new()),
+                        _ => vec.push(c.unwrap().as_str().to_owned()),
+                    }
+                }
+                Ok(vec)
             }
-            ExitStatus::Timeout => Err(UartError::GenericError("Timed Out".into()).into()),
+            ExitStatus::Timeout => Err(ConsoleError::TimedOut)?,
             _ => Err(anyhow!("Impossible result: {:?}", result)),
         }
+    }
+
+    /// Wait on the console until the regex matches the input.
+    ///
+    /// The input is processed one line at a time. Lines that does not match the input is discarded.
+    pub fn wait_for<T>(device: &T, rx: &str, timeout: Duration) -> Result<Vec<String>>
+    where
+        T: ConsoleDevice + ?Sized,
+    {
+        device
+            .coverage()
+            .logged()
+            .wait_for_line(Regex::new(rx)?, timeout)
+    }
+
+    /// Wait on the console until the coverage profile end or skip anchor is received.
+    pub fn wait_for_coverage<T>(device: &T, timeout: Duration) -> Result<()>
+    where
+        T: ConsoleDevice + ?Sized,
+    {
+        device.coverage().logged().wait_for_coverage(timeout)
     }
 }

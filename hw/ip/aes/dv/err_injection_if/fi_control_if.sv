@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,6 +37,7 @@ interface fi_control_if
     $sformatf("%s.%s", par_hier, "ctr_we_i"),
     $sformatf("%s.%s", par_hier, "key_init_we_o"),
     $sformatf("%s.%s", par_hier, "iv_we_o"),
+    $sformatf("%s.%s", par_hier, "data_out_sel_o"),
     $sformatf("%s.%s", par_hier, "data_in_prev_sel_o"),
     $sformatf("%s.%s", par_hier, "state_in_sel_o"),
     $sformatf("%s.%s", par_hier, "add_state_in_sel_o"),
@@ -61,7 +62,7 @@ interface fi_control_if
     return intf_array.size() + intf_mul_array.size();
   endfunction // get_if_size
 
-  // check which array we need to access and force or releae
+  // check which array we need to access and force or release
   function automatic void force_signal(int target, bit rel, bit [31:0] value);
     if (!rel) aes_ctrl_fsm_cg_inst.sample(target);
     if (target < intf_array.size()) begin
@@ -97,7 +98,9 @@ interface fi_control_if
       value = 0;
     end else begin
       // Read the current value.
-      uvm_hdl_read(intf_array[target], read);
+      if (!uvm_hdl_read(intf_array[target], read)) begin
+        `uvm_error("fi_control_if", $sformatf("Was not able to read %s", intf_array[target]))
+      end
       value = !read;
     end
     // always announce we are forcing something
@@ -115,7 +118,17 @@ interface fi_control_if
 
 
   function automatic void release_single_bit(int target);
-    uvm_hdl_release(intf_array[target]);
+
+    //VCS coverage off
+    // pragma coverage off
+
+    if (!uvm_hdl_release(intf_array[target])) begin
+      `uvm_error("fi_control_if", $sformatf("Was not able to release %s", intf_array[target]))
+    end
+
+    //VCS coverage on
+    // pragma coverage on
+
     $asserton(0,"tb.dut");
   endfunction
 
@@ -133,7 +146,9 @@ interface fi_control_if
       `uvm_fatal("fi_control_if", $sformatf("PATH NOT EXISTING %m"))
     end
     // read the value currently of bit 0
-    uvm_hdl_read(intf_mul_array[target], read);
+    if (!uvm_hdl_read(intf_mul_array[target], read)) begin
+      `uvm_error("fi_control_if", $sformatf("Was not able to read %s", intf_mul_array[target]))
+    end
     // flip bit to make sure we don't force the value currently on bus
     value[0] = !read;
     if (!uvm_hdl_force(intf_mul_array[target], value)) begin
@@ -147,9 +162,19 @@ interface fi_control_if
 
 
   function automatic void release_multi_bit(int target);
-    uvm_hdl_release(intf_mul_array[target]);
+
+    //VCS coverage off
+    // pragma coverage off
+
+    if (!uvm_hdl_release(intf_mul_array[target])) begin
+      `uvm_error("fi_control_if", $sformatf("Was not able to release %s", intf_mul_array[target]))
+    end
+
+    //VCS coverage on
+    // pragma coverage on
+
     $asserton(0,"tb.dut");
-  endfunction // release_single_bit
+  endfunction
 
 
 
@@ -159,7 +184,7 @@ interface fi_control_if
 
   covergroup aes_ctrl_fsm_cg (int num_bins) with function sample(int target);
     // We want to see coverage per instance,
-    // but as the code are copies of eachother
+    // but as the code are copies of each other
     // we don't need every instance to achieve 100% coverage
     // a total of 100% is enough so we set the option
     // to merge the coverage of the instances

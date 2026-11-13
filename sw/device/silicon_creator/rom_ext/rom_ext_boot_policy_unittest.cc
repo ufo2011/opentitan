@@ -1,10 +1,11 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sw/device/silicon_creator/rom_ext/rom_ext_boot_policy.h"
 
 #include "gtest/gtest.h"
+#include "sw/device/silicon_creator/lib/mock_boot_data.h"
 #include "sw/device/silicon_creator/lib/mock_manifest.h"
 #include "sw/device/silicon_creator/rom_ext/mock_rom_ext_boot_policy_ptrs.h"
 #include "sw/device/silicon_creator/testing/rom_test.h"
@@ -17,49 +18,179 @@ class RomExtBootPolicyTest : public rom_test::RomTest {
  protected:
   rom_test::MockRomExtBootPolicyPtrs rom_ext_boot_policy_ptrs_;
   rom_test::MockManifest mock_manifest_;
+  rom_test::MockBootData mock_boot_data_;
 };
 
-TEST_F(RomExtBootPolicyTest, ManifestCheck) {
+// TODO(#21204): Refactor to use `manifest_check` from `lib/manifest.h`.
+TEST_F(RomExtBootPolicyTest, DISABLED_ManifestCheck) {
+  boot_data_t boot_data{{0}};
+
   manifest_t manifest{};
   manifest.identifier = CHIP_BL0_IDENTIFIER;
 
   manifest.length = CHIP_BL0_SIZE_MIN;
   EXPECT_CALL(mock_manifest_, Check(&manifest)).WillOnce(Return(kErrorOk));
-  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest), kErrorOk);
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
+            kErrorOk);
 
   manifest.length = CHIP_BL0_SIZE_MAX >> 1;
   EXPECT_CALL(mock_manifest_, Check(&manifest)).WillOnce(Return(kErrorOk));
-  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest), kErrorOk);
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
+            kErrorOk);
 
   manifest.length = CHIP_BL0_SIZE_MAX;
   EXPECT_CALL(mock_manifest_, Check(&manifest)).WillOnce(Return(kErrorOk));
-  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest), kErrorOk);
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
+            kErrorOk);
 }
 
 TEST_F(RomExtBootPolicyTest, ManifestCheckBadIdentifier) {
+  boot_data_t boot_data{};
   manifest_t manifest{};
 
-  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest),
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
             kErrorBootPolicyBadIdentifier);
 }
 
 TEST_F(RomExtBootPolicyTest, ManifestCheckBadLength) {
+  boot_data_t boot_data{};
   manifest_t manifest{};
   manifest.identifier = CHIP_BL0_IDENTIFIER;
 
   manifest.length = CHIP_BL0_SIZE_MIN - 1;
-  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest),
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
             kErrorBootPolicyBadLength);
 
   manifest.length = CHIP_BL0_SIZE_MAX + 1;
-  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest),
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
             kErrorBootPolicyBadLength);
 }
 
+TEST_F(RomExtBootPolicyTest, ManifestCheckBadBl0SecVer) {
+  boot_data_t boot_data{};
+  boot_data.min_security_version_bl0 = 1;
+
+  manifest_t manifest{};
+  manifest.identifier = CHIP_BL0_IDENTIFIER;
+  manifest.length = CHIP_BL0_SIZE_MIN;
+  manifest.security_version = 0;
+
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
+            kErrorBootPolicyRollback);
+}
+
+TEST_F(RomExtBootPolicyTest, ManifestCheckBadSignedRegion) {
+  boot_data_t boot_data{};
+  boot_data.min_security_version_bl0 = 1;
+
+  manifest_t manifest{};
+  manifest.identifier = CHIP_BL0_IDENTIFIER;
+  manifest.length = CHIP_BL0_SIZE_MIN;
+  manifest.security_version = 1;
+  manifest.manifest_version.major = kManifestVersionMajor2;
+  manifest.signed_region_end = manifest.length + 1;
+
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
+            kErrorManifestBadSignedRegion);
+}
+
+TEST_F(RomExtBootPolicyTest, ManifestCheckBadEntryPoint) {
+  boot_data_t boot_data{};
+  boot_data.min_security_version_bl0 = 1;
+
+  manifest_t manifest{};
+  manifest.identifier = CHIP_BL0_IDENTIFIER;
+  manifest.length = sizeof(manifest_t) + 0x1000;
+  manifest.security_version = 1;
+  manifest.manifest_version.major = kManifestVersionMajor2;
+  manifest.signed_region_end = sizeof(manifest_t) + 0x900;
+  manifest.code_start = sizeof(manifest_t);
+  manifest.code_end = sizeof(manifest_t) + 0x800;
+  manifest.entry_point = manifest.code_start - 1;
+
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
+            kErrorManifestBadEntryPoint);
+}
+
+TEST_F(RomExtBootPolicyTest, ManifestCheckExtensionOffsetUnaligned) {
+  boot_data_t boot_data{};
+  boot_data.min_security_version_bl0 = 1;
+
+  manifest_t manifest{};
+  manifest.identifier = CHIP_BL0_IDENTIFIER;
+  manifest.length = sizeof(manifest_t) + 0x1000;
+  manifest.security_version = 1;
+  manifest.manifest_version.major = kManifestVersionMajor2;
+  manifest.signed_region_end = sizeof(manifest_t) + 0x900;
+  manifest.code_start = sizeof(manifest_t);
+  manifest.code_end = sizeof(manifest_t) + 0x800;
+  manifest.entry_point = manifest.code_start;
+  manifest.extensions.entries[0].offset = 1;
+
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
+            kErrorManifestBadExtension);
+}
+
+TEST_F(RomExtBootPolicyTest, ManifestCheckExtensionOffsetInsideManifest) {
+  boot_data_t boot_data{};
+  boot_data.min_security_version_bl0 = 1;
+
+  manifest_t manifest{};
+  manifest.identifier = CHIP_BL0_IDENTIFIER;
+  manifest.length = sizeof(manifest_t) + 0x1000;
+  manifest.security_version = 1;
+  manifest.manifest_version.major = kManifestVersionMajor2;
+  manifest.signed_region_end = sizeof(manifest_t) + 0x900;
+  manifest.code_start = sizeof(manifest_t);
+  manifest.code_end = sizeof(manifest_t) + 0x800;
+  manifest.entry_point = manifest.code_start;
+  manifest.extensions.entries[0].offset = sizeof(manifest_t) - 4;
+
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
+            kErrorManifestBadExtension);
+}
+
+TEST_F(RomExtBootPolicyTest, ManifestCheckExtensionOffsetPastImageEnd) {
+  boot_data_t boot_data{};
+  boot_data.min_security_version_bl0 = 1;
+
+  manifest_t manifest{};
+  manifest.identifier = CHIP_BL0_IDENTIFIER;
+  manifest.length = sizeof(manifest_t) + 0x1000;
+  manifest.security_version = 1;
+  manifest.manifest_version.major = kManifestVersionMajor2;
+  manifest.signed_region_end = sizeof(manifest_t) + 0x900;
+  manifest.code_start = sizeof(manifest_t);
+  manifest.code_end = sizeof(manifest_t) + 0x800;
+  manifest.entry_point = manifest.code_start;
+  manifest.extensions.entries[0].offset = manifest.length;
+
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
+            kErrorManifestBadExtension);
+}
+
+TEST_F(RomExtBootPolicyTest, ManifestCheckExtensionOffsetTooCloseToImageEnd) {
+  boot_data_t boot_data{};
+  boot_data.min_security_version_bl0 = 1;
+
+  manifest_t manifest{};
+  manifest.identifier = CHIP_BL0_IDENTIFIER;
+  manifest.length = sizeof(manifest_t) + 0x1000;
+  manifest.security_version = 1;
+  manifest.manifest_version.major = kManifestVersionMajor2;
+  manifest.signed_region_end = sizeof(manifest_t) + 0x900;
+  manifest.code_start = sizeof(manifest_t);
+  manifest.code_end = sizeof(manifest_t) + 0x800;
+  manifest.entry_point = manifest.code_start;
+  manifest.extensions.entries[0].offset =
+      manifest.length - sizeof(manifest_ext_header_t) + 4;
+
+  EXPECT_EQ(rom_ext_boot_policy_manifest_check(&manifest, &boot_data),
+            kErrorManifestBadExtension);
+}
+
 struct ManifestOrderTestCase {
-  uint32_t version_a;
-  uint32_t version_b;
-  bool is_a_first;
+  uint32_t primary;
 };
 
 class ManifestOrderTest
@@ -69,16 +200,24 @@ class ManifestOrderTest
 TEST_P(ManifestOrderTest, ManifestsGet) {
   manifest_t manifest_a{};
   manifest_t manifest_b{};
-  manifest_a.security_version = GetParam().version_a;
-  manifest_b.security_version = GetParam().version_b;
+  manifest_a.security_version = 0;
+  manifest_b.security_version = 1;
 
   EXPECT_CALL(rom_ext_boot_policy_ptrs_, ManifestA)
       .WillOnce(Return(&manifest_a));
   EXPECT_CALL(rom_ext_boot_policy_ptrs_, ManifestB)
       .WillOnce(Return(&manifest_b));
 
-  rom_ext_boot_policy_manifests_t res = rom_ext_boot_policy_manifests_get();
-  if (GetParam().is_a_first) {
+  boot_data_t boot_data{};
+  if (GetParam().primary == kBootSlotA) {
+    boot_data.primary_bl0_slot = kBootSlotA;
+  } else {
+    boot_data.primary_bl0_slot = kBootSlotB;
+  }
+
+  rom_ext_boot_policy_manifests_t res =
+      rom_ext_boot_policy_manifests_get(&boot_data);
+  if (GetParam().primary == kBootSlotA) {
     EXPECT_EQ(res.ordered[0], &manifest_a);
     EXPECT_EQ(res.ordered[1], &manifest_b);
   } else {
@@ -87,30 +226,13 @@ TEST_P(ManifestOrderTest, ManifestsGet) {
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    SecurityVersionCases, ManifestOrderTest,
-    testing::Values(
-        ManifestOrderTestCase{
-            .version_a = 0,
-            .version_b = 0,
-            .is_a_first = true,
-        },
-        ManifestOrderTestCase{
-            .version_a = 1,
-            .version_b = 0,
-            .is_a_first = true,
-        },
-        ManifestOrderTestCase{
-            .version_a = 0,
-            .version_b = 1,
-            .is_a_first = false,
-        },
-        ManifestOrderTestCase{
-            .version_a = std::numeric_limits<int32_t>::max(),
-            .version_b =
-                static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) + 1,
-            .is_a_first = false,
-        }));
-
+INSTANTIATE_TEST_SUITE_P(SecurityVersionCases, ManifestOrderTest,
+                         testing::Values(
+                             ManifestOrderTestCase{
+                                 .primary = kBootSlotA,
+                             },
+                             ManifestOrderTestCase{
+                                 .primary = kBootSlotB,
+                             }));
 }  // namespace
 }  // namespace manifest_unittest

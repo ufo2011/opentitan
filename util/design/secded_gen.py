@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 r"""SECDED encoder/decoder generator
@@ -12,17 +12,26 @@ Hsiao SECDED codes, refer to https://ieeexplore.ieee.org/document/8110065.g
 """
 
 import argparse
+from collections import defaultdict
 import functools
 import itertools
 import logging as log
 import math
 import random
+import sys
 import hjson
 import subprocess
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List, Tuple
 from pathlib import Path
 
-COPYRIGHT = """// Copyright lowRISC contributors.
+from mako.template import Template
+
+# To enable importing util modules
+sys.path.append(str(Path(__file__).parents[1]))
+
+from basegen.lib import Name  # noqa : E402
+
+COPYRIGHT = """// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -89,6 +98,9 @@ SECDED_CFG_PATH = Path(PROJ_ROOT) / SECDED_CFG_FILE
 # to choose constants for Hsiao codes.
 _RND_SEED = 123
 
+# Arbitrary cache size -- keep it relatively small and it should be performant.
+_ECC_ENCODING_CACHE_SIZE = 4096
+
 
 def min_paritysize(k):
     # SECDED --> Hamming distance 'd': 4
@@ -140,6 +152,210 @@ def calc_bitmasks(k, m, codes, dec):
     return tuple(fanin_masks)
 
 
+def calc_spaces(bignum, thisnum = 1):
+    # Calculate the number of extra spaces required to indent some code
+    # based on the number of characters required to represent
+    # some number compared to a larger number (i.e. signal widths).
+    if thisnum == 0:
+        thisnum += 1  # log10 doesn't like 0, but "0" is the same width as "1"
+    return math.floor(math.log10(bignum)) - math.floor(math.log10(thisnum))
+
+
+def hex_format(bits):
+    return str(bits) + "'h{:0" + str((bits + 3) // 4) + "X}"
+
+
+type_enum_template = Template("""\
+  typedef enum int {
+% for type_name in type_names.values():
+<% sep = "" if loop.last else "," %>\
+    ${type_name}${sep}
+% endfor
+  } prim_secded_type_e;""")
+
+# The following two templates create SV constant functions to help
+# parameterization.
+
+synd_width_template = Template("""\
+  // This returns the syndrome width for the given width and secded type.
+  // Return 0 if the width is not supported.
+  function automatic int get_synd_width(prim_secded_type_e sd_type, int width);
+    unique case (sd_type)
+% for sy_type in synd_widths:
+      ${type_names[sy_type]}:
+        unique case (width)
+  % for width, synd in synd_widths[sy_type].items():
+          ${width}: return ${synd};
+  % endfor
+          default: return 0;
+        endcase
+% endfor
+      default: return 0;
+    endcase
+  endfunction : get_synd_width""")
+
+valid_width_template = Template("""\
+  // This returns 1 iff the width is supported for the given secded type.
+  function automatic bit is_width_valid(prim_secded_type_e sd_type, int width);
+    unique case (sd_type)
+% for sy_type in synd_widths:
+      ${type_names[sy_type]}:
+        unique case (width)
+  % for w in synd_widths[sy_type].keys():
+          ${w}: return 1'b1;
+  % endfor
+          default: return 1'b0;
+        endcase
+% endfor
+      default: return 1'b0;
+    endcase
+  endfunction : is_width_valid""")
+
+# These templates create a macro, and the style guide asks all lines to have
+# the same length and finish with a back-slash. They are generated with lines
+# of the same length, but the closing back-slash causes template trouble so
+# it is inserted once the macro is done.
+
+dec_instance_comment = """\
+// This macro instantiates a secded decoder for the given _TYPE and _WIDTH.
+// The instance will be named _INST, the data input connected to _ENC_DATA,
+// and the data output, syndrome, and error connected to _DATA, _SYND, and
+// _ERR respectively.
+"""
+
+dec_instance_template = Template("""\
+<%
+def_str = (
+"`define SECDED_INST_DEC(_TYPE, _WIDTH, _INST, _ENC_DATA, _DATA, _SYND, _ERR)"
+)
+target_len = len(def_str)
+%>\
+${def_str}
+  case (_TYPE)${" " * (target_len - len("  case (_TYPE)"))}
+% for sy_type in synd_widths:
+<%
+type_name = type_names[sy_type]
+type_block = f"prim_secded_pkg::{type_name}: begin : gen_dec_{sy_type}"
+%>\
+    ${type_block}${" " * (target_len - len(type_block) - 4)}
+      case (_WIDTH)${" "*(target_len - len("case (_WIDTH)") - 6)}
+  % for width in synd_widths[sy_type]:
+<%
+full_width = width + synd_widths[sy_type][width]
+mod_stem  = f"prim_secded{CODE_OPTIONS[sy_type]}_{full_width}_{width}"
+case_item = f"{width}: begin : gen_dec_{sy_type}_{width}"
+instance  = f"{mod_stem}_dec _INST("
+data_i    =  ".data_i(_ENC_DATA),"
+data_o    =  ".data_o(_DATA),"
+synd_o    =  ".syndrome_o(_SYND),"
+err_o     =  ".err_o(_ERR));"
+%>\
+        ${case_item}${" " * (target_len - len(case_item) - 8)}
+          ${instance}${" " * (target_len - len(instance) - 10)}
+            ${data_i}${" " * (target_len - len(data_i) - 12)}
+            ${data_o}${" " * (target_len - len(data_o) - 12)}
+            ${synd_o}${" " * (target_len - len(synd_o) - 12)}
+            ${err_o}${" " * (target_len - len(err_o) - 12)}
+        end${" " * (target_len - len("end") - 8)}
+  % endfor
+<% default_item = f"default: begin : gen_dec_{sy_type}_default" %>\
+        ${default_item}${" " * (target_len - len(default_item) - 8)}
+        end${" " * (target_len - len("end") - 8)}
+      endcase${" " * (target_len - len("endcase") - 6)}
+    end${" " * (target_len - len("end") - 4)}
+% endfor
+  endcase""")
+
+enc_instance_comment = """\
+// This macro instantiates a secded encoder for the given _TYPE and _WIDTH.
+// The instance is named _INST, the data input connects to _DATA, and the
+// data output connects to _ENC_DATA.
+"""
+
+enc_instance_template = Template("""\
+<%
+def_str = (
+"`define SECDED_INST_ENC(_TYPE, _WIDTH, _INST, _DATA, _ENC_DATA)"
+)
+target_len = len(def_str)
+%>\
+${def_str}
+  case (_TYPE)${" " * (target_len - len("  case (_TYPE)"))}
+% for sy_type in synd_widths:
+<%
+type_name = type_names[sy_type]
+type_block = f"prim_secded_pkg::{type_name}: begin : gen_enc_{sy_type}"
+%>\
+    ${type_block}${" " * (target_len - len(type_block) - 4)}
+      case (_WIDTH)${" "*(target_len - len("case (_WIDTH)") - 6)}
+  % for width in synd_widths[sy_type]:
+<%
+full_width = width + synd_widths[sy_type][width]
+mod_stem  = f"prim_secded{CODE_OPTIONS[sy_type]}_{full_width}_{width}"
+case_item = f"{width}: begin : gen_enc_{sy_type}_{width}"
+instance  = f"{mod_stem}_enc _INST("
+data_i    =  ".data_i(_DATA),"
+data_o    =  ".data_o(_ENC_DATA));"
+%>\
+        ${case_item}${" " * (target_len - len(case_item) - 8)}
+          ${instance}${" " * (target_len - len(instance) - 10)}
+            ${data_i}${" " * (target_len - len(data_i) - 12)}
+            ${data_o}${" " * (target_len - len(data_o) - 12)}
+        end${" " * (target_len - len("end") - 8)}
+  % endfor
+<% default_item = f"default: begin : gen_enc_{sy_type}_default" %>\
+        ${default_item}${" " * (target_len - len(default_item) - 8)}
+        end${" " * (target_len - len("end") - 8)}
+      endcase${" " * (target_len - len("endcase") - 6)}
+    end${" " * (target_len - len("end") - 4)}
+% endfor
+  endcase""")
+
+
+def get_secded_typed_enums_and_util_fns(cfgs):
+    """Create typed enum and utilities to handle parameterized widths
+
+    Handling secded in parameterized IPs requires creating types
+    with the correct width for data in and out of the secded primitives.
+    Moreover, the secded prims need to be instantiated depending on
+    the width and the desired type of secded (as in hsiao or inverted
+    hamming). This creates macros that choose the module based on
+    case generates.
+    """
+    synd_widths = defaultdict(dict)
+    type_names = {}
+    for cfg in cfgs:
+        code_type = cfg['code_type']
+        name = Name(["Secded"] + code_type.split("_"))
+        type_names[code_type] = name.as_camel_case()
+        synd_widths[code_type][cfg['k']] = cfg['m']
+
+    type_enum = type_enum_template.render(type_names=type_names)
+    valid_width_fn = valid_width_template.render(synd_widths=synd_widths,
+                                                 type_names=type_names)
+    synd_width_fn = synd_width_template.render(synd_widths=synd_widths,
+                                               type_names=type_names)
+    dec_instance_gen = dec_instance_template.render(synd_widths=synd_widths,
+                                                    type_names=type_names,
+                                                    CODE_OPTIONS=CODE_OPTIONS)
+    dec_instance_gen = dec_instance_gen.replace("\n", " \\\n")
+    dec_instance_gen = dec_instance_comment + dec_instance_gen
+
+    enc_instance_gen = enc_instance_template.render(synd_widths=synd_widths,
+                                                    type_names=type_names,
+                                                    CODE_OPTIONS=CODE_OPTIONS)
+    enc_instance_gen = enc_instance_gen.replace("\n", " \\\n")
+    enc_instance_gen = enc_instance_comment + enc_instance_gen
+
+    return (
+        type_enum,
+        valid_width_fn,
+        synd_width_fn,
+        dec_instance_gen,
+        enc_instance_gen
+    )
+
+
 def print_secded_enum_and_util_fns(cfgs):
     enum_vals = ["    SecdedNone"]
     parity_width_vals = []
@@ -162,18 +378,30 @@ def print_secded_enum_and_util_fns(cfgs):
         data_width = "  %s: return %s;" % (enum_name, k)
         data_width_vals.append(data_width)
 
+    (type_enum, valid_width_fn, synd_width_fn, dec_instance_gen,
+     enc_instance_gen) = get_secded_typed_enums_and_util_fns(cfgs)
     enum_str = ",\n".join(enum_vals)
     parity_width_fn_str = "\n".join(parity_width_vals)
     data_width_fn_str = "\n".join(data_width_vals)
 
-    enum_str = '''
+    pkg_str = f'''
+{type_enum}
+
   typedef enum int {{
-{}
+{enum_str}
   }} prim_secded_e;
+
+{valid_width_fn}
+
+{synd_width_fn}
+
+  function automatic int get_full_width(prim_secded_type_e sd_type, int width);
+    return width + get_synd_width(sd_type, width);
+  endfunction : get_full_width
 
   function automatic int get_ecc_data_width(prim_secded_e ecc_type);
     case (ecc_type)
-{}
+{data_width_fn_str}
       // Return a non-zero width to avoid VCS compile issues
       default: return 32;
     endcase
@@ -181,13 +409,18 @@ def print_secded_enum_and_util_fns(cfgs):
 
   function automatic int get_ecc_parity_width(prim_secded_e ecc_type);
     case (ecc_type)
-{}
+{parity_width_fn_str}
       default: return 0;
     endcase
   endfunction
-'''.format(enum_str, data_width_fn_str, parity_width_fn_str)
+'''
 
-    return enum_str
+    inc_str = f'''
+{dec_instance_gen}
+
+{enc_instance_gen}'''
+
+    return pkg_str, inc_str
 
 
 def print_pkg_allzero(n, k, m, codes, suffix, codetype):
@@ -203,8 +436,8 @@ def print_pkg_allzero(n, k, m, codes, suffix, codetype):
             invecc += (x % 2) << x
         invcode = invecc << k
     zerostr = f'''
-  parameter logic [{m-1}:0] Secded{suffix}{n}{k}ZeroEcc = {m}'h{invecc:0X};
-  parameter logic [{n-1}:0] Secded{suffix}{n}{k}ZeroWord = {n}'h{invcode:0X};
+  parameter logic [{m - 1}:0] Secded{suffix}{n}{k}ZeroEcc = {m}'h{invecc:0X};
+  parameter logic [{n - 1}:0] Secded{suffix}{n}{k}ZeroWord = {n}'h{invcode:0X};
 '''
     return zerostr
 
@@ -214,11 +447,14 @@ def print_pkg_types(n, k, m, codes, suffix, codetype):
 
     typestr = '''
   typedef struct packed {{
-    logic [{}:0] data;
-    logic [{}:0] syndrome;
-    logic [1:0]  err;
+    logic [{}:0] {}data;
+    logic [{}:0] {}syndrome;
+    logic [1:0] {}err;
   }} {};
-'''.format((k - 1), (m - 1), typename)
+'''.format((k - 1), "",
+           (m - 1), " " * calc_spaces(k - 1, m - 1),
+           " " * calc_spaces(k - 1),
+           typename)
 
     return typestr
 
@@ -239,9 +475,9 @@ def print_fn(n, k, m, codes, suffix, codetype, inv=False):
 
   function automatic {}
       {}_dec (logic [{}:0] data_i);
-    logic [{}:0] data_o;
-    logic [{}:0] syndrome_o;
-    logic [1:0]  err_o;
+    logic [{}:0] {}data_o;
+    logic [{}:0] {}syndrome_o;
+    logic [1:0] {}err_o;
 
     {} dec;
 
@@ -253,29 +489,43 @@ def print_fn(n, k, m, codes, suffix, codetype, inv=False):
 
   endfunction
 '''.format((n - 1), module_name, (k - 1), (n - 1), enc_out,
-           typename, module_name, (n - 1), (k - 1), (m - 1), typename, dec_out)
+           typename,
+           module_name, (n - 1),
+           (k - 1), " " * calc_spaces(n - 1, k - 1),
+           (m - 1), " " * calc_spaces(n - 1, m - 1),
+           " " * calc_spaces(n - 1),
+           typename, dec_out)
 
     return outstr
 
 
 def print_enc(n, k, m, codes, codetype):
-    invert = 1 if codetype in ["inv_hsiao", "inv_hamming"] else 0
-    outstr = "    data_o = {}'(data_i);\n".format(n)
-    hex_format = str(n) + "'h{:0" + str((n + 3) // 4) + "X}"
-    format_str = "    data_o[{}] = ^(data_o & " + hex_format + ");\n"
+    hamming = codetype in ["hamming", "inv_hamming"]
+    invert = codetype in ["inv_hsiao", "inv_hamming"]
+    outstr = "    data_o[{}:0] = data_i;\n".format(k - 1)
     # Print parity computation If inverted encoding is turned on, we only
     # invert every odd bit so that both all-one and all-zero encodings are not
     # possible. This works for most encodings generated if the fanin is
     # balanced (such as inverted Hsiao codes). However, since there is no
     # guarantee, an FPV assertion is added to prove that all-zero and all-one
     # encodings do not exist if an inverted code is used.
-    inv_mask = 0
     for j, mask in enumerate(calc_bitmasks(k, m, codes, False)):
-        inv_mask += (j % 2) << j
-        outstr += format_str.format(j + k, mask)
-    # Selectively invert parity bits as determined above.
-    if invert:
-        outstr += ("    data_o ^= " + hex_format + ";\n").format(inv_mask << k)
+        outstr += "    data_o[{}] = ".format(j + k)
+        if invert:
+            outstr += "("
+        if (hamming and j == (m - 1)):
+            assert (mask == (pow(2, j + k) - 1))  # mask should be all-ones here
+            outstr += "^data_o[{}:0]".format(j + k - 1)
+            if invert:
+                # Account for the number (odd/even) of inverted syndrome bits
+                # as well as the syndrome index (odd/even) of the parity bit
+                # when determining whether to invert the parity bit.
+                outstr += ") ^ 1'b1" if (((j >> 1) % 2) ^ (j % 2)) else ")"
+        else:
+            outstr += ("^(data_i & " + hex_format(k) + ")").format(mask)
+            if invert:
+                outstr += ") ^ 1'b1" if (j % 2) else ")"
+        outstr += ";\n"
     return outstr
 
 
@@ -287,17 +537,17 @@ def calc_syndrome(code):
 def print_dec(n, k, m, codes, codetype, print_type="logic"):
     outstr = ""
     outstr += "    // Syndrome calculation\n"
-    hexfmt = str(n) + "'h{:0" + str((n + 3) // 4) + "X}"
     format_str = "    syndrome_o[{}] = ^("
     # Add ECC bit inversion if needed (see print_enc function).
     if codetype in ["inv_hsiao", "inv_hamming"]:
         invval = 0
         for x in range(m):
             invval += (x % 2) << x
-        format_str += "(data_i ^ " + hexfmt.format(invval << k) + ")"
+        format_str += "(data_i ^ " + hex_format(n).format(invval << k) + ") &"
+        format_str += ("\n" + (" " * 22)) if n > 104 else " "
     else:
-        format_str += "data_i"
-    format_str += " & " + hexfmt + ");\n"
+        format_str += "data_i & "
+    format_str += hex_format(n) + ");\n"
 
     # Print syndrome computation
     for j, mask in enumerate(calc_bitmasks(k, m, codes, True)):
@@ -305,25 +555,25 @@ def print_dec(n, k, m, codes, codetype, print_type="logic"):
     outstr += "\n"
     outstr += "    // Corrected output calculation\n"
     for i in range(k):
-        outstr += "    data_o[%d] = (syndrome_o == %d'h%x) ^ data_i[%d];\n" % (
-            i, m, calc_syndrome(codes[i]), i)
+        outstr += (("    data_o[{}] {}= (syndrome_o == " + hex_format(m) +
+                    ") ^ data_i[{}];\n")
+                   .format(i, " " * calc_spaces(k - 1, i), calc_syndrome(codes[i]), i))
     outstr += "\n"
     outstr += "    // err_o calc. bit0: single error, bit1: double error\n"
     # The Hsiao and Hamming syndromes are interpreted slightly differently.
     if codetype in ["hamming", "inv_hamming"]:
         outstr += "    err_o[0] = syndrome_o[%d];\n" % (m - 1)
-        outstr += "    err_o[1] = |syndrome_o[%d:0] & ~syndrome_o[%d];\n" % (
-            m - 2, m - 1)
+        outstr += "    err_o[1] = (|syndrome_o[%d:0]) & (~err_o[0]);\n" % (m - 2)
     else:
         outstr += "    err_o[0] = ^syndrome_o;\n"
-        outstr += "    err_o[1] = ~err_o[0] & (|syndrome_o);\n"
+        outstr += "    err_o[1] = (|syndrome_o) & (~err_o[0]);\n"
     return outstr
 
 
 def verify(cfgs):
     error = 0
-    for cfg in cfgs['cfgs']:
-        if (cfg['k'] <= 1 or cfg['k'] > 120):
+    for cfg in cfgs:
+        if (cfg['k'] <= 1 or cfg['k'] > 256):
             error += 1
             log.error("Current tool doesn't support the value k (%d)", cfg['k'])
 
@@ -347,73 +597,112 @@ def verify(cfgs):
     return error
 
 
-def _ecc_pick_code(config: Dict[str, Any], codetype: str, k: int) -> Tuple[int, List[int], int]:
-    # first check to see if bit width is supported among configuration
+@functools.lru_cache(maxsize=None)
+def _ecc_pick_code(codetype: str, k: int) -> Tuple[int, Tuple[int, ...], int]:
+    """Load the parameters for configuring a given ECC code.
 
-    codes = None
-    bitmasks = None
-    m = None
-    for cfg in config['cfgs']:
+    Args:
+        codetype: The name of the code type to use.
+        k: The number of data bits to add ECC to.
+
+    Returns:
+        A tuple containing the number of check bits ("m"), followed by a
+        tuple of `m` bitmasks (each one describing the codeword bits which
+        are masked to produce each check bit), followed by a mask of bits
+        to invert (if any).
+    """
+
+    # First check to see if the bit width is supported among the valid configurations.
+    for cfg in load_secded_configs():
         if cfg['k'] == k and cfg['code_type'] == codetype:
             m = cfg['m']
             codes = gen_code(codetype, k, m)
             bitmasks = calc_bitmasks(k, m, codes, False)
-            invert = 1 if codetype in ['inv_hsiao', 'inv_hamming'] else 0
-            return (m, bitmasks, invert)
+            invert_mask = 0
+            if codetype in ['inv_hsiao', 'inv_hamming']:
+                # For inverted encodings, only odd bits are inverted to avoid all-0 / all-1
+                # encodings, which works for most encodings with fanin balanced.
+                # To guarantee, FPV assertions should prove this if an inverted code is used.
+                invert_mask = sum(1 << (k + idx) for idx in range(1, m, 2))
+            return (m, bitmasks, invert_mask)
 
     # error if k not supported
     raise Exception(f'ECC for length {k} of type {codetype} unsupported')
 
 
-@functools.lru_cache(maxsize=None)
-def _ecc_encode(k: int,
-                m: int, bitmasks: List[int], invert: int,
-                dataword: int) -> int:
+def _ecc_encode(k: int, bitmasks: Tuple[int, ...], invert_mask: int, dataword: int) -> int:
+    """Encode a dataword into a codeword with added ECC.
+
+    Args:
+        k: The number of data bits
+        bitmasks: The tuple of integers (one per check bit) describing how
+        codeword bits are XORed to produce parity bits for each check bit.
+        invert_mask: The bitmask of bits to invert, if any.
+        dataword: The data word to encode.
+
+    Returns:
+        The encoded codeword integer.
+    """
     assert 0 <= dataword < (1 << k)
 
-    # represent supplied dataword as a binary string
-    word_bin = format(dataword, '0' + str(k) + 'b')
+    codeword = dataword
+    for idx, mask in enumerate(bitmasks):
+        # Each ECC bit is the parity of masked bits (may include previous ECC bits).
+        bit = (codeword & mask).bit_count() & 1
+        codeword |= bit << (k + idx)
 
-    codeword = word_bin
-    for k, mask in enumerate(bitmasks):
-        bit = 0
-        log.debug(f'codeword: {codeword}')
-        log.debug(f'mask: {hex(mask)}')
-        mask = (format(mask, '0' + str(k + m) + 'b'))
-
-        # reverse codeword for index selection
-        # This is because the LSB is the farthest entry in the string
-        codeword_rev = codeword[::-1]
-        for idx, f in enumerate(mask[::-1]):
-            if int(f):
-                bit ^= int(codeword_rev[idx])
-
-        # Add ECC bit inversion if needed (see print_enc function).
-        bit ^= (invert & k % 2)
-        codeword = str(bit) + codeword
-    return codeword
+    # Inversion only takes place after all parity bits have been generated.
+    return codeword ^ invert_mask
 
 
-def ecc_encode(config: Dict[str, Any], codetype: str, k: int, dataword: int) -> Tuple[int, int]:
-    log.info(f"Encoding ECC for {hex(dataword)}")
+def ecc_encode(codetype: str, k: int, dataword: int,
+               cache: bool = False) -> Tuple[int, int]:
+    """Encode a data word into a codeword with added ECC using a given code type.
 
-    m, bitmasks, invert = _ecc_pick_code(config, codetype, k)
-    codeword = _ecc_encode(k, m, bitmasks, invert, dataword)
+    Args:
+        codetype: The name of the code type to use.
+        k: The number of data bits. Must be a valid configuration for `codetype`.
+        dataword: The data word to encode.
+        cache: Enable caching, for use when data words are likely to repeat.
 
-    # Debug printouts
-    log.debug(f'original hex: {hex(dataword)}')
-    log.debug(f'codeword hex: {hex(int(codeword,2))}')
-    return int(codeword, 2), m
+    Returns:
+        The encoded codeword integer, followed by the number of check bits.
+    """
+    if cache:
+        return _ecc_encode_cached(codetype, k, dataword)
+
+    m, bitmasks, invert_mask = _ecc_pick_code(codetype, k)
+    assert len(bitmasks) == m
+    codeword = _ecc_encode(k, bitmasks, invert_mask, dataword)
+    log.debug("Encoding ECC for %x -> %x", dataword, codeword)
+    return codeword, m
 
 
-def ecc_encode_some(config: Dict[str, Any],
-                    codetype: str,
-                    k: int,
-                    datawords: int) -> Tuple[List[int], int]:
-    m, bitmasks, invert = _ecc_pick_code(config, codetype, k)
-    codewords = [int(_ecc_encode(k, m, bitmasks, invert, w), 2)
-                 for w in datawords]
-    return codewords, m
+@functools.lru_cache(maxsize=_ECC_ENCODING_CACHE_SIZE)
+def _ecc_encode_cached(codetype: str, k: int, dataword: int) -> Tuple[int, int]:
+    return ecc_encode(codetype, k, dataword)
+
+
+def ecc_encode_many(codetype: str, k: int, datawords: List[int],
+                    cache: bool = False) -> Tuple[List[int], int]:
+    """Encode multiple data words into codewords with added ECC using a given code type.
+
+    Args:
+        codetype: The name of the code type to use.
+        k: The number of data bits per word. Must be a valid configuration for `codetype`.
+        datawords: The list of data words to encode.
+        cache: Enable caching, for use when data words are likely to repeat.
+
+    Returns:
+        The list of encoded codeword integers, followed by the number of check bits.
+    """
+    if cache:
+        return ([_ecc_encode_cached(codetype, k, w)[0] for w in datawords],
+                _ecc_pick_code(codetype, k)[0])
+
+    m, bitmasks, invert_mask = _ecc_pick_code(codetype, k)
+    assert len(bitmasks) == m
+    return [_ecc_encode(k, bitmasks, invert_mask, w) for w in datawords], m
 
 
 def gen_code(codetype, k, m):
@@ -447,7 +736,7 @@ def generate(cfgs, args):
         f.write(f"// util/design/secded_gen.py from {SECDED_CFG_FILE}\n")
         f.write(C_H_TOP)
 
-    for cfg in cfgs['cfgs']:
+    for cfg in cfgs:
         log.debug("Working on {}".format(cfg))
         k = cfg['k']
         m = cfg['m']
@@ -459,8 +748,9 @@ def generate(cfgs, args):
         # write out rtl files
         write_enc_dec_files(n, k, m, codes, suffix, args.outdir, codetype)
 
-        # write out C files, only hsiao codes are supported
-        if codetype in ["hsiao", "inv_hsiao"]:
+        # write out C files, only hsiao codes with no more than 64 message bits
+        # are supported.
+        if codetype in ["hsiao", "inv_hsiao"] and k <= 64:
             write_c_files(n, k, m, codes, suffix, c_src_filename, c_h_filename,
                           codetype)
 
@@ -480,10 +770,11 @@ def generate(cfgs, args):
     format_c_files(c_src_filename, c_h_filename)
 
     # create enum of various ECC types - useful for DV purposes in mem_bkdr_if
-    enum_str = print_secded_enum_and_util_fns(cfgs['cfgs'])
+    enum_str, inc_str = print_secded_enum_and_util_fns(cfgs)
     # write out package file
     full_pkg_str = enum_str + pkg_type_str + pkg_out_str
     write_pkg_file(args.outdir, full_pkg_str)
+    write_inc_file(args.outdir, inc_str)
 
 
 def _inv_hsiao_code(k, m):
@@ -517,7 +808,7 @@ def _hsiao_code(k, m):
     # Then message _k_ X matrix_code ==> original message with parity
     #
     # Make a row to have even number of 1 including the I matrix.
-    # This helps to calculate the syndrom at the decoding stage.
+    # This helps to calculate the syndrome at the decoding stage.
     # To reduce the max fan-in, Starting with smallest number 3.
     # the number means the number of one in a row.
     # Small number of ones means smaller fan-in overall.
@@ -534,20 +825,22 @@ def _hsiao_code(k, m):
             # we need more round use all of them
             codes.extend(candidate)
             required_row -= len(candidate)
-        else:
-            # Find optimized fan-in ==========================================
+        elif k <= 64:
+            # Find optimized fan-in using Random Shuffling ====================
+            #
+            # This random shuffling method was the first method to be used
+            # in OpenTitan. It is still used for short message lengths both
+            # to avoid changing codes dating from that time and because
+            # it quickly finds solutions with ideal fan-in counts
+            # for k <= 128. Conversely, it seems to fail to converge
+            # in a timely manner for k >= 256.
 
-            # Calculate each row fan-in with current
+            # Calculate the fan-in (count) for each column for the current rows
             fanins = calc_fanin(m, codes)
             while required_row != 0:
                 # Let's shuffle
                 # Shuffling makes the sequence randomized --> it reduces the
                 # fanin as the code takes randomly at the end of the round
-
-                # TODO: There should be a clever way to find the subset without
-                # random retrying.
-                # Suggested this algorithm
-                #    https://en.wikipedia.org/wiki/Assignment_problem
                 random.shuffle(candidate)
 
                 # Take a subset
@@ -564,6 +857,85 @@ def _hsiao_code(k, m):
 
                 if ideal:
                     required_row = 0
+
+            # Append to the code matrix
+            codes.extend(subset)
+
+        else:
+            # Find optimized fan-in using Iterative Algorithm ===================
+            #
+            # This iterative algorithm is used for longer message lengths
+            # where random shuffling does not converge in a timely manner.
+
+            # Calculate the fan-in (count) for each column for the current rows
+            fanins = calc_fanin(m, codes)
+
+            starting_required_row = required_row
+            subset = []
+            other = candidate[:]
+
+            # Find the current maximum fan-in to any particular column
+            max_fanin = max(fanins)
+
+            # Add rows in an iterative, greedy manner
+            while required_row != 0:
+                current_fanins = calc_fanin(m, subset)
+                for i in range(m):
+                    current_fanins[i] += fanins[i]
+
+                added = False
+                min_fanin = min(current_fanins)
+
+                # First, try to increase minimum while keeping maximum low
+                for i in range(len(other)):
+                    # Copy the contents of the list of rows chosen so far
+                    tmp_fanins = current_fanins[:]
+                    # Try a potential row
+                    for j in range(step):
+                        tmp_fanins[other[i][j]] += 1
+                    # Add the row to our list of chosen if it meets our criteria
+                    if min(tmp_fanins) > min_fanin and max(tmp_fanins) <= max_fanin:
+                        added = True
+                        subset.append(other.pop(i))
+                        required_row -= 1
+                        break
+                if added:
+                    # Found something, try again to see if there are any more
+                    continue
+
+                # Second, try only to keep maximum low
+                for i in range(len(other)):
+                    # Copy the contents of the list of rows chosen so far
+                    tmp_fanins = current_fanins[:]
+                    # Try a potential row
+                    for j in range(step):
+                        tmp_fanins[other[i][j]] += 1
+                    # Add the row to our list of chosen if it meets our criteria
+                    if max(tmp_fanins) <= max_fanin:
+                        added = True
+                        subset.append(other.pop(i))
+                        required_row -= 1
+                        break
+                if added:
+                    # Found something, try again to see if there are any more
+                    continue
+
+                # Last resort: increase maximum fan-in and restart the search.
+                # We may be locked into a non-ideal solution if we do not drop
+                # the rows found with the previous maximum fan-in value.
+                required_row = starting_required_row
+                subset = []
+                other = candidate[:]
+                max_fanin += 1
+
+            subset_fanins = calc_fanin(m, subset)
+            # Check if the chosen rows exceed the ideal fan-in
+            for i in range(m):
+                col_fanin = fanins[i] + subset_fanins[i]
+                if col_fanin > fanin_ideal:
+                    log.warning(("Fan-in of {} exceeds ideal of {} " +
+                                 "(Hsiao, k {}, m {}, column {})")
+                                .format(col_fanin, fanin_ideal, k, m, i))
 
             # Append to the code matrix
             codes.extend(subset)
@@ -607,14 +979,23 @@ def _hamming_code(data_cnt, parity_cnt):
 
 def write_pkg_file(outdir, pkg_str):
     with open(outdir + "/" + "prim_secded_pkg.sv", "w") as f:
-        outstr = '''{}// SECDED package generated by
-// util/design/secded_gen.py from {}
+        outstr = f'''{COPYRIGHT}// SECDED package generated by
+// util/design/secded_gen.py from {SECDED_CFG_FILE}
 
 package prim_secded_pkg;
-{}
+{pkg_str}
 
 endpackage
-'''.format(COPYRIGHT, SECDED_CFG_FILE, pkg_str)
+'''
+        f.write(outstr)
+
+
+def write_inc_file(outdir, inc_str):
+    with open(outdir + "/" + "prim_secded_inc.svh", "w") as f:
+        outstr = f'''{COPYRIGHT}// SECDED macros generated by
+// util/design/secded_gen.py from {SECDED_CFG_FILE}
+{inc_str}
+'''
         f.write(outstr)
 
 
@@ -658,7 +1039,7 @@ def write_c_files(n, k, m, codes, suffix, c_src_filename, c_h_filename,
         # Form a single word from the incoming byte data
         f.write(f"{in_type} word = ")
         f.write(" | ".join(
-                [f"(({in_type})bytes[{i}] << {i*8})" for i in range(in_bytes)]))
+                [f"(({in_type})bytes[{i}] << {i * 8})" for i in range(in_bytes)]))
         f.write(";\n\n")
 
         # AND the word with the codes, calculating parity of each and combine
@@ -683,7 +1064,7 @@ def format_c_files(c_src_filename, c_h_filename):
     try:
         # Call clang-format to in-place format generated C code. If there are
         # any issues log a warning.
-        result = subprocess.run(['./ci/bazelisk.sh', 'run', '//quality:clang_format_fix', '--',
+        result = subprocess.run(['./bazelisk.sh', 'run', '//quality:clang_format_fix', '--',
                                 c_src_filename, c_h_filename], stderr=subprocess.PIPE,
                                 universal_newlines=True)
         result.check_returncode()
@@ -704,15 +1085,18 @@ def write_enc_dec_files(n, k, m, codes, suffix, outdir, codetype):
         outstr = '''{}// SECDED encoder generated by util/design/secded_gen.py
 
 module {}_enc (
-  input        [{}:0] data_i,
-  output logic [{}:0] data_o
+  input        [{}:0] {}data_i,
+  output logic [{}:0] {}data_o
 );
 
   always_comb begin : p_encode
 {}  end
 
 endmodule : {}_enc
-'''.format(COPYRIGHT, module_name, (k - 1), (n - 1), enc_out, module_name)
+'''.format(COPYRIGHT, module_name,
+           (k - 1), " " * calc_spaces(n - 1, k - 1),
+           (n - 1), "",
+           enc_out, module_name)
         f.write(outstr)
 
     dec_out = print_dec(n, k, m, codes, codetype)
@@ -721,16 +1105,20 @@ endmodule : {}_enc
         outstr = '''{}// SECDED decoder generated by util/design/secded_gen.py
 
 module {}_dec (
-  input        [{}:0] data_i,
-  output logic [{}:0] data_o,
-  output logic [{}:0] syndrome_o,
-  output logic [1:0] err_o
+  input        [{}:0] {}data_i,
+  output logic [{}:0] {}data_o,
+  output logic [{}:0] {}syndrome_o,
+  output logic [1:0] {}err_o
 );
 
   always_comb begin : p_encode
 {}  end
 endmodule : {}_dec
-'''.format(COPYRIGHT, module_name, (n - 1), (k - 1), (m - 1),
+'''.format(COPYRIGHT, module_name,
+           (n - 1), "",
+           (k - 1), " " * calc_spaces(n - 1, k - 1),
+           (m - 1), " " * calc_spaces(n - 1, m - 1),
+           " " * calc_spaces(n - 1),
            dec_out, module_name)
         f.write(outstr)
 
@@ -742,14 +1130,14 @@ def write_fpv_files(n, k, m, codes, suffix, outdir, codetype):
         outstr = '''{}// SECDED FPV testbench generated by util/design/secded_gen.py
 
 module {}_tb (
-  input               clk_i,
-  input               rst_ni,
-  input        [{}:0] data_i,
-  output logic [{}:0] data_o,
-  output logic [{}:0] encoded_o,
-  output logic [{}:0] syndrome_o,
-  output logic [1:0]  err_o,
-  input        [{}:0] error_inject_i
+  input              {}clk_i,
+  input              {}rst_ni,
+  input        [{}:0] {}data_i,
+  output logic [{}:0] {}data_o,
+  output logic [{}:0] {}encoded_o,
+  output logic [{}:0] {}syndrome_o,
+  output logic [1:0] {}err_o,
+  input        [{}:0] {}error_inject_i
 );
 
   {}_enc {}_enc (
@@ -765,7 +1153,15 @@ module {}_tb (
   );
 
 endmodule : {}_tb
-'''.format(COPYRIGHT, module_name, (k - 1), (k - 1), (n - 1), (m - 1), (n - 1),
+'''.format(COPYRIGHT, module_name,
+           " " * calc_spaces(n - 1),
+           " " * calc_spaces(n - 1),
+           (k - 1), " " * calc_spaces(n - 1, k - 1),
+           (k - 1), " " * calc_spaces(n - 1, k - 1),
+           (n - 1), "",
+           (m - 1), " " * calc_spaces(n - 1, m - 1),
+           " " * calc_spaces(n - 1),
+           (n - 1), "",
            module_name, module_name, module_name, module_name, module_name)
         f.write(outstr)
 
@@ -784,14 +1180,14 @@ endmodule : {}_tb
         outstr = '''{}// SECDED FPV assertion file generated by util/design/secded_gen.py
 
 module {}_assert_fpv (
-  input        clk_i,
-  input        rst_ni,
-  input [{}:0] data_i,
-  input [{}:0] data_o,
-  input [{}:0] encoded_o,
-  input [{}:0] syndrome_o,
-  input [1:0]  err_o,
-  input [{}:0] error_inject_i
+  input       {}clk_i,
+  input       {}rst_ni,
+  input [{}:0] {}data_i,
+  input [{}:0] {}data_o,
+  input [{}:0] {}encoded_o,
+  input [{}:0] {}syndrome_o,
+  input [1:0] {}err_o,
+  input [{}:0] {}error_inject_i
 );
 
   // Inject a maximum of two errors simultaneously.
@@ -809,7 +1205,15 @@ module {}_assert_fpv (
   `ASSERT(SyndromeCheckReverse_A, $countones(error_inject_i) > 0 |-> |syndrome_o)
 {}
 endmodule : {}_assert_fpv
-'''.format(COPYRIGHT, module_name, (k - 1), (k - 1), (n - 1), (m - 1), (n - 1),
+'''.format(COPYRIGHT, module_name,
+           " " * calc_spaces(n - 1),
+           " " * calc_spaces(n - 1),
+           (k - 1), " " * calc_spaces(n - 1, k - 1),
+           (k - 1), " " * calc_spaces(n - 1, k - 1),
+           (n - 1), "",
+           (m - 1), " " * calc_spaces(n - 1, m - 1),
+           " " * calc_spaces(n - 1),
+           (n - 1), "",
            inv_asserts, module_name)
         f.write(outstr)
 
@@ -837,7 +1241,7 @@ endmodule : {}_bind_fpv
 
     with open(outdir + "/" + module_name + "_fpv.core", "w") as f:
         outstr = '''CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 name: "lowrisc:fpv:{}_fpv:0.1"
@@ -868,13 +1272,14 @@ targets:
 
   lint:
     <<: *default_target
-
 '''.format(module_name, module_name, module_name, module_name, module_name)
         f.write(outstr)
 
 
-def load_secded_config() -> Dict[str, Any]:
-    return hjson.load(SECDED_CFG_PATH.open())
+def load_secded_configs() -> List[Dict[str, int | str]]:
+    """Load the supported secded configurations from the `SECDED_CFG_PATH`."""
+    with SECDED_CFG_PATH.open() as f:
+        return hjson.load(f)
 
 
 def main():
@@ -913,8 +1318,7 @@ def main():
     else:
         log.basicConfig(format="%(levelname)s: %(message)s")
 
-    with open(SECDED_CFG_FILE, 'r') as infile:
-        config = hjson.load(infile)
+    config = load_secded_configs()
 
     # Error checking
     error = verify(config)

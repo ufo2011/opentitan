@@ -1,5 +1,6 @@
 // Copyright lowRISC contributors.
 // Copyright 2017 ETH Zurich and University of Bologna, see also CREDITS.md.
+// Copyright Microsoft Corporation
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +34,11 @@ package ibex_pkg;
   /////////////////////
 
   typedef enum integer {
+    BaseIsaRV32I          = 0, // only RV32I
+    BaseIsaRV32IorCHERIoT = 1  // dual base ISA: RV32I/CHERIoT runtime switchable
+  } base_isa_e;
+
+  typedef enum integer {
     RegFileFF    = 0,
     RegFileFPGA  = 1,
     RegFileLatch = 2
@@ -46,11 +52,17 @@ package ibex_pkg;
   } rv32m_e;
 
   typedef enum integer {
-    RV32BNone       = 0,
-    RV32BBalanced   = 1,
-    RV32BOTEarlGrey = 2,
-    RV32BFull       = 3
+    RV32BNone     = 0,
+    RV32BBalanced = 1,
+    RV32BFull     = 2
   } rv32b_e;
+
+  typedef enum integer {
+    RV32Zca        = 0,
+    RV32ZcaZcb     = 1,
+    RV32ZcaZcmp    = 2,
+    RV32ZcaZcbZcmp = 3
+  } rv32zc_e;
 
   /////////////
   // Opcodes //
@@ -67,7 +79,9 @@ package ibex_pkg;
     OPCODE_BRANCH   = 7'h63,
     OPCODE_JALR     = 7'h67,
     OPCODE_JAL      = 7'h6f,
-    OPCODE_SYSTEM   = 7'h73
+    OPCODE_SYSTEM   = 7'h73,
+    OPCODE_CHERI    = 7'h5b,
+    OPCODE_AUICGP   = 7'h7b
   } opcode_e;
 
 
@@ -94,17 +108,15 @@ package ibex_pkg;
     ALU_SRL,
     ALU_SLL,
     // RV32B
-    ALU_SRO,
-    ALU_SLO,
     ALU_ROR,
     ALU_ROL,
-    ALU_GREV,
-    ALU_GORC,
-    ALU_SHFL,
-    ALU_UNSHFL,
-    ALU_XPERM_N,
-    ALU_XPERM_B,
-    ALU_XPERM_H,
+    ALU_REV8,
+    ALU_BREV8,
+    ALU_ORCB,
+    ALU_ZIP,
+    ALU_UNZIP,
+    ALU_XPERM4,
+    ALU_XPERM8,
 
     // Address Calculations
     // RV32B
@@ -128,7 +140,6 @@ package ibex_pkg;
     // Pack
     // RV32B
     ALU_PACK,
-    ALU_PACKU,
     ALU_PACKH,
 
     // Sign-Extend
@@ -146,13 +157,6 @@ package ibex_pkg;
     ALU_SLT,
     ALU_SLTU,
 
-    // Ternary Bitmanip Operations
-    // RV32B
-    ALU_CMOV,
-    ALU_CMIX,
-    ALU_FSL,
-    ALU_FSR,
-
     // Single-Bit Operations
     // RV32B
     ALU_BSET,
@@ -160,28 +164,11 @@ package ibex_pkg;
     ALU_BINV,
     ALU_BEXT,
 
-    // Bit Compress / Decompress
-    // RV32B
-    ALU_BCOMPRESS,
-    ALU_BDECOMPRESS,
-
-    // Bit Field Place
-    // RV32B
-    ALU_BFP,
-
     // Carry-less Multiply
     // RV32B
     ALU_CLMUL,
     ALU_CLMULR,
-    ALU_CLMULH,
-
-    // Cyclic Redundancy Check
-    ALU_CRC32_B,
-    ALU_CRC32C_B,
-    ALU_CRC32_H,
-    ALU_CRC32C_H,
-    ALU_CRC32_W,
-    ALU_CRC32C_W
+    ALU_CLMULH
   } alu_op_e;
 
   typedef enum logic [1:0] {
@@ -300,6 +287,14 @@ package ibex_pkg;
     PC_BP
   } pc_sel_e;
 
+  // Compressed instruction expansion
+  typedef enum logic [1:0] {
+    INSTR_NOT_EXPANDED,
+    INSTR_EXPANDED,        // Executing micro-ops of an expanded instruction
+    INSTR_EXPANDED_COMMIT, // Micro-ops need to be committed atomically with successor micro-ops
+    INSTR_EXPANDED_LAST    // Last micro-op of an expanded instruction
+  } instr_exp_e;
+
   // Exception PC mux selection
   typedef enum logic [1:0] {
     EXC_PC_EXC,
@@ -340,14 +335,20 @@ package ibex_pkg;
     '{irq_ext: 1'b0, irq_int: 1'b0, lower_cause: 5'd02};
   localparam exc_cause_t ExcCauseBreakpoint =
     '{irq_ext: 1'b0, irq_int: 1'b0, lower_cause: 5'd03};
+  localparam exc_cause_t ExcCauseLoadAddrMisaligned  =
+    '{irq_ext: 1'b0, irq_int: 1'b0, lower_cause: 5'd04};
   localparam exc_cause_t ExcCauseLoadAccessFault  =
     '{irq_ext: 1'b0, irq_int: 1'b0, lower_cause: 5'd05};
+  localparam exc_cause_t ExcCauseStoreAddrMisaligned  =
+    '{irq_ext: 1'b0, irq_int: 1'b0, lower_cause: 5'd06};
   localparam exc_cause_t ExcCauseStoreAccessFault =
     '{irq_ext: 1'b0, irq_int: 1'b0, lower_cause: 5'd07};
   localparam exc_cause_t ExcCauseEcallUMode =
     '{irq_ext: 1'b0, irq_int: 1'b0, lower_cause: 5'd08};
   localparam exc_cause_t ExcCauseEcallMMode =
     '{irq_ext: 1'b0, irq_int: 1'b0, lower_cause: 5'd11};
+  localparam exc_cause_t ExcCauseCheriFault =
+    '{irq_ext: 1'b0, irq_int: 1'b0, lower_cause: 5'd28};
 
   // Internal NMI cause
   typedef enum logic [4:0] {
@@ -380,6 +381,8 @@ package ibex_pkg;
   parameter int unsigned IC_INDEX_HI      = IC_INDEX_W + IC_LINE_W - 1;
   parameter int unsigned IC_TAG_SIZE      = ADDR_W - IC_INDEX_W - IC_LINE_W + 1; // 1 valid bit
   parameter int unsigned IC_OUTPUT_BEATS  = (BUS_BYTES / 2); // number of halfwords
+  parameter int unsigned IC_DATA_ECC_SIZE = 7;
+  parameter int unsigned IC_TAG_ECC_SIZE  = 6;
   // ICache Scrambling Parameters
   parameter int unsigned SCRAMBLE_KEY_W   = 128;
   parameter int unsigned SCRAMBLE_NONCE_W = 64;
@@ -387,8 +390,14 @@ package ibex_pkg;
   // PMP constants
   parameter int unsigned PMP_MAX_REGIONS      = 16;
   parameter int unsigned PMP_CFG_W            = 8;
+  // For RV32 the most significant bit of PMP address refers to the physical
+  // address bit index 33.
+  parameter int unsigned PMP_ADDR_MSB         = 33;
+  // For RV32 the least significant bit of the PMP CSRs refers to the physical
+  // address bit index 2.
+  parameter int unsigned PMP_ADDR_LSB         = 2;
 
-  // PMP acces type
+  // PMP access type
   parameter int unsigned PMP_I  = 0;
   parameter int unsigned PMP_I2 = 1;
   parameter int unsigned PMP_D  = 2;
@@ -586,6 +595,72 @@ package ibex_pkg;
     CSR_MHPMCOUNTER29H = 12'hB9D,
     CSR_MHPMCOUNTER30H = 12'hB9E,
     CSR_MHPMCOUNTER31H = 12'hB9F,
+    CSR_MSHWM          = 12'hBC1,
+    CSR_MSHWMB         = 12'hBC2,
+    CSR_CDBG_CTRL      = 12'hBC4,
+    // Unprivileged Counter/Timers (readable from U-mode subject to mcounteren)
+    CSR_CYCLE          = 12'hC00,
+    CSR_INSTRET        = 12'hC02,
+    CSR_HPMCOUNTER3    = 12'hC03,
+    CSR_HPMCOUNTER4    = 12'hC04,
+    CSR_HPMCOUNTER5    = 12'hC05,
+    CSR_HPMCOUNTER6    = 12'hC06,
+    CSR_HPMCOUNTER7    = 12'hC07,
+    CSR_HPMCOUNTER8    = 12'hC08,
+    CSR_HPMCOUNTER9    = 12'hC09,
+    CSR_HPMCOUNTER10   = 12'hC0A,
+    CSR_HPMCOUNTER11   = 12'hC0B,
+    CSR_HPMCOUNTER12   = 12'hC0C,
+    CSR_HPMCOUNTER13   = 12'hC0D,
+    CSR_HPMCOUNTER14   = 12'hC0E,
+    CSR_HPMCOUNTER15   = 12'hC0F,
+    CSR_HPMCOUNTER16   = 12'hC10,
+    CSR_HPMCOUNTER17   = 12'hC11,
+    CSR_HPMCOUNTER18   = 12'hC12,
+    CSR_HPMCOUNTER19   = 12'hC13,
+    CSR_HPMCOUNTER20   = 12'hC14,
+    CSR_HPMCOUNTER21   = 12'hC15,
+    CSR_HPMCOUNTER22   = 12'hC16,
+    CSR_HPMCOUNTER23   = 12'hC17,
+    CSR_HPMCOUNTER24   = 12'hC18,
+    CSR_HPMCOUNTER25   = 12'hC19,
+    CSR_HPMCOUNTER26   = 12'hC1A,
+    CSR_HPMCOUNTER27   = 12'hC1B,
+    CSR_HPMCOUNTER28   = 12'hC1C,
+    CSR_HPMCOUNTER29   = 12'hC1D,
+    CSR_HPMCOUNTER30   = 12'hC1E,
+    CSR_HPMCOUNTER31   = 12'hC1F,
+    CSR_CYCLEH         = 12'hC80,
+    CSR_INSTRETH       = 12'hC82,
+    CSR_HPMCOUNTER3H   = 12'hC83,
+    CSR_HPMCOUNTER4H   = 12'hC84,
+    CSR_HPMCOUNTER5H   = 12'hC85,
+    CSR_HPMCOUNTER6H   = 12'hC86,
+    CSR_HPMCOUNTER7H   = 12'hC87,
+    CSR_HPMCOUNTER8H   = 12'hC88,
+    CSR_HPMCOUNTER9H   = 12'hC89,
+    CSR_HPMCOUNTER10H  = 12'hC8A,
+    CSR_HPMCOUNTER11H  = 12'hC8B,
+    CSR_HPMCOUNTER12H  = 12'hC8C,
+    CSR_HPMCOUNTER13H  = 12'hC8D,
+    CSR_HPMCOUNTER14H  = 12'hC8E,
+    CSR_HPMCOUNTER15H  = 12'hC8F,
+    CSR_HPMCOUNTER16H  = 12'hC90,
+    CSR_HPMCOUNTER17H  = 12'hC91,
+    CSR_HPMCOUNTER18H  = 12'hC92,
+    CSR_HPMCOUNTER19H  = 12'hC93,
+    CSR_HPMCOUNTER20H  = 12'hC94,
+    CSR_HPMCOUNTER21H  = 12'hC95,
+    CSR_HPMCOUNTER22H  = 12'hC96,
+    CSR_HPMCOUNTER23H  = 12'hC97,
+    CSR_HPMCOUNTER24H  = 12'hC98,
+    CSR_HPMCOUNTER25H  = 12'hC99,
+    CSR_HPMCOUNTER26H  = 12'hC9A,
+    CSR_HPMCOUNTER27H  = 12'hC9B,
+    CSR_HPMCOUNTER28H  = 12'hC9C,
+    CSR_HPMCOUNTER29H  = 12'hC9D,
+    CSR_HPMCOUNTER30H  = 12'hC9E,
+    CSR_HPMCOUNTER31H  = 12'hC9F,
     CSR_CPUCTRLSTS     = 12'h7C0,
     CSR_SECURESEED     = 12'h7C1
   } csr_num_e;
@@ -617,25 +692,16 @@ package ibex_pkg;
   parameter int unsigned CSR_MSECCFG_MMWP_BIT = 1;
   parameter int unsigned CSR_MSECCFG_RLB_BIT  = 2;
 
-  // Vendor ID
-  // No JEDEC ID has been allocated to lowRISC so the value is 0 to indicate the field is not
-  // implemented
-  localparam logic [31:0] CSR_MVENDORID_VALUE  = 32'b0;
-
   // Architecture ID
   // Top bit is unset to indicate an open source project. The lower bits are an ID allocated by the
   // RISC-V Foundation. Note this is allocated specifically to Ibex, should significant changes be
   // made a different architecture ID should be supplied.
   localparam logic [31:0] CSR_MARCHID_VALUE = {1'b0, 31'd22};
+  localparam logic [31:0] CSR_MARCHID_CHERIOT_VALUE = 32'hce1;
 
-  // Implementation ID
-  // 0 indicates this field is not implemeted. Ibex implementors may wish to indicate an RTL/netlist
-  // version here using their own unique encoding (e.g. 32 bits of the git hash of the implemented
-  // commit).
-  localparam logic [31:0] CSR_MIMPID_VALUE = 32'b0;
 
   // Machine Configuration Pointer
-  // 0 indicates the configuration data structure does not eixst. Ibex implementors may wish to
+  // 0 indicates the configuration data structure does not exist. Ibex implementers may wish to
   // alter this to point to their system specific configuration data structure.
   localparam logic [31:0] CSR_MCONFIGPTR_VALUE = 32'b0;
 
@@ -653,9 +719,10 @@ package ibex_pkg;
   parameter logic [SCRAMBLE_NONCE_W-1:0] RndCnstIbexNonceDefault =
       64'hf79780bc735f3843;
 
-  // Mult-bit signal used for security hardening. For non-secure implementation all bits other than
+  // Multi-bit signal used for security hardening. For non-secure implementation all bits other than
   // the bottom bit are ignored.
-  typedef logic [3:0] ibex_mubi_t;
+  parameter int IbexMuBiWidth = 4;
+  typedef logic [IbexMuBiWidth-1:0] ibex_mubi_t;
 
   // Note that if adjusting these parameters it is assumed the bottom bit is set for On and unset
   // for Off. This allows the use of IbexMuBiOn/IbexMuBiOff to work for both secure and non-secure
@@ -663,4 +730,67 @@ package ibex_pkg;
   // and core_busy signals within `ibex_core` may need adjusting.
   parameter ibex_mubi_t IbexMuBiOn  = 4'b0101;
   parameter ibex_mubi_t IbexMuBiOff = 4'b1010;
+
+  // Default reset values for PMP CSRs. Where the number of regions
+  // (PMPNumRegions) is less than 16 the reset values for the higher numbered
+  // regions are ignored.
+  //
+  // See the Ibex Reference Guide (Custom Reset Values under Physical Memory
+  // Protection) for more information.
+
+  parameter pmp_cfg_t PmpCfgRst[PMP_MAX_REGIONS] = '{
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 0
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 1
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 2
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 3
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 4
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 5
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 6
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 7
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 8
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 9
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 10
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 11
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 12
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 13
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}, // region 14
+    '{lock: 1'b0, mode: PMP_MODE_OFF, exec: 1'b0, write: 1'b0, read: 1'b0}  // region 15
+  };
+
+  // Addresses are given in byte granularity for readability. A minimum of two
+  // bits will be stripped off the bottom (PMPGranularity == 0) with more stripped
+  // off at coarser granularities.
+  parameter logic [PMP_ADDR_MSB:0] PmpAddrRst[PMP_MAX_REGIONS] = '{
+    34'h0, // region 0
+    34'h0, // region 1
+    34'h0, // region 2
+    34'h0, // region 3
+    34'h0, // region 4
+    34'h0, // region 5
+    34'h0, // region 6
+    34'h0, // region 7
+    34'h0, // region 8
+    34'h0, // region 9
+    34'h0, // region 10
+    34'h0, // region 11
+    34'h0, // region 12
+    34'h0, // region 13
+    34'h0, // region 14
+    34'h0  // region 15
+  };
+
+  parameter pmp_mseccfg_t PmpMseccfgRst = '{rlb : 1'b0, mmwp: 1'b0, mml: 1'b0};
+
+  //////////////
+  // LSU      //
+  //////////////
+
+  typedef enum logic [3:0]  {
+    IDLE, WAIT_GNT_MIS, WAIT_RVALID_MIS, WAIT_GNT,
+    WAIT_RVALID_MIS_GNTS_DONE,
+    CTX_WAIT_GNT1, CTX_WAIT_GNT2, CTX_WAIT_RESP
+  } ls_fsm_e;
+
+  typedef enum logic [2:0] {CRX_IDLE, CRX_WAIT_RESP1, CRX_WAIT_RESP2} cap_rx_fsm_t;
+
 endpackage

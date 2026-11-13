@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -6,7 +6,7 @@ module tb;
   // dep packages (test)
   import uvm_pkg::*;
   import dv_utils_pkg::*;
-  import mem_bkdr_util_pkg::mem_bkdr_util;
+  import sram_ctrl_bkdr_util_pkg::sram_ctrl_bkdr_util;
   import otbn_env_pkg::*;
   import otbn_test_pkg::*;
   import otbn_pkg::NGpr, otbn_pkg::NWdr;
@@ -15,7 +15,7 @@ module tb;
   import otbn_reg_pkg::*;
   import edn_pkg::*;
   import otp_ctrl_pkg::*;
-  import keymgr_pkg::*;
+  import keymgr_dpe_pkg::*;
 
   // macro includes
   `include "uvm_macros.svh"
@@ -32,8 +32,8 @@ module tb;
   pins_if #(NUM_MAX_INTERRUPTS) intr_if     (interrupts);
   assign interrupts[0] = {intr_done};
 
-  otbn_key_req_t sideload_key;
-  key_sideload_if#(keymgr_pkg::otbn_key_req_t) keymgr_if (
+  wide_hw_key_req_t sideload_key;
+  key_sideload_if#(keymgr_dpe_pkg::wide_hw_key_req_t) keymgr_if (
     .clk_i        (clk),
     .rst_ni       (rst_n),
     .sideload_key (sideload_key)
@@ -108,7 +108,10 @@ module tb;
     .lc_rma_req_i    (escalate_if.req),
     .lc_rma_ack_o    (escalate_if.ack),
 
-    .ram_cfg_i('0),
+    .ram_cfg_imem_i(prim_ram_1p_pkg::RAM_1P_CFG_REQ_DEFAULT),
+    .ram_cfg_dmem_i(prim_ram_1p_pkg::RAM_1P_CFG_REQ_DEFAULT),
+    .ram_cfg_imem_o(),
+    .ram_cfg_dmem_o(),
 
     .clk_edn_i (edn_clk),
     .rst_edn_ni(edn_rst_n),
@@ -124,7 +127,10 @@ module tb;
     .otbn_otp_key_o(otp_key_req),
     .otbn_otp_key_i(otp_key_rsp),
 
-    .keymgr_key_i(sideload_key)
+    .keymgr_key_i(sideload_key),
+    .keymgr_app_i(kmac_pkg::APP_REQ_DEFAULT),
+    .keymgr_app_o(),
+    .keymgr_sensitive_key_i(prim_mubi_pkg::MuBi4False)
   );
 
   bind dut.u_otbn_core otbn_trace_if #(
@@ -133,7 +139,6 @@ module tb;
   ) i_otbn_trace_if (.*);
 
   assign dut.u_otbn_core.i_otbn_trace_if.scramble_state_err_i = dut.otbn_scramble_state_error;
-  assign dut.u_otbn_core.i_otbn_trace_if.ext_mubi_err_i = dut.mubi_err;
   assign dut.u_otbn_core.i_otbn_trace_if.missed_gnt_i.imem_gnt_missed_err = dut.imem_missed_gnt;
   assign dut.u_otbn_core.i_otbn_trace_if.missed_gnt_i.dmem_gnt_missed_err = dut.dmem_missed_gnt;
 
@@ -167,7 +172,9 @@ module tb;
       .current_loop_d_iterations (prefetch_loop_iterations_o),
       .current_loop_q_iterations (current_loop.loop_iterations),
 
-      .loop_stack_rd_idx
+      .loop_stack_rd_idx,
+      .loop_stack_push_req,
+      .loop_stack_pop
     );
 
   bind dut.u_otbn_core.u_otbn_alu_bignum otbn_alu_bignum_if i_otbn_alu_bignum_if (.*);
@@ -193,7 +200,7 @@ module tb;
   logic otp_key_cdc_done;
 
   assign edn_rnd_cdc_done = dut.edn_rnd_req & dut.edn_rnd_ack;
-  assign edn_urnd_cdc_done = dut.edn_urnd_req & dut.edn_urnd_ack;
+  assign edn_urnd_cdc_done = dut.u_otbn_core.u_otbn_rnd.urnd_reseed_ack_o;
   assign otp_key_cdc_done = dut.u_otbn_scramble_ctrl.otp_key_ack;
 
   bit [31:0] model_insn_cnt;
@@ -209,6 +216,11 @@ module tb;
 
     .cmd_i   (model_if.cmd_q),
     .cmd_en_i(model_if.cmd_qe),
+
+    // These control bits are driven dynamically through the model agent by snooping CTRL
+    // register writes.
+    .wfi_enabled_i      (1'b0),
+    .urnd_ctrl_enabled_i(1'b0),
 
     .lc_escalate_en_i(escalate_if.enable),
     .lc_rma_req_i    (escalate_if.req),
@@ -257,28 +269,46 @@ module tb;
    .model_insn_cnt_i (model_insn_cnt)
   );
 
+  otbn_ssctrl_if ssctrl_if();
+
   //////////////////////////////////////////////////////////////////////////////
   // Model/RTL consistency checks
   //
   // These are the sort of checks that are easier to state at the design level than in terms of UVM
   // transactions.
 
-  // Check that the status output from the model exactly matches the register from the dut. In
-  // theory, we could see mismatches by probing the STATUS register over the TL bus, but we have to
-  // be lucky with exactly when the reads happen if we want to see off-by-one cycle errors. This
+  // Check that the status output from the model matches the register from the dut.
+  //
+  // This check is very slightly weakened from "should match on every cycle" because there is a
+  // minor corner case where it can appear to become StatusLocked for a single cycle before jumping
+  // to StatusBusySecWipeInt for a while before it eventually becomes StatusLocked again.
+  // TODO(#23903): This is probably not the behaviour we want, but would need an RTL fix.
+
+  logic status_mismatch_d, status_mismatch_q;
+  assign status_mismatch_d = dut.u_reg.u_status.q != model_if.status;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      status_mismatch_q <= 1'b0;
+    end else begin
+      status_mismatch_q <= status_mismatch_d;
+    end
+  end
+
+  // In theory, we could see mismatches by probing the STATUS register over the TL bus, but we have
+  // to be lucky with exactly when the reads happen if we want to see off-by-one cycle errors. This
   // assertion gives a continuous check.
-  `ASSERT(MatchingStatus_A, dut.u_reg.u_status.q == model_if.status, clk, !rst_n)
+  `ASSERT(MatchingStatus_A, {status_mismatch_d, status_mismatch_q} != 2'b11, clk, !rst_n)
 
   // Check that if the modelled EDN requests are matching with the requests from DUT
   `ASSERT(MatchingReqRND_A, dut.u_otbn_core.edn_rnd_req_o == edn_rnd_req_model, clk, !rst_n)
   // Disable checking URND in the case of Locked status since it's modelling is not exactly accurate
   // for that state.
   // TODO (#15710): Fix modelling of URND in the locked state.
-  `ASSERT(MatchingReqURND_A, dut.u_otbn_core.edn_urnd_req_o == edn_urnd_req_model,
+  `ASSERT(MatchingReqURND_A, dut.u_otbn_core.edn_urnd_o.edn_req == edn_urnd_req_model,
     clk, !rst_n || model_if.status == otbn_pkg::StatusLocked)
 
   initial begin
-    mem_bkdr_util imem_util, dmem_util;
+    sram_ctrl_bkdr_util imem_util, dmem_util;
 
     // drive clk and rst_n from clk_if
     clk_rst_if.set_active();
@@ -287,10 +317,12 @@ module tb;
     uvm_config_db#(virtual clk_rst_if)::set(null, "*.env", "otp_clk_rst_vif", otp_clk_rst_if);
     uvm_config_db#(virtual clk_rst_if)::set(null, "*.env", "clk_rst_vif", clk_rst_if);
     uvm_config_db#(virtual tl_if)::set(null, "*.env.m_tl_agent*", "vif", tl_if);
+    uvm_config_db#(ssctrl_vif)::set(null, "*.env", "ssctrl_vif", ssctrl_if);
     uvm_config_db#(escalate_vif)::set(null, "*.env", "escalate_vif", escalate_if);
     uvm_config_db#(intr_vif)::set(null, "*.env", "intr_vif", intr_if);
-    uvm_config_db#(virtual otbn_model_if)::set(null, "*.env.model_agent", "vif", model_if);
-    uvm_config_db#(virtual key_sideload_if#(keymgr_pkg::otbn_key_req_t))::set(
+    uvm_config_db#(virtual otbn_model_if#(.ImemSizeByte(ImemSizeByte)))::set(
+      null, "*.env.model_agent", "vif", model_if);
+    uvm_config_db#(virtual key_sideload_if#(keymgr_dpe_pkg::wide_hw_key_req_t))::set(
       null, "*.env.keymgr_sideload_agent", "vif", keymgr_if);
 
     uvm_config_db#(otp_key_vif)::set(
@@ -321,22 +353,22 @@ module tb;
     //
     // Note that n_bits is the number of bits in the memory, including ECC check bits.
     imem_util = new(.name ("imem_util"),
-                    .path ({"tb.dut.u_imem.u_prim_ram_1p_adv.",
-                            "u_mem.gen_generic.u_impl_generic.mem"}),
+                    .path ({"tb.dut.u_imem.u_prim_ram_1p_adv.gen_ram_inst[0].",
+                            "u_mem.mem"}),
                     .depth (ImemSizeByte / 4),
                     .n_bits (ImemSizeByte / 4 * 39),
                     .err_detection_scheme (mem_bkdr_util_pkg::EccInv_39_32));
 
     // DMEM is twice as big as the bus-accessible part
     dmem_util = new(.name ("dmem_util"),
-                    .path ({"tb.dut.u_dmem.u_prim_ram_1p_adv.",
-                            "u_mem.gen_generic.u_impl_generic.mem"}),
+                    .path ({"tb.dut.u_dmem.u_prim_ram_1p_adv.gen_ram_inst[0].",
+                            "u_mem.mem"}),
                     .depth (DmemSizeByte / 32),
                     .n_bits (DmemSizeByte / 32 * 312),
                     .err_detection_scheme (mem_bkdr_util_pkg::EccInv_39_32));
 
-    uvm_config_db#(mem_bkdr_util)::set(null, "*.env", imem_util.get_name(), imem_util);
-    uvm_config_db#(mem_bkdr_util)::set(null, "*.env", dmem_util.get_name(), dmem_util);
+    uvm_config_db#(sram_ctrl_bkdr_util)::set(null, "*.env", imem_util.get_name(), imem_util);
+    uvm_config_db#(sram_ctrl_bkdr_util)::set(null, "*.env", dmem_util.get_name(), dmem_util);
 
     $timeformat(-12, 0, " ps", 12);
     run_test();

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,11 +12,12 @@ class csrng_item extends uvm_sequence_item;
   rand acmd_e       acmd;
   rand mubi4_t      flags;
   rand bit [3:0]    clen;
-  rand bit [18:0]   glen;
+  rand bit [11:0]   glen;
   rand bit [31:0]   cmd_data_q[$];
 
-  bit               fips;
-  bit [csrng_pkg::GENBITS_BUS_WIDTH - 1:0]   genbits_q[$];
+  bit [csrng_pkg::CmdStatusWidth-1:0]    status;
+  bit                                    fips_q[$];
+  bit [csrng_pkg::GENBITS_BUS_WIDTH-1:0] genbits_q[$];
 
   constraint c_clen {
     clen inside {[0:12]};
@@ -31,9 +32,15 @@ class csrng_item extends uvm_sequence_item;
     flags inside {MuBi4True, MuBi4False};
   }
 
-  // TODO: Try glen > 32, glen = 0 on GEN cmd
   constraint c_glen {
-    glen inside {[1:32]};
+    glen dist {
+      // Note that 0 isn't supported by the implementation, see #23846.
+      [1:32]      :/ 75,
+      [33:128]    :/ 10,
+      [129:1024]  :/ 5,
+      [1025:4094] :/ 5,
+      4095        := 5
+    };
   }
 
    //--------------------------------------------------------------------
@@ -48,7 +55,8 @@ class csrng_item extends uvm_sequence_item;
       this.clen       = rhs_.clen;
       this.flags      = rhs_.flags;
       this.glen       = rhs_.glen;
-      this.fips       = rhs_.fips;
+      this.fips_q     = rhs_.fips_q;
+      this.status     = rhs_.status;
       this.cmd_data_q = rhs_.cmd_data_q;
       this.genbits_q  = rhs_.genbits_q;
    endfunction
@@ -56,19 +64,20 @@ class csrng_item extends uvm_sequence_item;
   virtual function string convert2string();
     string str = "";
     str = {str, "\n"};
-    str = {str,  $sformatf("\n\t |********* csrng_item **********| \t")                   };
-    str = {str,  $sformatf("\n\t |* acmd           :      %5s *| \t", acmd.name())        };
-    str = {str,  $sformatf("\n\t |* clen           :      %5d *| \t", clen)               };
-    str = {str,  $sformatf("\n\t |* flags[0]       :      %5d *| \t", flags[0])           };
-    str = {str,  $sformatf("\n\t |* glen           :      %5d *| \t", glen)               };
-    str = {str,  $sformatf("\n\t |* fips           :      %5d *| \t", fips)               };
+    str = {str,   $sformatf("\n\t |********************** csrng_item ***********************|")  };
+    str = {str,   $sformatf("\n\t |* acmd             : %34s *| \t", acmd.name())                };
+    str = {str,   $sformatf("\n\t |* clen             : %34d *| \t", clen)                       };
+    str = {str,   $sformatf("\n\t |* flag0            : %34d *| \t", flags[0])                   };
+    str = {str,   $sformatf("\n\t |* glen             : %34d *| \t", glen)                       };
     for (int i = 0; i < cmd_data_q.size(); i++) begin
-      str = {str,  $sformatf("\n\t |* cmd_data_q[%2d] : 0x%8h *| \t", i, cmd_data_q[i]) };
+      str = {str, $sformatf("\n\t |* cmd_data_q [%2d]  : %24s 0x%8h *| \t", i, "", cmd_data_q[i])};
     end
+    str = {str,   $sformatf("\n\t |* status           : %34h *| \t", status)                     };
     for (int i = 0; i < genbits_q.size(); i++) begin
-      str = {str,  $sformatf("\n\t |* genbits_q[%2d]  : 0x%8h *| \t", i, genbits_q[i]) };
+      str = {str, $sformatf("\n\t |* genbits_q[%4d]  : 0x%32h *| \t", i, genbits_q[i])           };
+      str = {str, $sformatf("\n\t |* fips_q   [%4d]  : %33s %1b *| \t", i, "", fips_q[i])        };
     end
-    str = {str,  $sformatf("\n\t |*******************************| \t")                   };
+    str = {str,   $sformatf("\n\t |*********************************************************|")  };
     str = {str, "\n"};
     return str;
   endfunction

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,8 +46,7 @@ typedef enum hardened_bool {
  * A byte-sized hardened boolean.
  *
  * This type is intended for cases where a byte-sized hardened boolean is
- * required, e.g. for the entries of the `CREATOR_SW_CFG_SIGVERIFY_RSA_KEY_EN`
- * OTP item.
+ * required.
  *
  * The values below were chosen to ensure that the hamming difference between
  * them is greater than 5 and they are not bitwise complements of each other.
@@ -190,6 +189,7 @@ typedef enum hardened_byte_bool {
  * @return A 32-bit integer which will *happen* to have the same value as `val`
  *         at runtime.
  */
+OT_WARN_UNUSED_RESULT
 inline uint32_t launder32(uint32_t val) {
   // NOTE: This implementation is LLVM-specific, and should be considered to be
   // a no-op in every other compiler. For example, GCC has in the past peered
@@ -239,6 +239,12 @@ inline uint32_t launder32(uint32_t val) {
   // > instead require that reordering be prevented through careful sequencing
   // > of statements.
 
+  // When we're building for static analysis, reduce false positives by
+  // short-circuiting the inline assembly block.
+#if OT_BUILD_FOR_STATIC_ANALYZER
+  return val;
+#endif
+
   // The +r constraint tells the compiler that this is an "inout" parameter: it
   // means that not only does the black box depend on `val`, but it also mutates
   // it in an unspecified way.
@@ -255,7 +261,11 @@ inline uint32_t launder32(uint32_t val) {
  * @return A 32-bit integer which will happen to have the same value as `val` at
  *         runtime.
  */
-inline uintptr_t launderw(uintptr_t val) {
+OT_WARN_UNUSED_RESULT
+inline ot_word_t launderw(ot_word_t val) {
+#if OT_BUILD_FOR_STATIC_ANALYZER
+  return val;
+#endif
   asm volatile("" : "+r"(val));
   return val;
 }
@@ -356,7 +366,7 @@ inline void barrier32(uint32_t val) { asm volatile("" ::"r"(val)); }
  *
  * @param val A value to create a barrier for.
  */
-inline void barrierw(uintptr_t val) { asm volatile("" ::"r"(val)); }
+inline void barrierw(ot_word_t val) { asm volatile("" ::"r"(val)); }
 
 /**
  * A constant-time, 32-bit boolean value.
@@ -386,11 +396,12 @@ typedef uint32_t ct_bool32_t;
  *
  * @return `a < 0`.
  */
+OT_WARN_UNUSED_RESULT
 inline ct_bool32_t ct_sltz32(int32_t a) {
   // Proof. `a` is negative iff its MSB is set;
   // arithmetic-right-shifting by bits(a)-1 smears the sign bit across all
   // of `a`.
-  return (uint32_t)(a >> (sizeof(a) * 8 - 1));
+  return OT_UNSIGNED(a >> (sizeof(a) * 8 - 1));
 }
 
 /**
@@ -400,9 +411,10 @@ inline ct_bool32_t ct_sltz32(int32_t a) {
  *
  * @return `a < b`.
  */
+OT_WARN_UNUSED_RESULT
 inline ct_bool32_t ct_sltu32(uint32_t a, uint32_t b) {
   // Proof. See Hacker's Delight page 23.
-  return ct_sltz32((a & ~b) | ((a ^ ~b) & (a - b)));
+  return ct_sltz32(OT_SIGNED(((~a & b) | ((~a | b) & (a - b)))));
 }
 
 /**
@@ -412,6 +424,7 @@ inline ct_bool32_t ct_sltu32(uint32_t a, uint32_t b) {
  *
  * @return `a == 0`.
  */
+OT_WARN_UNUSED_RESULT
 inline ct_bool32_t ct_seqz32(uint32_t a) {
   // Proof. See Hacker's Delight page 23.
   // HD gives this formula: `a == b := ~(a-b | b-a)`.
@@ -421,7 +434,7 @@ inline ct_bool32_t ct_seqz32(uint32_t a) {
   // via identities on page 16.
   //
   // This forumula is also given on page 11 for a different purpose.
-  return ct_sltz32(~a & (a - 1));
+  return ct_sltz32(OT_SIGNED(~a & (a - 1)));
 }
 
 /**
@@ -431,6 +444,7 @@ inline ct_bool32_t ct_seqz32(uint32_t a) {
  *
  * @return `a == b`.
  */
+OT_WARN_UNUSED_RESULT
 inline ct_bool32_t ct_seq32(uint32_t a, uint32_t b) {
   // Proof. a ^ b == 0 -> a ^ a ^ b == a ^ 0 -> b == a.
   return ct_seqz32(a ^ b);
@@ -449,6 +463,7 @@ inline ct_bool32_t ct_seq32(uint32_t a, uint32_t b) {
  * @param b The value to return on false.
  * @return `c ? a : b`.
  */
+OT_WARN_UNUSED_RESULT
 inline uint32_t ct_cmov32(ct_bool32_t c, uint32_t a, uint32_t b) {
   // Proof. See Hacker's Delight page 46. HD gives this as a branchless swap;
   // branchless select is a special case of that.
@@ -464,7 +479,7 @@ inline uint32_t ct_cmov32(ct_bool32_t c, uint32_t a, uint32_t b) {
  *
  * Values of this type MUST be either all zero bits or all one bits.
  */
-typedef uintptr_t ct_boolw_t;
+typedef ot_word_t ct_boolw_t;
 
 /**
  * Performs constant-time signed comparison to zero.
@@ -474,8 +489,9 @@ typedef uintptr_t ct_boolw_t;
  *
  * @return `a < 0`.
  */
-inline ct_boolw_t ct_sltzw(intptr_t a) {
-  return (uintptr_t)(a >> (sizeof(a) * 8 - 1));
+OT_WARN_UNUSED_RESULT
+inline ct_boolw_t ct_sltzw(ot_sword_t a) {
+  return OT_UNSIGNED(a >> (sizeof(a) * 8 - 1));
 }
 
 /**
@@ -485,8 +501,9 @@ inline ct_boolw_t ct_sltzw(intptr_t a) {
  *
  * @return `a < b`.
  */
-inline ct_boolw_t ct_sltuw(uintptr_t a, uintptr_t b) {
-  return ct_sltzw((a & ~b) | ((a ^ ~b) & (a - b)));
+OT_WARN_UNUSED_RESULT
+inline ct_boolw_t ct_sltuw(ot_word_t a, ot_word_t b) {
+  return ct_sltzw(OT_SIGNED((a & ~b) | ((a ^ ~b) & (a - b))));
 }
 
 /**
@@ -496,7 +513,10 @@ inline ct_boolw_t ct_sltuw(uintptr_t a, uintptr_t b) {
  *
  * @return `a == 0`.
  */
-inline ct_boolw_t ct_seqzw(uintptr_t a) { return ct_sltzw(~a & (a - 1)); }
+OT_WARN_UNUSED_RESULT
+inline ct_boolw_t ct_seqzw(ot_word_t a) {
+  return ct_sltzw(OT_SIGNED(~a & (a - 1)));
+}
 
 /**
  * Performs constant-time equality.
@@ -505,7 +525,8 @@ inline ct_boolw_t ct_seqzw(uintptr_t a) { return ct_sltzw(~a & (a - 1)); }
  *
  * @return `a == b`.
  */
-inline ct_boolw_t ct_seqw(uintptr_t a, uintptr_t b) { return ct_seqzw(a ^ b); }
+OT_WARN_UNUSED_RESULT
+inline ct_boolw_t ct_seqw(ot_word_t a, ot_word_t b) { return ct_seqzw(a ^ b); }
 
 /**
  * Performs a constant-time select.
@@ -520,7 +541,8 @@ inline ct_boolw_t ct_seqw(uintptr_t a, uintptr_t b) { return ct_seqzw(a ^ b); }
  * @param b The value to return on false.
  * @return `c ? a : b`.
  */
-inline uintptr_t ct_cmovw(ct_boolw_t c, uintptr_t a, uintptr_t b) {
+OT_WARN_UNUSED_RESULT
+inline ot_word_t ct_cmovw(ct_boolw_t c, ot_word_t a, ot_word_t b) {
   return (launderw(c) & a) | (launderw(~c) & b);
 }
 
@@ -528,7 +550,7 @@ inline uintptr_t ct_cmovw(ct_boolw_t c, uintptr_t a, uintptr_t b) {
 #ifdef OT_PLATFORM_RV32
 // This string can be tuned to be longer or shorter as desired, for
 // fault-hardening purposes.
-#define HARDENED_UNIMP_SEQUENCE_() "unimp; unimp; unimp; unimp;"
+#define HARDENED_UNIMP_SEQUENCE_() "unimp; unimp; unimp;"
 
 #define HARDENED_CHECK_OP_EQ_ "beq"
 #define HARDENED_CHECK_OP_NE_ "bne"
@@ -537,21 +559,57 @@ inline uintptr_t ct_cmovw(ct_boolw_t c, uintptr_t a, uintptr_t b) {
 #define HARDENED_CHECK_OP_LE_ "bleu"
 #define HARDENED_CHECK_OP_GE_ "bgeu"
 
+// The inverse opcodes test the opposite condition of their name (e.g. EQ checks
+// for not equal, etc).
+#define HARDENED_CHECK_INV_EQ_ "bne"
+#define HARDENED_CHECK_INV_NE_ "beq"
+#define HARDENED_CHECK_INV_LT_ "bgeu"
+#define HARDENED_CHECK_INV_GT_ "bleu"
+#define HARDENED_CHECK_INV_LE_ "bgtu"
+#define HARDENED_CHECK_INV_GE_ "bltu"
+
+#ifndef OT_DISABLE_HARDENING
 // clang-format off
-#define HARDENED_CHECK_(op_, a_, b_) \
-  asm volatile(                      \
-      op_ " %0, %1, .L_HARDENED_%=;" \
-      HARDENED_UNIMP_SEQUENCE_()     \
-      ".L_HARDENED_%=:;"             \
+#define HARDENED_CHECK_(op_, a_, b_)                                  \
+  asm volatile(                                                       \
+      OT_CAT(HARDENED_CHECK_OP_, op_) " %0, %1, .L_HARDENED_OK_%=;"   \
+      ".L_HARDENED_BAD_%=:;"                                          \
+      "unimp;"                                                        \
+      ".L_HARDENED_OK_%=:;"                                           \
+      OT_CAT(HARDENED_CHECK_INV_, op_) " %0, %1, .L_HARDENED_BAD_%=;" \
       ::"r"(a_), "r"(b_))
 // clang-format on
 
-#define HARDENED_UNREACHABLE_()               \
+#define HARDENED_TRAP_()                      \
   do {                                        \
     asm volatile(HARDENED_UNIMP_SEQUENCE_()); \
-    __builtin_unreachable();                  \
   } while (false)
-#else  // OT_PLATFORM_RV32
+// COVERAGE (FI CM) Expected this is unreachable as this is used in code that
+// are only reached due to fault injections.
+
+#else  // OT_DISABLE_HARDENING
+// Non-redundant check to save code size while preserving a single runtime
+// check.
+#define HARDENED_CHECK_C_OP_EQ_ ==
+#define HARDENED_CHECK_C_OP_NE_ !=
+#define HARDENED_CHECK_C_OP_LT_ <
+#define HARDENED_CHECK_C_OP_GT_ >
+#define HARDENED_CHECK_C_OP_LE_ <=
+#define HARDENED_CHECK_C_OP_GE_ >=
+
+#define HARDENED_CHECK_(op_, a_, b_)                                          \
+  do {                                                                        \
+    if (!((uintptr_t)(a_)OT_CAT(HARDENED_CHECK_C_OP_, op_)(uintptr_t)(b_))) { \
+      asm volatile("unimp");                                                  \
+    }                                                                         \
+  } while (false)
+
+#define HARDENED_TRAP_()   \
+  do {                     \
+    asm volatile("unimp"); \
+  } while (false)
+#endif  // OT_DISABLE_HARDENING
+#else   // OT_PLATFORM_RV32
 #include <assert.h>
 
 #define HARDENED_CHECK_OP_EQ_ ==
@@ -561,18 +619,19 @@ inline uintptr_t ct_cmovw(ct_boolw_t c, uintptr_t a, uintptr_t b) {
 #define HARDENED_CHECK_OP_LE_ <=
 #define HARDENED_CHECK_OP_GE_ >=
 
-#define HARDENED_CHECK_(op_, a_, b_) assert((uint64_t)(a_)op_(uint64_t)(b_))
+#define HARDENED_CHECK_(op_, a_, b_) \
+  assert((uint64_t)(a_)OT_CAT(HARDENED_CHECK_OP_, op_)(uint64_t)(b_))
 
-#define HARDENED_UNREACHABLE_() assert(false)
+#define HARDENED_TRAP_() __builtin_trap()
 #endif  // OT_PLATFORM_RV32
 
 /**
- * Indicates that the following code is unreachable; it should never be
- * reached at runtime.
- *
- * If it is reached anyways, an illegal instruction will be executed.
+ * If the following code is (unexpectedly) reached a trap instruction will be
+ * executed.
  */
-#define HARDENED_UNREACHABLE() HARDENED_UNREACHABLE_()
+#define HARDENED_TRAP() HARDENED_TRAP_()
+// COVERAGE (FI CM) Expected this is unreachable as this is used in code that
+// are only reached due to fault injections.
 
 /**
  * Compare two values in a way that is *manifestly* true: that is, under normal
@@ -598,12 +657,12 @@ inline uintptr_t ct_cmovw(ct_boolw_t c, uintptr_t a, uintptr_t b) {
  * ```
  * See `launder32()` for more details.
  */
-#define HARDENED_CHECK_EQ(a_, b_) HARDENED_CHECK_(HARDENED_CHECK_OP_EQ_, a_, b_)
-#define HARDENED_CHECK_NE(a_, b_) HARDENED_CHECK_(HARDENED_CHECK_OP_NE_, a_, b_)
-#define HARDENED_CHECK_LT(a_, b_) HARDENED_CHECK_(HARDENED_CHECK_OP_LT_, a_, b_)
-#define HARDENED_CHECK_GT(a_, b_) HARDENED_CHECK_(HARDENED_CHECK_OP_GT_, a_, b_)
-#define HARDENED_CHECK_LE(a_, b_) HARDENED_CHECK_(HARDENED_CHECK_OP_LE_, a_, b_)
-#define HARDENED_CHECK_GE(a_, b_) HARDENED_CHECK_(HARDENED_CHECK_OP_GE_, a_, b_)
+#define HARDENED_CHECK_EQ(a_, b_) HARDENED_CHECK_(EQ_, a_, b_)
+#define HARDENED_CHECK_NE(a_, b_) HARDENED_CHECK_(NE_, a_, b_)
+#define HARDENED_CHECK_LT(a_, b_) HARDENED_CHECK_(LT_, a_, b_)
+#define HARDENED_CHECK_GT(a_, b_) HARDENED_CHECK_(GT_, a_, b_)
+#define HARDENED_CHECK_LE(a_, b_) HARDENED_CHECK_(LE_, a_, b_)
+#define HARDENED_CHECK_GE(a_, b_) HARDENED_CHECK_(GE_, a_, b_)
 
 #ifdef __cplusplus
 }

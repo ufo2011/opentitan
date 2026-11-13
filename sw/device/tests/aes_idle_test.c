@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,11 +10,8 @@
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/aes_testutils.h"
 #include "sw/device/lib/testing/clkmgr_testutils.h"
-#include "sw/device/lib/testing/entropy_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
-
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
 
 #define TIMEOUT (1000 * 1000)
 
@@ -30,7 +27,14 @@ static const uint8_t kKeyShare1[] = {
 OTTF_DEFINE_TEST_CONFIG();
 static dif_clkmgr_t clkmgr;
 static const dif_clkmgr_hintable_clock_t kAesClock =
-    kTopEarlgreyHintableClocksMainAes;
+#if defined(OPENTITAN_IS_EARLGREY)
+    kTopEarlgreyHintableClocksMainAes
+#elif defined(OPENTITAN_IS_DARJEELING)
+    kTopDarjeelingHintableClocksMainAes
+#else
+#error Unsupported top
+#endif
+    ;
 
 static bool is_hintable_clock_enabled(const dif_clkmgr_t *clkmgr,
                                       dif_clkmgr_hintable_clock_t clock) {
@@ -40,28 +44,19 @@ static bool is_hintable_clock_enabled(const dif_clkmgr_t *clkmgr,
   return clock_state == kDifToggleEnabled;
 }
 
-static void initialize_clkmgr(void) {
-  mmio_region_t addr = mmio_region_from_addr(TOP_EARLGREY_CLKMGR_AON_BASE_ADDR);
-  CHECK_DIF_OK(dif_clkmgr_init(addr, &clkmgr));
+static status_t initialize_clkmgr(void) {
+  CHECK_DIF_OK(dif_clkmgr_init_from_dt(kDtClkmgr, &clkmgr));
 
   // Get initial hint and enable for AES clock and check both are enabled.
   dif_toggle_t clock_hint_state;
   CHECK_DIF_OK(dif_clkmgr_hintable_clock_get_hint(&clkmgr, kAesClock,
                                                   &clock_hint_state));
   CHECK(clock_hint_state == kDifToggleEnabled);
-  CLKMGR_TESTUTILS_CHECK_CLOCK_HINT(clkmgr, kAesClock, kDifToggleEnabled);
+  return CLKMGR_TESTUTILS_CHECK_CLOCK_HINT(clkmgr, kAesClock,
+                                           kDifToggleEnabled);
 }
 
-bool test_main(void) {
-  dif_aes_t aes;
-
-  initialize_clkmgr();
-
-  // Initialise AES.
-  CHECK_DIF_OK(
-      dif_aes_init(mmio_region_from_addr(TOP_EARLGREY_AES_BASE_ADDR), &aes));
-  CHECK_DIF_OK(dif_aes_reset(&aes));
-
+status_t execute_test(dif_aes_t *aes) {
   // Mask the key. Note that this should not be done manually. Software is
   // expected to get the key in two shares right from the beginning.
   uint8_t key_share0[sizeof(kAesModesKey256)];
@@ -74,15 +69,21 @@ bool test_main(void) {
   memcpy(key.share0, key_share0, sizeof(key.share0));
   memcpy(key.share1, kKeyShare1, sizeof(key.share1));
 
-  // Setup ECB encryption transaction.
+  // Setup ECB decryption transaction. ECB decryption is selected because
+  // operating the AES cipher in inverse operation mode requires to first
+  // generate the decryption start key. As a result, the AES cipher is busy
+  // for the duration of two encryption/decryption runs which gives this
+  // test sufficient time to update the clock hint and verify that the clock
+  // is still active.
   dif_aes_transaction_t transaction = {
-      .operation = kDifAesOperationEncrypt,
+      .operation = kDifAesOperationDecrypt,
       .mode = kDifAesModeEcb,
       .key_len = kDifAesKey256,
       .key_provider = kDifAesKeySoftwareProvided,
       .mask_reseeding = kDifAesReseedPerBlock,
-      .manual_operation = kDifAesManualOperationManual,
+      .manual_operation = kDifAesManualOperationAuto,
       .reseed_on_key_change = false,
+      .keep_start_trigger_high = false,
       .ctrl_aux_lock = false,
   };
 
@@ -97,24 +98,23 @@ bool test_main(void) {
   CLKMGR_TESTUTILS_SET_AND_CHECK_CLOCK_HINT(
       clkmgr, kAesClock, kDifToggleEnabled, kDifToggleEnabled);
 
-  // Initiate an AES operation with a known key, plain text and digest, write
-  // AES clk hint to 0 and verify that the AES clk hint status within clkmgr now
-  // reads 1 (AES is enabled), before the AES operation is complete.
-  CHECK_DIF_OK(dif_aes_start(&aes, &transaction, &key, NULL));
+  // Initiate an AES operation with a known key, cipher text and plain text,
+  // write AES clk hint to 0 and verify that the AES clk hint status within
+  // clkmgr now reads 1 (AES is enabled), before the AES operation is complete.
+  TRY(dif_aes_start(aes, &transaction, &key, NULL));
 
   // "Convert" plain data byte arrays to `dif_aes_data_t`.
-  dif_aes_data_t in_data_plain;
-  memcpy(in_data_plain.data, kAesModesPlainText, sizeof(in_data_plain.data));
+  dif_aes_data_t in_data_cipher;
+  memcpy(in_data_cipher.data, kAesModesCipherTextEcb256,
+         sizeof(in_data_cipher.data));
 
   // Load the plain text to trigger the encryption operation.
-  AES_TESTUTILS_WAIT_FOR_STATUS(&aes, kDifAesStatusInputReady, true, TIMEOUT);
-  CHECK_DIF_OK(dif_aes_load_data(&aes, in_data_plain));
-
-  // Write the PRNG_RESEED bit to reseed the internal state of the PRNG.
-  CHECK_DIF_OK(dif_aes_trigger(&aes, kDifAesTriggerPrngReseed));
-  CHECK_DIF_OK(dif_aes_trigger(&aes, kDifAesTriggerStart));
+  AES_TESTUTILS_WAIT_FOR_STATUS(aes, kDifAesStatusInputReady, true, TIMEOUT);
+  dif_result_t ret = dif_aes_load_data(aes, in_data_cipher);
+  // Write the clock hint to 0 and verify that the clock is still enabled.
   CLKMGR_TESTUTILS_SET_AND_CHECK_CLOCK_HINT(
       clkmgr, kAesClock, kDifToggleDisabled, kDifToggleEnabled);
+  TRY(ret);
 
   // This is a bit awkward, but when the AES finishes the operation the clock
   // will be gated as the clock hint has requested and the AES registers can't
@@ -132,12 +132,22 @@ bool test_main(void) {
   CLKMGR_TESTUTILS_SET_AND_CHECK_CLOCK_HINT(
       clkmgr, kAesClock, kDifToggleEnabled, kDifToggleEnabled);
   dif_aes_data_t out_data;
-  CHECK_DIF_OK(dif_aes_read_output(&aes, &out_data));
+  TRY(dif_aes_read_output(aes, &out_data));
 
-  // Finish the ECB encryption transaction.
-  CHECK_DIF_OK(dif_aes_end(&aes));
-  CHECK_ARRAYS_EQ((uint8_t *)out_data.data, kAesModesCipherTextEcb256,
-                  sizeof(out_data.data));
+  // Finish the ECB decryption transaction.
+  TRY(dif_aes_end(aes));
+  TRY_CHECK_ARRAYS_EQ((uint8_t *)out_data.data, kAesModesPlainText,
+                      sizeof(out_data.data));
+  return OK_STATUS();
+}
 
-  return true;
+bool test_main(void) {
+  dif_aes_t aes;
+  CHECK_STATUS_OK(initialize_clkmgr());
+
+  // Initialise AES.
+  CHECK_DIF_OK(dif_aes_init_from_dt(kDtAes, &aes));
+  CHECK_DIF_OK(dif_aes_reset(&aes));
+
+  return status_ok(execute_test(&aes));
 }

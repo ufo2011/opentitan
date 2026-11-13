@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -62,8 +62,8 @@ def _get_elf_mem_data(elf_file: ELFFile,
     imem_lma, imem_len = imem_desc
     dmem_lma, dmem_len = dmem_desc
 
-    imem_top = imem_lma + imem_len
-    dmem_top = dmem_lma + dmem_len
+    imem_top = imem_lma + imem_len - 1
+    dmem_top = dmem_lma + dmem_len - 1
 
     assert imem_lma <= imem_top
     assert dmem_lma <= dmem_top
@@ -76,7 +76,10 @@ def _get_elf_mem_data(elf_file: ELFFile,
             continue
 
         seg_lma = segment['p_paddr']
-        seg_top = seg_lma + segment['p_memsz']
+        # The address of the segment's last byte. Like imem_top and dmem_top,
+        # this is inclusive, so a segment that ends exactly at the top of a
+        # memory is still fully contained in it.
+        seg_top = seg_lma + segment['p_memsz'] - 1
 
         # Does this match an expected imem or dmem address?
         if imem_lma <= seg_lma <= imem_top:

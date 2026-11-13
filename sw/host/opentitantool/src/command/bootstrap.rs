@@ -1,44 +1,32 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{ensure, Result};
-use serde_annotate::Annotate;
+use anyhow::{Context, Result, ensure};
+use clap::Args;
 use std::any::Any;
 use std::path::PathBuf;
-use structopt::StructOpt;
 
 use opentitanlib::app::command::CommandDispatch;
-use opentitanlib::app::{self, TransportWrapper};
+use opentitanlib::app::{StagedProgressBar, TransportWrapper};
 use opentitanlib::bootstrap::{Bootstrap, BootstrapOptions, BootstrapProtocol};
 use opentitanlib::image::image::ImageAssembler;
 use opentitanlib::transport;
 use opentitanlib::util::parse_int::ParseInt;
 
 /// Bootstrap the target device.
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub struct BootstrapCommand {
-    #[structopt(flatten)]
+    #[command(flatten)]
     bootstrap_options: BootstrapOptions,
-    #[structopt(
-        long,
-        parse(try_from_str=usize::from_str),
-        default_value="1048576",
-        help="The size of the image to assemble (only valid with mutliple FILE arguments)"
-    )]
+    /// The size of the image to assemble (only valid with multiple FILE arguments).
+    #[arg(long, value_parser = usize::from_str, default_value = "1048576")]
     size: usize,
-    #[structopt(
-        long,
-        parse(try_from_str),
-        default_value = "true",
-        help = "Whether or not the assembled image is mirrored (only valid with mutliple FILE arguments)"
-    )]
+    /// Whether or not the assembled image is mirrored (only valid with multiple FILE arguments).
+    #[arg(long, action = clap::ArgAction::Set, default_value = "true")]
     mirror: bool,
-    #[structopt(
-        name = "FILE",
-        min_values(1),
-        help = "An image to bootstrap or multiple filename@offset specifiers to assemble into a bootstrap image."
-    )]
+    /// An image to bootstrap or multiple filename@offset specifiers to assemble into a bootstrap image.
+    #[arg(value_name = "FILE", required = true, num_args = 1..)]
     filename: Vec<String>,
 }
 
@@ -46,7 +34,7 @@ impl BootstrapCommand {
     fn bootstrap_using_direct_emulator_integration(
         &self,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         ensure!(
             !(self.filename.len() > 1 || self.filename[0].contains('@')),
             "The `emulator` protocol does not support image assembly"
@@ -62,7 +50,8 @@ impl BootstrapCommand {
             image.parse(&self.filename)?;
             image.assemble()
         } else {
-            Ok(std::fs::read(&self.filename[0])?)
+            Ok(std::fs::read(&self.filename[0])
+                .with_context(|| format!("Failed to read {}", self.filename[0]))?)
         }
     }
 }
@@ -72,26 +61,14 @@ impl CommandDispatch for BootstrapCommand {
         &self,
         _context: &dyn Any,
         transport: &TransportWrapper,
-    ) -> Result<Option<Box<dyn Annotate>>> {
-        // The `min_values` structopt attribute should take care of this, but it doesn't.
-        ensure!(
-            !self.filename.is_empty(),
-            "You must supply at least one filename"
-        );
+    ) -> Result<Option<Box<dyn erased_serde::Serialize>>> {
         if self.bootstrap_options.protocol == BootstrapProtocol::Emulator {
             return self.bootstrap_using_direct_emulator_integration(transport);
         }
 
         let payload = self.payload()?;
-        let progress = app::progress_bar(payload.len() as u64);
-        Bootstrap::update_with_progress(
-            transport,
-            &self.bootstrap_options,
-            &payload,
-            |_, chunk| {
-                progress.inc(chunk as u64);
-            },
-        )?;
+        let progress = StagedProgressBar::new();
+        Bootstrap::update_with_progress(transport, &self.bootstrap_options, &payload, &progress)?;
         Ok(None)
     }
 }

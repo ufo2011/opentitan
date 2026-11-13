@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 #include "sw/device/lib/base/memory.h"
 #include "sw/device/lib/base/multibits.h"
 
-#include "lc_ctrl_regs.h"  // Generated.
+#include "hw/top/lc_ctrl_regs.h"  // Generated.
 
 dif_result_t dif_lc_ctrl_get_state(const dif_lc_ctrl_t *lc,
                                    dif_lc_ctrl_state_t *state) {
@@ -107,7 +107,7 @@ dif_result_t dif_lc_ctrl_get_attempts(const dif_lc_ctrl_t *lc, uint8_t *count) {
   uint32_t reg =
       mmio_region_read32(lc->base_addr, LC_CTRL_LC_TRANSITION_CNT_REG_OFFSET);
   uint8_t value =
-      bitfield_field32_read(reg, LC_CTRL_LC_TRANSITION_CNT_CNT_FIELD);
+      (uint8_t)bitfield_field32_read(reg, LC_CTRL_LC_TRANSITION_CNT_CNT_FIELD);
   if (value == LC_CTRL_LC_TRANSITION_CNT_CNT_MASK) {
     return kDifError;
   }
@@ -136,6 +136,11 @@ dif_result_t dif_lc_ctrl_get_status(const dif_lc_ctrl_t *lc,
         bitfield_bit32_write(status_word, kDifLcCtrlStatusCodeReady, true);
   }
 
+  if (bitfield_bit32_read(reg, LC_CTRL_STATUS_EXT_CLOCK_SWITCHED_BIT)) {
+    status_word = bitfield_bit32_write(status_word,
+                                       kDifLcCtrlStatusExtClockSwitched, true);
+  }
+
   if (bitfield_bit32_read(reg, LC_CTRL_STATUS_TRANSITION_SUCCESSFUL_BIT)) {
     status_word =
         bitfield_bit32_write(status_word, kDifLcCtrlStatusCodeSuccess, true);
@@ -156,9 +161,9 @@ dif_result_t dif_lc_ctrl_get_status(const dif_lc_ctrl_t *lc,
         bitfield_bit32_write(status_word, kDifLcCtrlStatusCodeBadToken, true);
   }
 
-  if (bitfield_bit32_read(reg, LC_CTRL_STATUS_FLASH_RMA_ERROR_BIT)) {
+  if (bitfield_bit32_read(reg, LC_CTRL_STATUS_NVM_RMA_ERROR_BIT)) {
     status_word = bitfield_bit32_write(status_word,
-                                       kDifLcCtrlStatusCodeFlashRmaError, true);
+                                       kDifLcCtrlStatusCodeNvmRmaError, true);
   }
 
   if (bitfield_bit32_read(reg, LC_CTRL_STATUS_OTP_ERROR_BIT)) {
@@ -216,9 +221,14 @@ dif_result_t dif_lc_ctrl_get_hw_rev(const dif_lc_ctrl_t *lc,
     return kDifBadArg;
   }
 
-  uint32_t reg = mmio_region_read32(lc->base_addr, LC_CTRL_HW_REV_REG_OFFSET);
-  hw_rev->chip_gen = bitfield_field32_read(reg, LC_CTRL_HW_REV_CHIP_GEN_FIELD);
-  hw_rev->chip_rev = bitfield_field32_read(reg, LC_CTRL_HW_REV_CHIP_REV_FIELD);
+  uint32_t reg =
+      mmio_region_read32(lc->base_addr, LC_CTRL_HW_REVISION0_REG_OFFSET);
+  hw_rev->silicon_creator_id = (uint16_t)bitfield_field32_read(
+      reg, LC_CTRL_HW_REVISION0_SILICON_CREATOR_ID_FIELD);
+  hw_rev->product_id = (uint16_t)bitfield_field32_read(
+      reg, LC_CTRL_HW_REVISION0_PRODUCT_ID_FIELD);
+  hw_rev->revision_id = (uint8_t)bitfield_field32_read(
+      reg, LC_CTRL_HW_REVISION1_REVISION_ID_FIELD);
   return kDifOk;
 }
 
@@ -237,6 +247,12 @@ dif_result_t dif_lc_ctrl_get_device_id(const dif_lc_ctrl_t *lc,
 dif_result_t dif_lc_ctrl_mutex_try_acquire(const dif_lc_ctrl_t *lc) {
   if (lc == NULL) {
     return kDifBadArg;
+  }
+
+  // Check that mutex claim via SW is not locked.
+  if (mmio_region_read32(lc->base_addr,
+                         LC_CTRL_CLAIM_TRANSITION_IF_REGWEN_REG_OFFSET) == 0) {
+    return kDifLocked;
   }
 
   mmio_region_write32(lc->base_addr, LC_CTRL_CLAIM_TRANSITION_IF_REG_OFFSET,
@@ -431,6 +447,18 @@ dif_result_t dif_lc_ctrl_get_otp_vendor_test_reg(const dif_lc_ctrl_t *lc,
 
   *settings = mmio_region_read32(lc->base_addr,
                                  LC_CTRL_OTP_VENDOR_TEST_CTRL_REG_OFFSET);
+
+  return kDifOk;
+}
+
+dif_result_t dif_lc_ctrl_sw_mutex_lock(const dif_lc_ctrl_t *lc) {
+  if (lc == NULL) {
+    return kDifBadArg;
+  }
+
+  // Clear CLAIM_TRANSITION_IF_REGWEN to lock mutex claim from TL-UL side.
+  mmio_region_write32(lc->base_addr,
+                      LC_CTRL_CLAIM_TRANSITION_IF_REGWEN_REG_OFFSET, 0);
 
   return kDifOk;
 }

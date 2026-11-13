@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -29,4 +29,12 @@ py_library(
 filegroup(
     name = "tpl_files",
     srcs = glob(["**/*.tpl"]),
+)
+
+filegroup(
+    name = "doc_files",
+    srcs = glob([
+        "**/*.md",
+        "**/*.svg",
+    ]),
 )

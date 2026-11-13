@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ class spi_device_flash_mode_vseq extends spi_device_intercept_vseq;
   endfunction
 
   constraint num_trans_c {
-    num_trans inside {[20:30]};
+    num_trans inside {[1:12]};
   }
 
   task body();

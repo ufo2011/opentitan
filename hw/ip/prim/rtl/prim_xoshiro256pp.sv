@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -7,7 +7,7 @@
 // Additional Entropy input to XOR fresh entropy into the state.
 // Lockup protection that reseeds the generator if it falls into the all-zero state.
 //
-// Refs: [1] D. Blackman and S. Vigna, Scrambled Linear Pseudorndom Number Generators
+// Refs: [1] D. Blackman and S. Vigna, Scrambled Linear Pseudorandom Number Generators
 //           https://arxiv.org/pdf/1805.01407.pdf
 //       [2] https://prng.di.unimi.it/
 //       [3] https://en.wikipedia.org/wiki/Xorshift#xoshiro_and_xoroshiro

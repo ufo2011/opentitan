@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "sw/device/lib/base/mmio.h"
+#include "hw/top/dt/alert_handler.h"  // Generated
+#include "hw/top/dt/aon_timer.h"      // Generated
+#include "hw/top/dt/pwrmgr.h"         // Generated
+#include "hw/top/dt/rv_core_ibex.h"   // Generated
+#include "hw/top/dt/rv_timer.h"       // Generated
 #include "sw/device/lib/dif/dif_alert_handler.h"
 #include "sw/device/lib/dif/dif_aon_timer.h"
 #include "sw/device/lib/dif/dif_pwrmgr.h"
@@ -22,9 +26,6 @@
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_isrs.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
-
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "sw/device/lib/testing/autogen/isr_testutils.h"
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -41,6 +42,7 @@ static dif_pwrmgr_t pwrmgr;
 static dif_rv_core_ibex_t rv_core_ibex;
 static dif_aon_timer_t aon_timer;
 static dif_alert_handler_t alert_handler;
+static dt_pwrmgr_t kPwrmgrDt = kDtPwrmgr;
 
 /**
  * Program the alert handler to escalate on alerts upto phase 2 (i.e. reset)
@@ -48,7 +50,7 @@ static dif_alert_handler_t alert_handler;
  * the escalation.
  */
 enum {
-  kEscalationPhase0Micros = 100 * 1000,  // 10 ms
+  kEscalationPhase0Micros = 100 * 1000,  // 100 ms
   kEscalationPhase2Micros = 100,         // 100 us
   kIrqDeadlineMicros = 10,               // 10 us
   kWdogBarkMicros = 500,                 // 500 us
@@ -60,27 +62,31 @@ enum {
 const int kNumTestIterations = 3;
 
 static void alert_handler_config(void) {
+  uint32_t cycles[3] = {0};
+  CHECK_STATUS_OK(alert_handler_testutils_get_cycles_from_us(
+      kEscalationPhase0Micros, &cycles[0]));
+  CHECK_STATUS_OK(alert_handler_testutils_get_cycles_from_us(
+      kEscalationPhase2Micros, &cycles[1]));
+  CHECK_STATUS_OK(alert_handler_testutils_get_cycles_from_us(kIrqDeadlineMicros,
+                                                             &cycles[2]));
   dif_alert_handler_escalation_phase_t esc_phases[] = {
       {.phase = kDifAlertHandlerClassStatePhase0,
        .signal = 0,
-       .duration_cycles =
-           alert_handler_testutils_get_cycles_from_us(kEscalationPhase0Micros)},
+       .duration_cycles = cycles[0]},
       {.phase = kDifAlertHandlerClassStatePhase2,
        .signal = 3,
-       .duration_cycles = alert_handler_testutils_get_cycles_from_us(
-           kEscalationPhase2Micros)}};
-
+       .duration_cycles = cycles[1]}};
   dif_alert_handler_class_config_t class_config[] = {{
       .auto_lock_accumulation_counter = kDifToggleDisabled,
       .accumulator_threshold = 0,
-      .irq_deadline_cycles =
-          alert_handler_testutils_get_cycles_from_us(kIrqDeadlineMicros),
+      .irq_deadline_cycles = cycles[2],
       .escalation_phases = esc_phases,
       .escalation_phases_len = ARRAYSIZE(esc_phases),
       .crashdump_escalation_phase = kDifAlertHandlerClassStatePhase3,
   }};
 
-  dif_alert_handler_alert_t alerts[] = {kTopEarlgreyAlertIdPwrmgrAonFatalFault};
+  dt_alert_id_t alerts[] = {
+      dt_pwrmgr_alert_to_alert_id(kPwrmgrDt, kDtPwrmgrAlertFatalFault)};
   dif_alert_handler_class_t alert_classes[] = {kDifAlertHandlerClassA};
   dif_alert_handler_class_t classes[] = {kDifAlertHandlerClassA};
   dif_alert_handler_config_t config = {
@@ -90,11 +96,12 @@ static void alert_handler_config(void) {
       .classes = classes,
       .class_configs = class_config,
       .classes_len = ARRAYSIZE(class_config),
-      .ping_timeout = 0,
+      .ping_timeout = kAlertHandlerTestutilsDefaultPingTimeout,
   };
 
-  alert_handler_testutils_configure_all(&alert_handler, config,
-                                        /*lock=*/kDifToggleDisabled);
+  CHECK_STATUS_OK(
+      alert_handler_testutils_configure_all(&alert_handler, config,
+                                            /*lock=*/kDifToggleDisabled));
 }
 
 /**
@@ -113,8 +120,7 @@ static void wdog_handler(void) {
   CHECK_DIF_OK(dif_aon_timer_watchdog_stop(&aon_timer));
   // In order to handle the NMI we need to acknowledge the interrupt status
   // bit it at the peripheral side. Note that this test does not use the
-  // PLIC, so there is nothing to acknowledge on the PLIC side. We are hence
-  // not using the isr_testutils_aon_timer_isr function here.
+  // PLIC, so there is nothing to acknowledge on the PLIC side.
   CHECK_DIF_OK(
       dif_aon_timer_irq_acknowledge(&aon_timer, kDifAonTimerIrqWdogTimerBark));
 }
@@ -154,12 +160,14 @@ static void wdog_nmi_test(void) {
   nmi_state = (dif_rv_core_ibex_nmi_state_t){0};
 
   // Setup the wdog bark interrupt.
-  uint32_t count_cycles =
-      aon_timer_testutils_get_aon_cycles_from_us(kWdogBarkMicros);
-  aon_timer_testutils_watchdog_config(&aon_timer,
-                                      /*bark_cycles=*/count_cycles,
-                                      /*bite_cycles=*/UINT32_MAX,
-                                      /*pause_in_sleep=*/false);
+  uint32_t count_cycles = 0;
+  CHECK_STATUS_OK(aon_timer_testutils_get_aon_cycles_32_from_us(kWdogBarkMicros,
+                                                                &count_cycles));
+  CHECK_STATUS_OK(
+      aon_timer_testutils_watchdog_config(&aon_timer,
+                                          /*bark_cycles=*/count_cycles,
+                                          /*bite_cycles=*/UINT32_MAX,
+                                          /*pause_in_sleep=*/false));
   LOG_INFO("Wait for aon_timer NMI");
   IBEX_SPIN_FOR(nmi_fired, kWdogBarkMicros * 2);
 
@@ -226,7 +234,7 @@ static void alert_handler_nmi_test(void) {
  * It calls the `expected_isr_handler` function pointer that is previously set
  * by the test to handler the specific peripheral IRQ.
  */
-void ottf_external_nmi_handler(void) {
+void ottf_external_nmi_handler(uint32_t *exc_info) {
   nmi_fired = true;
 
   expected_isr_handler();
@@ -241,24 +249,23 @@ void ottf_external_nmi_handler(void) {
  * OTTF external IRQ handler
  * This functions overrides the OTTF weak definition.
  */
-void ottf_external_isr(void) { ext_irq_fired = true; }
+void ottf_external_isr(uint32_t *exc_info) { ext_irq_fired = true; }
 
 /**
  * Initialized all peripherals used in this test.
  */
 void init_peripherals(void) {
-  mmio_region_t addr =
-      mmio_region_from_addr(TOP_EARLGREY_RV_CORE_IBEX_CFG_BASE_ADDR);
-  CHECK_DIF_OK(dif_rv_core_ibex_init(addr, &rv_core_ibex));
+  static_assert(kDtRvCoreIbexCount >= 1, "This test requires an Ibex core");
+  CHECK_DIF_OK(
+      dif_rv_core_ibex_init_from_dt((dt_rv_core_ibex_t)0, &rv_core_ibex));
 
-  addr = mmio_region_from_addr(TOP_EARLGREY_AON_TIMER_AON_BASE_ADDR);
-  CHECK_DIF_OK(dif_aon_timer_init(addr, &aon_timer));
+  CHECK_DIF_OK(dif_aon_timer_init_from_dt(kDtAonTimer, &aon_timer));
 
-  addr = mmio_region_from_addr(TOP_EARLGREY_ALERT_HANDLER_BASE_ADDR);
-  CHECK_DIF_OK(dif_alert_handler_init(addr, &alert_handler));
+  static_assert(kDtAlertHandlerCount >= 1, "This test needs an Alert Handler");
+  CHECK_DIF_OK(
+      dif_alert_handler_init_from_dt((dt_alert_handler_t)0, &alert_handler));
 
-  addr = mmio_region_from_addr(TOP_EARLGREY_PWRMGR_AON_BASE_ADDR);
-  CHECK_DIF_OK(dif_pwrmgr_init(addr, &pwrmgr));
+  CHECK_DIF_OK(dif_pwrmgr_init_from_dt(kPwrmgrDt, &pwrmgr));
 }
 /**
  * This test do the following steps:
@@ -292,7 +299,5 @@ bool test_main(void) {
   CHECK(ext_irq_fired == false, "Unexpected external interrupt triggered.");
   // Double check that the system has not been reset due to escalation and that
   // the reset reason is still POR.
-  pwrmgr_testutils_is_wakeup_reason(&pwrmgr, 0);
-
-  return true;
+  return UNWRAP(pwrmgr_testutils_is_wakeup_reason(&pwrmgr, 0));
 }

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,16 +34,14 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
   protected bit [ADC_CTRL_NUM_FILTERS - 1 : 0] m_expected_filter_status;
   // Debounce detected
   protected bit m_debounced;
-  // Expected adc_intr_status (1 bit per filter + oneshot mode)
-  protected bit [ADC_CTRL_NUM_FILTERS : 0] m_expected_adc_intr_status;
-  // Expected intr_state register
-  protected bit m_expected_intr_state;
+  // Expected adc_intr_status (1 bit per filter + transition IRQ + oneshot mode)
+  protected bit [ADC_CTRL_NUM_FILTERS + 1 : 0] m_expected_adc_intr_status;
+  // Expected intr_test register
+  protected bit m_expected_intr_test;
   // Write to filter_status
   protected event m_filter_status_wr_ev;
   // Write to adc_intr_status
   protected event m_adc_intr_status_wr_ev;
-  // Write to intr_state
-  protected event m_intr_state_wr_ev;
   // Expected wakeup line
   protected bit m_expected_wakeup;
   // Write to adc_fsm_reset
@@ -54,8 +52,10 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
   protected bit m_adc_ctrl_en = 0;
   // In low power mode
   protected bit m_lp_mode = 0;
-  // Debug cable index in interupt registers
-  protected int unsigned m_match_done_index;
+  // Whether the FSM transitioned from LP to NP mode.
+  protected bit m_lp_to_np_transition = 0;
+  // Debug cable index in interrupt registers
+  protected int unsigned m_match_pending_index;
 
   `uvm_component_utils(adc_ctrl_scoreboard)
 
@@ -78,7 +78,7 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
 
   function void connect_phase(uvm_phase phase);
     super.connect_phase(phase);
-    m_match_done_index = cfg.ral.intr_state.match_done.get_lsb_pos();
+    m_match_pending_index = cfg.ral.intr_state.match_pending.get_lsb_pos();
   endfunction
 
   task run_phase(uvm_phase phase);
@@ -105,14 +105,16 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
     bit intr_en;
     forever begin
       @(cfg.intr_vif.pins);
+      if (cfg.clk_rst_vif.rst_n == 1'b0) continue;
       m_interrupt = cfg.intr_vif.sample_pin(ADC_CTRL_INTERRUPT_INDEX);
       // Compare against expected every change of interrupt line
       if (cfg.en_scb) begin
-        intr_en = ral.intr_enable.match_done.get_mirrored_value();
+        intr_en = ral.intr_enable.match_pending.get_mirrored_value();
         `uvm_info(`gfn, $sformatf(
                   "monitor_intr_proc: interrupt pin change m_interrupt=%b", m_interrupt),
                   UVM_MEDIUM)
-        `DV_CHECK_EQ(m_interrupt, (m_expected_intr_state & intr_en))
+        `DV_CHECK_EQ(m_interrupt,
+            ((m_expected_intr_test || |m_expected_adc_intr_status) && intr_en))
         if (cfg.en_cov) begin
           // Sample interrupt pin coverage for interrupt pins
           cov.intr_pins_cg.sample(ADC_CTRL_INTERRUPT_INDEX, m_interrupt);
@@ -159,7 +161,7 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
     end
   endtask
 
-  // Process ADC push pull fifos
+  // Process ADC push pull FIFOs
   protected virtual task adc_push_pull_fifo_proc(adc_push_pull_fifo_t fifo, int channel);
     adc_push_pull_item_t item;
     forever begin
@@ -206,11 +208,8 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
     bit            data_phase_write = (write && channel == DataChannel);
     uvm_reg_data_t write_data;
 
-    // if access was to a valid csr, get the csr handle
-    if (csr_addr inside {cfg.ral_models[ral_name].csr_addrs}) begin
-      csr = cfg.ral_models[ral_name].default_map.get_reg_by_offset(csr_addr);
-      `DV_CHECK_NE_FATAL(csr, null)
-    end else begin
+    csr = cfg.ral_models[ral_name].get_default_map().get_reg_by_offset(csr_addr);
+    if (csr == null) begin
       `uvm_fatal(`gfn, $sformatf("Access unexpected addr 0x%0h", csr_addr))
     end
 
@@ -221,42 +220,34 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
 
     // process the csr req
     // for write, update local variable and fifo at address phase
-    // for read, update predication at address phase and compare at data phase
+    // for read, update prediction at address phase and compare at data phase
     case (csr.get_name())
       // add individual case item for each csr
       "intr_state": begin
-        bit intr_en = ral.intr_enable.match_done.get_mirrored_value();
+        bit intr_en = ral.intr_enable.match_pending.get_mirrored_value();
         do_read_check = 1;
-        if (addr_phase_write) begin
-          ->m_intr_state_wr_ev;
-          // Implement W1C
-          m_expected_intr_state &= !get_field_val(cfg.ral.intr_state.match_done, item.a_data);
-        end
         if (addr_phase_read) begin
-          `DV_CHECK(csr.predict(.value(m_expected_intr_state), .kind(UVM_PREDICT_READ)))
+          `DV_CHECK(csr.predict(.value(m_expected_intr_test || |m_expected_adc_intr_status),
+                                .kind(UVM_PREDICT_READ)))
         end
         if (cfg.en_cov && data_phase_read) begin
-          cov.intr_cg.sample(m_match_done_index, intr_en, get_field_val(
-                             cfg.ral.intr_state.match_done, item.a_data));
+          cov.intr_cg.sample(m_match_pending_index, intr_en, get_field_val(
+                             cfg.ral.intr_state.match_pending, item.a_data));
         end
-      end
-      "intr_enable": begin
-        // FIXME
       end
       "intr_test": begin
         // Model intr_test functionality
-        bit intr_test_val = get_field_val(cfg.ral.intr_test.match_done, item.a_data);
-        bit intr_en = ral.intr_enable.match_done.get_mirrored_value();
+        bit intr_test_val = get_field_val(cfg.ral.intr_test.match_pending, item.a_data);
+        bit intr_en = ral.intr_enable.match_pending.get_mirrored_value();
         if (addr_phase_write) begin
-          m_expected_intr_state |= intr_test_val;
+          m_expected_intr_test = intr_test_val;
           if (cfg.en_cov) begin
-            cov.intr_test_cg.sample(m_match_done_index, intr_test_val, intr_en,
-                                    m_expected_intr_state);
+            cov.intr_test_cg.sample(m_match_pending_index, intr_test_val, intr_en,
+                                    m_expected_intr_test || |m_expected_adc_intr_status);
           end
         end
       end
       "adc_intr_status": begin
-        // TODO: update modeling for One Shot mode
         do_read_check = 1;
         if (addr_phase_write) begin
           ->m_adc_intr_status_wr_ev;
@@ -267,14 +258,13 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
           `DV_CHECK(csr.predict(.value(m_expected_adc_intr_status), .kind(UVM_PREDICT_READ)))
         end
       end
-      "adc_intr_ctl": begin
-        // FIXME
-      end
       "adc_wakeup_ctl": begin
         if (addr_phase_write) begin
           // Evaluate expected wakeup adc_wakeup_ctl
-          m_expected_wakeup =
-              |(m_expected_filter_status & get_field_val(cfg.ral.adc_wakeup_ctl.en, item.a_data));
+          m_expected_wakeup = (m_lp_to_np_transition &&
+                               get_field_val(cfg.ral.adc_wakeup_ctl.trans_en, item.a_data)) ||
+                              |(m_expected_filter_status &
+                                get_field_val(cfg.ral.adc_wakeup_ctl.match_en, item.a_data));
         end
       end
       "adc_en_ctl": begin
@@ -318,18 +308,23 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
         do_read_check = 1;
         if (addr_phase_read) begin
           // Latest ADC value
-          void'(ral.filter_status.predict(
+          void'(ral.filter_status.match.predict(
               .value(m_expected_filter_status), .kind(UVM_PREDICT_READ)
+          ));
+          void'(ral.filter_status.trans.predict(
+              .value(m_lp_to_np_transition), .kind(UVM_PREDICT_READ)
           ));
         end
         if (addr_phase_write) begin
           ->m_filter_status_wr_ev;
           // Implement W1C
-          m_expected_filter_status &= (~item.a_data);
+          {m_lp_to_np_transition, m_expected_filter_status} &= (~item.a_data);
         end
         // Evaluate expected wakeup for new m_expected_filter_status
-        m_expected_wakeup = |(m_expected_filter_status &
-            cfg.ral.adc_wakeup_ctl.get_mirrored_value());
+        m_expected_wakeup = (m_lp_to_np_transition &&
+                             cfg.ral.adc_wakeup_ctl.trans_en.get_mirrored_value()) ||
+                            |(m_expected_filter_status &
+                              cfg.ral.adc_wakeup_ctl.match_en.get_mirrored_value());
       end
       "adc_chn0_filter_ctl_0", "adc_chn0_filter_ctl_1", "adc_chn0_filter_ctl_2",
           "adc_chn0_filter_ctl_3", "adc_chn0_filter_ctl_4", "adc_chn0_filter_ctl_5",
@@ -338,7 +333,6 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
           "adc_chn1_filter_ctl_4", "adc_chn1_filter_ctl_5", "adc_chn1_filter_ctl_6",
           "adc_chn1_filter_ctl_7"
           : begin
-        // FIXME
       end
 
       "adc_chn_val_0": begin
@@ -398,7 +392,7 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
       end
 
       default: begin
-        //`uvm_error(`gfn, $sformatf("invalid csr: %0s", csr.get_full_name()))
+        // Do nothing
       end
     endcase
 
@@ -412,20 +406,50 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
     end
   endtask
 
+  function adc_ctrl_filter_cfg get_filter_cfg(int unsigned channel, int unsigned filter);
+    string reg_name;
+    uvm_reg csr;
+    uvm_reg_field fld;
+    bit en, cond;
+    bit [ADC_CTRL_DATA_WIDTH-1:0] min_v, max_v;
+
+    reg_name = $sformatf("adc_chn%0d_filter_ctl_%0d", channel, filter);
+    csr = ral.get_reg_by_name(reg_name);
+    if (!csr) begin
+      `uvm_fatal(`gfn, $sformatf("Cannot find register with name %s", reg_name))
+    end
+
+    fld = csr.get_field_by_name("en");
+    if (!fld) `uvm_fatal(`gfn, $sformatf("The %s register has no 'en' field.", reg_name))
+    en = fld.get_mirrored_value();
+
+    fld = csr.get_field_by_name("cond");
+    if (!fld) `uvm_fatal(`gfn, $sformatf("The %s register has no 'cond' field.", reg_name))
+    cond = fld.get_mirrored_value();
+
+    fld = csr.get_field_by_name("min_v");
+    if (!fld) `uvm_fatal(`gfn, $sformatf("The %s register has no 'min_v' field.", reg_name))
+    min_v = fld.get_mirrored_value();
+
+    fld = csr.get_field_by_name("max_v");
+    if (!fld) `uvm_fatal(`gfn, $sformatf("The %s register has no 'max_v' field.", reg_name))
+    max_v = fld.get_mirrored_value();
+
+    return adc_ctrl_filter_cfg::make($sformatf("filter_cfg[%0d][%0d]", channel, filter),
+                                     min_v, max_v, cond, en);
+  endfunction
+
   // Sample the filter coverage using values from the register model
   // Set is_interrupt to notify an interrupt and is_wakeup a wakeup event
   virtual function void sample_filter_cov(bit is_interrupt = 0, bit is_wakeup = 0,
                                           bit clk_gate = 0);
     for (int channel = 0; channel < ADC_CTRL_CHANNELS; channel++) begin
       for (int filter = 0; filter < ADC_CTRL_NUM_FILTERS; filter++) begin
-        string reg_name = $sformatf("adc_chn%0d_filter_ctl_%0d", channel, filter);
-        adc_ctrl_filter_cfg_t cfg;
-        cfg.en = get_reg_fld_mirror_value(ral, reg_name, "en");
-        cfg.cond = adc_ctrl_filter_cond_e'(get_reg_fld_mirror_value(ral, reg_name, "cond"));
-        cfg.min_v = get_reg_fld_mirror_value(ral, reg_name, "min_v");
-        cfg.max_v = get_reg_fld_mirror_value(ral, reg_name, "max_v");
-        cov.sample_filter_cov(.channel(channel), .filter(filter), .cfg(cfg),
-                              .is_interrupt(is_interrupt), .is_wakeup(is_wakeup),
+        cov.sample_filter_cov(.channel(channel),
+                              .filter(filter),
+                              .cfg(get_filter_cfg(channel, filter)),
+                              .is_interrupt(is_interrupt),
+                              .is_wakeup(is_wakeup),
                               .clk_gate(clk_gate));
       end
     end
@@ -455,26 +479,27 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
     bit filter_match;
     // Perform the basic match against filter config
     for (int filter_idx = 0; filter_idx < ADC_CTRL_NUM_FILTERS; filter_idx++) begin
+      bit en_somewhere, mismatch_somewhere;
+
       // Extract appropriate configuration for this channel/filter
-      adc_ctrl_filter_cfg_t filter_cfg = cfg.filter_cfg[channel][filter_idx];
+      adc_ctrl_filter_cfg filter_cfg = cfg.filter_cfg[channel][filter_idx];
       // Check value against configured range of values
       bit inside_range = val inside {[filter_cfg.min_v : filter_cfg.max_v]};
       // Set match flag for this channel/filter considering inside/outside config
-      m_chn_match[channel][filter_idx] = (filter_cfg.cond == ADC_CTRL_FILTER_COND_IN) ?
-          inside_range : ~inside_range;
+      m_chn_match[channel][filter_idx] = filter_cfg.match_outside ^ inside_range;
 
-      // Combine channel matches for this filter
-      filter_match = 0;
+      // Combine channel matches for this filter. We expect a match for the filter if
+      //
+      //  - This filter is enabled on at least one channel
+      //  - On every channel where the filter is enabled, it gets a match.
       for (int channel_idx = 0; channel_idx < ADC_CTRL_CHANNELS; channel_idx++) begin
-        filter_match |= cfg.filter_cfg[channel_idx][filter_idx].en;
+        if (cfg.filter_cfg[channel_idx][filter_idx].enabled) begin
+          en_somewhere = 1;
+          mismatch_somewhere |= ~m_chn_match[channel_idx][filter_idx];
+        end
       end
 
-      for (int channel_idx = 0; channel_idx < ADC_CTRL_CHANNELS; channel_idx++) begin
-        filter_match &= !cfg.filter_cfg[channel_idx][filter_idx].en |
-                         (m_chn_match[channel_idx][filter_idx] &
-                          cfg.filter_cfg[channel_idx][filter_idx].en);
-      end
-      m_match[filter_idx] = filter_match;
+      m_match[filter_idx] = en_somewhere & ~mismatch_somewhere;
     end
 
     // If this was data from the last channel process debounce model
@@ -517,7 +542,7 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
   // Because scanning continues the adc_intr_status register will reflect any debounced events
   // that are detected between the controller raising an interrupt and the status bits being
   // cleared (by having 1 written to them). However, the adc_chn_val[0].adc_chn_value_intr and
-  // adc_chn_val[1].adc_chn_value_intrregisters record the value at the time the interrupt was
+  // adc_chn_val[1].adc_chn_value_intr registers record the value at the time the interrupt was
   // first raised and thus reflect the filter state from that point.
 
   virtual function void process_debounce();
@@ -528,17 +553,19 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
     end
 
     // Implement One Shot Mode
-    // One hot interrupt is one bit above the last filter's interrupt
+    // One hot interrupt is one bit above the transition interrupt
     if (cfg.testmode inside {AdcCtrlTestmodeOneShot}) begin
-      m_expected_adc_intr_status[ADC_CTRL_NUM_FILTERS] = cfg.adc_intr_ctl[ADC_CTRL_NUM_FILTERS];
-      m_expected_intr_state |= cfg.adc_intr_ctl[ADC_CTRL_NUM_FILTERS];
+      m_expected_adc_intr_status[ADC_CTRL_NUM_FILTERS+1] = cfg.adc_intr_ctl[ADC_CTRL_NUM_FILTERS+1];
     end
 
-    // Delayfor edge detection
+    // Delay for edge detection
     m_match_prev = m_match;
 
     // Decode expected wakeup - allow dynamic control
-    m_expected_wakeup = |(m_expected_filter_status & cfg.ral.adc_wakeup_ctl.get_mirrored_value());
+    m_expected_wakeup = (m_lp_to_np_transition &&
+                         cfg.ral.adc_wakeup_ctl.trans_en.get_mirrored_value()) ||
+                        |(m_expected_filter_status &
+                          cfg.ral.adc_wakeup_ctl.match_en.get_mirrored_value());
   endfunction
 
   // Process normal power debounce
@@ -557,8 +584,7 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
             // Capture matches
             m_debounced = 1;
             m_expected_filter_status |= m_match;
-            m_expected_adc_intr_status |= m_match & cfg.adc_intr_ctl;
-            m_expected_intr_state |= (|(m_match & cfg.adc_intr_ctl));
+            m_expected_adc_intr_status |= m_match & cfg.adc_intr_ctl[ADC_CTRL_NUM_FILTERS-1:0];
 
             // Update interrupt ADC values
             foreach (m_adc_latest_values[channel]) begin
@@ -571,11 +597,27 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
         // Previous matched set different to current
         m_np_counter = 0;
         m_debounced  = 0;
+        // In case the LP mode was configured before, the FSM transitions back into LP mode
+        // if a match cannot be confirmed.
+        if (cfg.ral.adc_pd_ctl.lp_mode.get_mirrored_value()) begin
+          // Move to normal power mode
+          m_lp_mode = 1;
+          // Reflect in config object
+          cfg.lp_mode = 1;
+        end
       end
     end else begin
       // No filters hit
       m_np_counter = 0;
       m_debounced  = 0;
+      // In case the LP mode was configured before, the FSM transitions back into LP mode
+      // if a match cannot be confirmed.
+      if (cfg.ral.adc_pd_ctl.lp_mode.get_mirrored_value()) begin
+        // Move to normal power mode
+        m_lp_mode = 1;
+        // Reflect in config object
+        cfg.lp_mode = 1;
+      end
     end
   endfunction
 
@@ -596,6 +638,12 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
             m_lp_mode = 0;
             // Reflect in config object
             cfg.lp_mode = 0;
+            m_lp_to_np_transition = 1;
+            // The associated interrupt is located one bit above the last filter index.
+            m_expected_adc_intr_status[ADC_CTRL_NUM_FILTERS] |=
+                cfg.adc_intr_ctl[ADC_CTRL_NUM_FILTERS];
+            // Decode expected wakeup - allow dynamic control
+            m_expected_wakeup |= cfg.ral.adc_wakeup_ctl.trans_en.get_mirrored_value();
             m_lp_counter = 0;
           end
         end
@@ -625,9 +673,12 @@ class adc_ctrl_scoreboard extends cip_base_scoreboard #(
     m_debounced = 0;
     m_expected_filter_status = 0;
     m_expected_adc_intr_status = 0;
-    m_expected_intr_state = 0;
+    m_expected_intr_test = 0;
     m_adc_ctrl_en = 0;
     m_lp_mode = 0;
+    m_lp_to_np_transition = 0;
+    cfg.adc_intr_ctl = '0;
+    cfg.adc_wakeup_ctl = '0;
   endfunction
 
   // Software reset

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,6 @@
  */
 
 module tlul_cmd_intg_gen import tlul_pkg::*; #(
-  // TODO: default generation of data integrity is on until host native
-  // generation is ready
   parameter bit EnableDataIntgGen = 1'b1
 ) (
   // TL-UL interface

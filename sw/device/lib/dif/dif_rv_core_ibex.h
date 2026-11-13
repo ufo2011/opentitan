@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,11 @@
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
+
+/**
+ * @file
+ * Access to Ibex state (e.g. addresses, crashdumps, alerts)
+ */
 
 /**
  * Address translation slot selection.
@@ -377,20 +382,6 @@ dif_result_t dif_rv_core_ibex_get_rnd_status(
 OT_WARN_UNUSED_RESULT
 dif_result_t dif_rv_core_ibex_read_rnd_data(
     const dif_rv_core_ibex_t *rv_core_ibex, uint32_t *data);
-
-typedef uint32_t dif_rv_core_ibex_fpga_info_t;
-
-/**
- * Read the FPGA build timestamp info. This function only returns valid data for
- * fpga environments, for all other environments it is simply 0.
- *
- * @param rv_core_ibex Handle.
- * @param[out] info A pointer to receive the FPGA timestamp info.
- * @return The result of the operation.
- */
-OT_WARN_UNUSED_RESULT
-dif_result_t dif_rv_core_ibex_read_fpga_info(
-    const dif_rv_core_ibex_t *rv_core_ibex, dif_rv_core_ibex_fpga_info_t *info);
 
 /**
  * Software fatal alert. When triggered,

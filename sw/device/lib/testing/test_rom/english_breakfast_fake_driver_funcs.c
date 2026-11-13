@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,18 +11,19 @@
 // used by the silicon_creator bootstrap implementation and to set reset_reason
 // but missing in the english breakfast top level due to hardware limitations.
 
-#if !OT_IS_ENGLISH_BREAKFAST
+#ifndef OPENTITAN_IS_ENGLISHBREAKFAST
 #error "This file should be compiled only for the english breakfast top level"
 #endif
 
 void lifecycle_hw_rev_get(lifecycle_hw_rev_t *hw_rev) {
   *hw_rev = (lifecycle_hw_rev_t){
-      .chip_gen = 0,
-      .chip_rev = 0,
+      .silicon_creator_id = 0,
+      .product_id = 0,
+      .revision_id = 0,
   };
 }
 
-uint32_t otp_read32(uint32_t address) { return kHardenedBoolTrue; }
+uint32_t otp_read32(uint32_t address) { return kHardenedBoolFalse; }
 
 dif_result_t dif_rstmgr_init(mmio_region_t base_addr, dif_rstmgr_t *rstmgr) {
   return kDifOk;

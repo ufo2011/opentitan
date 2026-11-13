@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@ class i2c_host_fifo_fmt_empty_vseq extends i2c_rx_tx_vseq;
 
   virtual task body();
      bit do_interrupt;
-    initialization(.mode(Host));
+    initialization();
     `uvm_info(`gfn, "\n--> start of sequence", UVM_DEBUG)
     fork
       begin

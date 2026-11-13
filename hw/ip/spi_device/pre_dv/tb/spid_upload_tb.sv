@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -583,7 +583,8 @@ module spid_upload_tb;
     .b_rdata_o  (spi_mem_rdata),
     .b_rerror_o (spi_mem_rerror),
 
-    .cfg_i      ('0)
+    .cfg_i      (prim_ram_2p_pkg::RAM_2P_CFG_REQ_DEFAULT),
+    .cfg_o      ()
   );
 
   // Arbiter for bus clock
@@ -709,7 +710,7 @@ module spid_upload_tb;
       $display("Sending SRAM request");
       read_sram(l2m, m2l, current_addr, request_bytes, sram_data);
 
-      // push to result (based on current_offset, currnt_size)
+      // push to result (based on current_offset, current_size)
       $display("Pushing the return data(from SRAM) into the result queue");
       data = {data, sram_data[current_offset:$]}; // push back the sram read
 
@@ -730,7 +731,7 @@ module spid_upload_tb;
     end while (remained_bytes != 0);
 
 
-    // Check the # entires per transaction
+    // Check the # entries per transaction
     // first entry, addr
     // last entry,  ceil({addr,offset} + size)/(SramDw/8)
 

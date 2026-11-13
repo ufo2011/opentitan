@@ -1,5 +1,5 @@
 CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 name: "lowrisc:ip:kmac:0.1"
@@ -14,9 +14,10 @@ filesets:
       - lowrisc:prim:assert
       - lowrisc:prim:count
       - lowrisc:prim:sparse_fsm
+      - lowrisc:prim:trivium
       - lowrisc:prim:mubi
       - lowrisc:ip:tlul
-      - lowrisc:ip:keymgr_pkg
+      - lowrisc:ip:keymgr_dpe_pkg
       - lowrisc:ip:sha3
       - lowrisc:ip:edn_pkg
       - lowrisc:prim:edn_req
@@ -28,7 +29,7 @@ filesets:
       - rtl/kmac_reg_top.sv
       - rtl/kmac_core.sv
       - rtl/kmac_msgfifo.sv
-      - rtl/kmac_staterd.sv
+      - rtl/kmac_staterdwr.sv
       - rtl/kmac_app.sv
       - rtl/kmac_entropy.sv
       - rtl/kmac_errchk.sv
@@ -59,6 +60,12 @@ filesets:
       - lowrisc:lint:common
       - lowrisc:lint:comportable
 
+  files_slang_waiver:
+    depend:
+      # common waivers
+      - lowrisc:lint:common
+      - lowrisc:lint:comportable
+
 parameters:
   SYNTHESIS:
     datatype: bool
@@ -71,6 +78,7 @@ targets:
       - tool_verilator   ? (files_verilator_waiver)
       - tool_ascentlint  ? (files_ascentlint_waiver)
       - tool_veriblelint ? (files_veriblelint_waiver)
+      - tool_slang       ? (files_slang_waiver)
       - files_rtl
     toplevel: kmac
 

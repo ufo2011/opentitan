@@ -1,12 +1,11 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdbool.h>
 
 #include "sw/device/lib/arch/device.h"
-#include "sw/device/silicon_creator/lib/drivers/ibex.h"
-#include "sw/device/silicon_creator/lib/rom_print.h"
+#include "sw/device/lib/base/macros.h"
 
 /**
  * @file
@@ -32,22 +31,22 @@ const uint64_t kUartBaudrate = 115200;
 const uint32_t kUartNCOValue =
     CALCULATE_UART_NCO(kUartBaudrate, kClockFreqPeripheralHz);
 
-const uint32_t kUartTxFifoCpuCycles =
-    CALCULATE_UART_TX_FIFO_CPU_CYCLES(kUartBaudrate, kClockFreqCpuHz);
+const uint32_t kUartBaud115K =
+    CALCULATE_UART_NCO(115200, kClockFreqPeripheralHz);
+const uint32_t kUartBaud230K =
+    CALCULATE_UART_NCO(115200 * 2, kClockFreqPeripheralHz);
+const uint32_t kUartBaud460K =
+    CALCULATE_UART_NCO(115200 * 4, kClockFreqPeripheralHz);
+const uint32_t kUartBaud921K =
+    CALCULATE_UART_NCO(115200 * 8, kClockFreqPeripheralHz);
+const uint32_t kUartBaud1M33 =
+    CALCULATE_UART_NCO(1333333, kClockFreqPeripheralHz);
+const uint32_t kUartBaud1M50 =
+    CALCULATE_UART_NCO(1500000, kClockFreqPeripheralHz);
 
 const uint32_t kAstCheckPollCpuCycles =
     CALCULATE_AST_CHECK_POLL_CPU_CYCLES(kClockFreqCpuHz);
 
-const uintptr_t kDeviceTestStatusAddress = 0;
+uintptr_t device_test_status_address(void) { return 0; }
 
-const uintptr_t kDeviceLogBypassUartAddress = 0;
-
-const bool kJitterEnabled = false;
-
-void device_fpga_version_print(void) {
-  // This value is guaranteed to be zero on all non-FPGA implementations.
-  uint32_t fpga = ibex_fpga_version();
-  // The cast to unsigned int stops GCC from complaining about uint32_t
-  // being a `long unsigned int` while the %x specifier takes `unsigned int`.
-  rom_printf("ROM:%x\r\n", (unsigned int)fpga);
-}
+uintptr_t device_log_bypass_uart_address(void) { return 0; }

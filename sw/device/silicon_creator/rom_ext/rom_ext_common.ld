@@ -1,4 +1,4 @@
-/* Copyright lowRISC contributors. */
+/* Copyright lowRISC contributors (OpenTitan project). */
 /* Licensed under the Apache License, Version 2.0, see LICENSE for details. */
 /* SPDX-License-Identifier: Apache-2.0 */
 
@@ -17,10 +17,17 @@ OUTPUT_ARCH(riscv)
 __DYNAMIC = 0;
 
 /**
- * Symbols to be used in the setup of the address translation for ROM_EXT.
+ * Symbols to be used in the setup of the address translation for the Owner
+ * stage and for checking virtual flash address ranges in `flash_exc_handler.S`.
  */
+_rom_ext_virtual_start_address = ORIGIN(rom_ext_virtual);
+_rom_ext_virtual_size = LENGTH(rom_ext_virtual);
+ASSERT((_rom_ext_virtual_size <= (LENGTH(nvm) / 2)),
+  "Error: rom ext flash is bigger than slot.");
 _owner_virtual_start_address = ORIGIN(owner_virtual);
 _owner_virtual_size = LENGTH(owner_virtual);
+ASSERT((_owner_virtual_size <= (LENGTH(nvm) / 2)),
+  "Error: owner flash is bigger than slot.");
 
 /**
  * Marking the entry point correctly for the ELF file. The signer tool will
@@ -46,8 +53,17 @@ _manifest_code_end = _text_end - _rom_ext_start_address;
  * The location of the entry point relative to the beginning of the associated
  * slot for use in the manifest.
  */
-_manifest_entry_point = _rom_ext_start_boot - _rom_ext_start_address;
+_manifest_entry_point = ABSOLUTE(_rom_ext_start_boot - _rom_ext_start_address);
+/*
+ * The value kHardenedBoolFalse (0x1d4) is selected if the code is linked in
+ * the NVM region.  Otherwise, the value kHardenedBoolTrue (0x739) is
+ * selected.
+ */
+_manifest_address_translation = (_text_start >= ORIGIN(nvm) &&
+                                 _text_start < (ORIGIN(nvm)
+                                              + LENGTH(nvm))) ? 0x1d4 : 0x739;
 
+REGION_ALIAS("coverage_nvm", rom_ext_nvm);
 
 /**
  * NOTE: We have to align each section to word boundaries as our current
@@ -56,8 +72,23 @@ _manifest_entry_point = _rom_ext_start_boot - _rom_ext_start_address;
 SECTIONS {
   .manifest _rom_ext_start_address : {
     KEEP(*(.manifest))
-    . = ALIGN(256);
-  } > rom_ext_flash
+    . = ALIGN(4);
+  } > rom_ext_nvm
+
+  /**
+   * Immutable ROM_EXT section.
+   *
+   * Resides in the .text section so it is covered by the ePMP configuration
+   * that enables ROM_EXT execution.
+   */
+  .rom_ext_immutable : ALIGN(4) {
+    _text_start = .;
+    _rom_ext_immutable_start = .;
+    KEEP(*(.rom_ext_immutable))
+    _rom_ext_immutable_end = .;
+
+    _rom_ext_immutable_size = SIZEOF(.rom_ext_immutable);
+  } > rom_ext_nvm
 
   /**
    * Ibex interrupt vector.
@@ -66,16 +97,15 @@ SECTIONS {
    * Ibex.
    */
   .vectors : ALIGN(256) {
-    _text_start = .;
     KEEP(*(.vectors))
-  } > rom_ext_flash
+  } > rom_ext_nvm
 
   /**
    * C runtime (CRT) section, containing program initialization code.
    */
   .crt : ALIGN(4) {
     KEEP(*(.crt))
-  } > rom_ext_flash
+  } > rom_ext_nvm
 
   /**
    * Standard text section, containing program code.
@@ -86,12 +116,26 @@ SECTIONS {
 
     /* Ensure section end is word-aligned. */
     . = ALIGN(4);
-  } > rom_ext_flash
+  } > rom_ext_nvm
+
+  /**
+   * ROM_EXT ISRs text section, containing the exception handler entry/exit logic
+   * used for handling load access faults due to NVM ECC errors during boot.
+   *
+   * This is placed next to the ".shutdown" section.
+   */
+  .isrs : ALIGN(4) {
+    *(.isrs)
+    *(.isrs.*)
+
+    /* Ensure section end is word-aligned. */
+    . = ALIGN(4);
+  } > rom_ext_nvm
 
   /**
    * Shutdown text section, containing shutdown function(s).
    *
-   * This must be the last executable section in the ROM_EXT flash image.
+   * This must be the last executable section in the ROM_EXT NVM image.
    */
   .shutdown : ALIGN(4) {
     *(.shutdown)
@@ -100,7 +144,7 @@ SECTIONS {
     /* Ensure section end is word-aligned. */
     . = ALIGN(4);
     _text_end = .;
-  } > rom_ext_flash
+  } > rom_ext_nvm
 
   /**
    * Read-only data section, containing all large compile-time constants, like
@@ -113,7 +157,9 @@ SECTIONS {
     *(.srodata.*)
     *(.rodata)
     *(.rodata.*)
-  } > rom_ext_flash
+  } > rom_ext_nvm
+
+  INCLUDE sw/device/lib/coverage/rodata.ld
 
   /**
    * Critical static data that is accessible by both the ROM and the ROM
@@ -122,8 +168,14 @@ SECTIONS {
   INCLUDE sw/device/silicon_creator/lib/base/static_critical.ld
 
   /**
+   * Critical static data that is accessible by both the immutable and
+   * mutable ROM extension.
+   */
+  INCLUDE sw/device/silicon_creator/lib/base/static_dice.ld
+
+  /**
    * Mutable data section, at the bottom of ram_main. This will be initialized
-   * from flash at runtime by the CRT.
+   * from NVM at runtime by the CRT.
    *
    * Load this by copying the bytes from [_data_init_start, _data_init_end] into
    * the range [_data_start, _data_end].
@@ -158,12 +210,12 @@ SECTIONS {
     _data_init_end = LOADADDR(.data) + SIZEOF(.data);
 
     /* This puts it in ram_main at runtime (for the VMA), but puts the section
-     * into flash for load time (for the LMA). This is why `_data_init_*` uses
+     * into NVM for load time (for the LMA). This is why `_data_init_*` uses
      * `LOADADDR`.
      *
      * Using `AT>` means we don't have to keep track of the next free part of
-     * flash, as we do in our other linker scripts. */
-  } > ram_main AT> rom_ext_flash
+     * NVM, as we do in our other linker scripts. */
+  } > ram_main AT> rom_ext_nvm
 
   /**
    * Standard BSS section. This will be zeroed at runtime by the CRT.
@@ -182,6 +234,8 @@ SECTIONS {
     . = ALIGN(4);
     _bss_end = .;
   } > ram_main
+
+  INCLUDE sw/device/lib/coverage/bss.ld
 
   INCLUDE sw/device/info_sections.ld
 }

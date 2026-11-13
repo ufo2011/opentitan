@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,4 @@
 
 #include "sw/device/tests/clkmgr_off_trans_impl.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-
-bool test_main(void) {
-  return execute_off_trans_test(kTopEarlgreyHintableClocksMainAes);
-}
+bool test_main(void) { return execute_off_trans_test(kTestTransAes); }

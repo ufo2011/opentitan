@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,10 +14,12 @@ class i2c_host_rx_oversample_vseq extends i2c_rx_tx_vseq;
     thigh   == 1;
     t_r     == 1;
     t_f     == 1;
-    thd_sta == 1;
+    thd_sta == 3;
     tsu_sto == 1;
     tsu_dat == 1;
     thd_dat == 1;
+
+    t_buf > thd_dat + 1;
 
     solve t_r, tsu_dat, thd_dat before tlow;
     solve t_r                   before t_buf;
@@ -46,7 +48,7 @@ class i2c_host_rx_oversample_vseq extends i2c_rx_tx_vseq;
   }
 
   virtual task body();
-    initialization(.mode(Host));
+    initialization();
     print_time_property();
     for(int i = 0; i < num_runs; i++) begin
       bit do_interrupt = 1'b1;

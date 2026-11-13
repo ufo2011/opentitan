@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,8 +46,8 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
   bit ping_timer_en;
 
   // TLM agent fifos
-  uvm_tlm_analysis_fifo #(alert_esc_seq_item) alert_fifo[NUM_ALERTS];
-  uvm_tlm_analysis_fifo #(alert_esc_seq_item) esc_fifo[NUM_ESCS];
+  uvm_tlm_analysis_fifo #(alert_seq_item) alert_fifo[NUM_ALERTS];
+  uvm_tlm_analysis_fifo #(esc_seq_item)   esc_fifo[NUM_ESCS];
 
   `uvm_component_new
 
@@ -88,14 +88,14 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
       fork
         forever begin
           bit alert_en, loc_alert_en;
-          alert_esc_seq_item act_item;
+          alert_seq_item act_item;
           alert_fifo[index].get(act_item);
           alert_en = ral.alert_en_shadowed[index].get_mirrored_value() &&
               prim_mubi_pkg::mubi4_test_false_loose(cfg.alert_handler_vif.lpg_cg_en[lpg_index]) &&
               prim_mubi_pkg::mubi4_test_false_loose(cfg.alert_handler_vif.lpg_rst_en[lpg_index]);
 
           // Check that ping mechanism will only ping alerts that have been enabled and locked.
-          if (act_item.alert_esc_type == AlertEscPingTrans) begin
+          if (act_item.m_trans_type == AlertPingTrans) begin
             `DV_CHECK(alert_en, $sformatf("alert %0s ping triggered but not enabled", index))
             `DV_CHECK((`gmv(ral.alert_regwen[index]) == 0),
                       $sformatf("alert %0s ping triggered but not locked", index))
@@ -103,15 +103,15 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
 
           if (alert_en) begin
             // alert detected
-            if (act_item.alert_esc_type == AlertEscSigTrans && !act_item.ping_timeout &&
-                act_item.alert_handshake_sta == AlertReceived) begin
+            if (act_item.m_trans_type == AlertSigTrans && !act_item.m_ping_timeout &&
+                act_item.m_alert_handshake_sta == AlertReceived) begin
               process_alert_sig(index, 0);
             // alert integrity fail
-            end else if (act_item.alert_esc_type == AlertEscIntFail) begin
+            end else if (act_item.m_trans_type == AlertIntFail) begin
               loc_alert_en = ral.loc_alert_en_shadowed[LocalAlertIntFail].get_mirrored_value();
               if (loc_alert_en) process_alert_sig(index, 1, LocalAlertIntFail);
-            end else if (act_item.alert_esc_type == AlertEscPingTrans &&
-                         act_item.ping_timeout) begin
+            end else if (act_item.m_trans_type == AlertPingTrans &&
+                         act_item.m_ping_timeout) begin
               loc_alert_en = ral.loc_alert_en_shadowed[LocalAlertPingFail].get_mirrored_value();
               if (loc_alert_en) begin
                 process_alert_sig(index, 1, LocalAlertPingFail);
@@ -130,20 +130,20 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
       automatic int index = i;
       fork
         forever begin
-          alert_esc_seq_item act_item;
+          esc_seq_item act_item;
           esc_fifo[index].get(act_item);
           // escalation triggered, check signal length
-          if (act_item.alert_esc_type == AlertEscSigTrans &&
-              act_item.esc_handshake_sta == EscRespComplete) begin
-            check_esc_signal(act_item.sig_cycle_cnt, index);
+          if (act_item.m_trans_type == EscSigTrans &&
+              act_item.m_esc_handshake_sta == EscRespComplete) begin
+            check_esc_signal(act_item.m_sig_cycle_cnt, index);
           // escalation integrity fail
-          end else if (act_item.alert_esc_type == AlertEscIntFail ||
-               (act_item.esc_handshake_sta == EscIntFail && !act_item.ping_timeout)) begin
+          end else if (act_item.m_trans_type == EscIntFail ||
+               (act_item.m_esc_handshake_sta == EscHSIntFail && !act_item.m_ping_timeout)) begin
             bit loc_alert_en = ral.loc_alert_en_shadowed[LocalEscIntFail].get_mirrored_value();
             if (loc_alert_en) process_alert_sig(index, 1, LocalEscIntFail);
           // escalation ping timeout
-          end else if (act_item.alert_esc_type == AlertEscPingTrans) begin
-            if (act_item.ping_timeout) begin
+          end else if (act_item.m_trans_type == EscPingTrans) begin
+            if (act_item.m_ping_timeout) begin
               bit loc_alert_en = ral.loc_alert_en_shadowed[LocalEscPingFail].get_mirrored_value();
               if (loc_alert_en) begin
                 process_alert_sig(index, 1, LocalEscPingFail);
@@ -215,19 +215,27 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
           if (!is_int_err) begin
             class_i = `gmv(ral.alert_class_shadowed[alert_i]);
             void'(ral.alert_cause[alert_i].predict(1));
-            if (cfg.en_cov) cov.alert_cause_cg.sample(alert_i, class_i);
+            if (cfg.en_cov) begin
+              cov.alert_cause_cg.sample(alert_i, class_i);
+            end
           end else begin
             class_i = `gmv(ral.loc_alert_class_shadowed[int'(local_alert_type)]);
             void'(ral.loc_alert_cause[int'(local_alert_type)].predict(
                 .value(1), .kind(UVM_PREDICT_READ)));
-            if (cfg.en_cov) begin
-              if (local_alert_type inside {LocalAlertPingFail, LocalAlertIntFail}) begin
+            if (local_alert_type inside {LocalAlertPingFail, LocalAlertIntFail}) begin
+              if (cfg.en_cov) begin
                 cov.alert_loc_alert_cause_cg.sample(local_alert_type, alert_i, class_i);
-              end else begin
+              end
+            end else begin
+              // Check the local alert type equals to the ones defined in the CG:
+              `DV_CHECK(local_alert_type inside {LocalEscPingFail, LocalEscIntFail})
+              if (cfg.en_cov) begin
                 cov.esc_loc_alert_cause_cg.sample(local_alert_type, alert_i, class_i);
               end
             end
           end
+          // Check to ensure alert_i and class_i is within bounds
+          `DV_CHECK(alert_i < NUM_ALERTS && class_i < NUM_ALERT_CLASSES)
 
           intr_state_field = intr_state_fields[class_i];
           void'(intr_state_field.predict(.value(1), .kind(UVM_PREDICT_READ)));
@@ -244,13 +252,17 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
           end
 
           // according to issue #841, interrupt will have one clock cycle delay
+          // add an extra cycle for synchronizers from clk_edn to clk
           cfg.clk_rst_vif.wait_n_clks(1);
-          if (!under_reset) begin
-            `DV_CHECK_CASE_EQ(cfg.intr_vif.pins[class_i], intr_en[class_i],
-                            $sformatf("Interrupt class_%s, is_local_err %0b, local_alert_type %s",
-                            class_name[class_i],is_int_err, local_alert_type));
-            if (!under_intr_classes[class_i] && intr_en[class_i]) under_intr_classes[class_i] = 1;
+          if (!under_reset && (cfg.intr_vif.pins[class_i] !== intr_en[class_i])) begin
+            `uvm_error(get_full_name(),
+                       $sformatf({"Unexpected interrupt value in cfg.intr_vif.pins[%0d]: ",
+                                  "saw %0d, but expected %0d. ",
+                                  "(is_int_err = %0b, local_alert_type = %0p)"},
+                                 class_i, cfg.intr_vif.pins[class_i], intr_en[class_i],
+                                 is_int_err, local_alert_type))
           end
+          if (!under_intr_classes[class_i] && intr_en[class_i]) under_intr_classes[class_i] = 1;
         end
       end
     join_none
@@ -336,23 +348,19 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
   endfunction
 
   virtual task process_tl_access(tl_seq_item item, tl_channels_e channel, string ral_name);
-    uvm_reg        csr;
     dv_base_reg    dv_base_csr;
     bit            do_read_check   = 1'b1;
     bit            write           = item.is_write();
     uvm_reg_addr_t csr_addr = {item.a_addr[TL_AW-1:2], 2'b00};
+    uvm_reg        csr = cfg.ral_models[ral_name].get_default_map().get_reg_by_offset(csr_addr);
 
-    // if access was to a valid csr, get the csr handle
-    if (csr_addr inside {cfg.ral_models[ral_name].csr_addrs}) begin
-      csr = ral.default_map.get_reg_by_offset(csr_addr);
-      `DV_CHECK_NE_FATAL(csr, null)
-      `downcast(dv_base_csr, csr)
-    end
     if (csr == null) begin
       // we hit an oob addr - expect error response and return
       `DV_CHECK_EQ(item.d_error, 1'b1)
       return;
     end
+
+    `downcast(dv_base_csr, csr)
 
     if (channel == AddrChannel) begin
       // if incoming access is a write to a valid csr, then make updates right away
@@ -426,16 +434,31 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
               ping_timer_en = 1;
             end
           end
+         "alert_test", "ping_timeout_cyc_shadowed", "ping_timer_regwen": begin
+            // Do nothing. Already auto update mirrored value.
+          end
           default: begin
-            // TODO: align all names with shadow post_fix and re-enable this check.
-            //`uvm_fatal(`gfn, $sformatf("invalid csr: %0s", csr.get_full_name()))
+            // The following regs only need to auto update mirrored value.
+            if (!uvm_re_match("*alert_en_shadowed*", csr_name) ||
+                !uvm_re_match("*alert_class_shadowed*", csr_name) ||
+                !uvm_re_match("class*_ctrl_shadowed", csr_name) ||
+                !uvm_re_match("class*_crashdump_trigger_shadowed", csr_name) ||
+                !uvm_re_match("class*_phase*_cyc_shadowed", csr_name) ||
+                !uvm_re_match("class*_timeout_cyc_shadowed", csr_name) ||
+                !uvm_re_match("class*_accum_thresh_shadowed", csr_name) ||
+                !uvm_re_match("class*_clr_regwen", csr_name) ||
+                !uvm_re_match("class*_regwen", csr_name) ||
+                !uvm_re_match("*alert_regwen_*", csr_name)) begin
+            end else begin
+              `uvm_fatal(`gfn, $sformatf("invalid csr: %0s", csr.get_full_name()))
+            end
           end
         endcase
       end
     end
 
     // process the csr req
-    // for read, update predication at address phase and compare at data phase
+    // for read, update prediction at address phase and compare at data phase
 
     if (!write) begin
       // On reads, if do_read_check, is set, then check mirrored_value against item.d_data
@@ -506,7 +529,7 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
   //
   // The ping timer is 16 bits so ideally we should see alert_ping -> esc_ping ->  alert_ping ...
   // with the max length of 16'hFFFF clock cycle. However alert_ping is randomly selected so we
-  // can not guarantee the random alert index is valid (exists), enabld, and locked.
+  // can not guarantee the random alert index is valid (exists), enabled, and locked.
   // However, esc ping timer should are always expected to trigger.
   // So the max wait time is 'hFFFF*2.
   // This task also used the probed design signal instead of detected ping requests from monitor.
@@ -540,8 +563,8 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
     forever begin
       wait (cfg.under_reset == 0 && cfg.en_scb == 1);
       @(cfg.crashdump_vif.pins) begin
-        alert_pkg::alert_crashdump_t crashdump_val =
-            alert_pkg::alert_crashdump_t'(cfg.crashdump_vif.sample());
+        alert_handler_pkg::alert_crashdump_t crashdump_val =
+            alert_handler_pkg::alert_crashdump_t'(cfg.crashdump_vif.sample());
 
         // Wait two negedge clock cycles to make sure csr mirrored values are updated.
         `DV_SPINWAIT_EXIT(cfg.clk_rst_vif.wait_n_clks(2);, wait (cfg.under_reset == 1);)
@@ -564,11 +587,27 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
              end
           end
 
+          // Check that the value that came from the crashdump reflects the alert_cause and
+          // loc_alert_cause registers that we have predicted in the register model.
           for (int i = 0; i < NUM_ALERTS; i++) begin
-            `DV_CHECK_EQ(crashdump_val.alert_cause[i], `gmv(ral.alert_cause[i]))
+            if (crashdump_val.alert_cause[i] != `gmv(ral.alert_cause[i])) begin
+              `uvm_error(get_full_name(),
+                         $sformatf({"Register/crashdump mismatch. alert_cause[%0d] is ",
+                                    "0x%0h in the crashdump and 0x%0h in the register model."},
+                                   i,
+                                   crashdump_val.alert_cause[i],
+                                   `gmv(ral.alert_cause[i])))
+            end
           end
           for (int i = 0; i < NUM_LOCAL_ALERTS; i++) begin
-            `DV_CHECK_EQ(crashdump_val.loc_alert_cause[i], `gmv(ral.loc_alert_cause[i]))
+            if (crashdump_val.loc_alert_cause[i] != `gmv(ral.loc_alert_cause[i])) begin
+              `uvm_error(get_full_name(),
+                         $sformatf({"Register/crashdump mismatch. loc_alert_cause[%0d] is ",
+                                    "0x%0h in the crashdump and 0x%0h in the register model."},
+                                   i,
+                                   crashdump_val.loc_alert_cause[i],
+                                   `gmv(ral.loc_alert_cause[i])))
+            end
           end
         end
       end
@@ -714,9 +753,7 @@ class alert_handler_scoreboard extends cip_base_scoreboard #(
       automatic int class_i = i;
       begin
         cfg.clk_rst_vif.wait_clks(1);
-        // TODO(#13026): Update `crashdump_triggered`.
-        // crashdump_triggered[class_i] = 0;
-        crashdump_triggered = 0;
+        crashdump_triggered[class_i] = 0;
         if (under_intr_classes[class_i]) begin
           if (cfg.en_cov) cov.clear_intr_cnt_cg.sample(class_i);
           clr_esc_under_intr[class_i] = 1;

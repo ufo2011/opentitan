@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,11 +19,6 @@ class adc_ctrl_base_vseq extends cip_base_vseq #(
   virtual task dut_init(string reset_kind = "HARD");
     super.dut_init();
     if (do_adc_ctrl_init) adc_ctrl_init();
-  endtask
-
-  virtual task dut_shutdown();
-    // check for pending adc_ctrl operations and wait for them to complete
-    // TODO
   endtask
 
   // setup basic adc_ctrl features
@@ -70,6 +65,10 @@ class adc_ctrl_base_vseq extends cip_base_vseq #(
     uvm_reg_field min_v_fld, max_v_fld, cond_fld, en_fld;
     string regname;
     `uvm_info(`gfn, "Configuring adc_ctrl", UVM_MEDIUM)
+    if (cfg.fast_mode) begin
+      if (cfg.wakeup_time > 1000) cfg.wakeup_time = 1000;
+    end
+
     for (int channel = 0; channel < ADC_CTRL_CHANNELS; channel++) begin
       for (int filter = 0; filter < ADC_CTRL_NUM_FILTERS; filter++) begin
         regname = $sformatf("adc_chn%0d_filter_ctl_%0d", channel, filter);
@@ -88,8 +87,8 @@ class adc_ctrl_base_vseq extends cip_base_vseq #(
         // Set values from config object
         min_v_fld.set(cfg.filter_cfg[channel][filter].min_v);
         max_v_fld.set(cfg.filter_cfg[channel][filter].max_v);
-        cond_fld.set(cfg.filter_cfg[channel][filter].cond);
-        en_fld.set(cfg.filter_cfg[channel][filter].en);
+        cond_fld.set(cfg.filter_cfg[channel][filter].match_outside);
+        en_fld.set(cfg.filter_cfg[channel][filter].enabled);
         // Write register
         csr_wr(r, r.get());
       end
@@ -102,7 +101,6 @@ class adc_ctrl_base_vseq extends cip_base_vseq #(
     ral.adc_pd_ctl.pwrup_time.set(cfg.pwrup_time);
     ral.adc_pd_ctl.wakeup_time.set(cfg.wakeup_time);
     csr_wr(ral.adc_pd_ctl, ral.adc_pd_ctl.get());
-
 
   endtask
 

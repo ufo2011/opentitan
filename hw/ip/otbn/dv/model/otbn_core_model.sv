@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@
 module otbn_core_model
   import otbn_pkg::*;
   import edn_pkg::*;
-  import keymgr_pkg::otbn_key_req_t;
+  import keymgr_dpe_pkg::wide_hw_key_req_t;
 #(
   // The scope that contains the instruction and data memory (for DPI)
   parameter string MemScope = "",
@@ -31,6 +31,10 @@ module otbn_core_model
 
   input  logic [7:0]         cmd_i,    // CMD register for OTBN commands
   input  logic               cmd_en_i, // CMD register enable for OTBN commands
+
+  // Configuration from the CTRL register
+  input  logic               wfi_enabled_i,
+  input  logic               urnd_ctrl_enabled_i,
 
   input  lc_ctrl_pkg::lc_tx_t lc_escalate_en_i,
   input  lc_ctrl_pkg::lc_tx_t lc_rma_req_i,
@@ -52,7 +56,7 @@ module otbn_core_model
   output bit [7:0]       status_o,   // STATUS register
   output bit [31:0]      insn_cnt_o, // INSN_CNT register
 
-  input keymgr_pkg::otbn_key_req_t keymgr_key_i,
+  input keymgr_dpe_pkg::wide_hw_key_req_t keymgr_key_i,
 
   output bit             done_rr_o,
 
@@ -72,9 +76,9 @@ module otbn_core_model
   end
 
   // A packed set of bits representing the state of the model. This gets assigned by DPI function
-  // calls that need to update both whether we're running and also error flags at the same time. The
-  // contents are magic simulation values, so get initialized before reset (to avoid stopping the
-  // simulation before it even starts).
+  // calls that need to update both whether we're running and also error flags at the same time.
+  // The contents are magic simulation values, so get initialized before reset (to avoid stopping
+  // the simulation before it even starts).
   int unsigned model_state = 0;
 
   // Extract particular bits of the model_state value.
@@ -113,43 +117,31 @@ module otbn_core_model
   // its behaviour is easy to predict).
   // We model those delays in the SystemVerilog here, since it's much easier than handling it
   // in the Python.
-  logic [2:0] escalate_fifo;
-  logic [2:0] rma_req_fifo;
-  logic [3:0] lc_mubi_err_fifo;
-  logic       new_escalation;
-  logic       new_rma_req;
-  logic       new_lc_mubi_err;
-  logic       valid_lc_rma_req;
-  logic       valid_lc_esc_req;
-  logic       valid_lc_mubi_err;
-  logic       invalid_lc_rma_req;
-  logic       invalid_lc_esc_en;
+  logic [2:0]      escalate_fifo;
+  logic [2:0][3:0] rma_req_fifo;
+  logic            new_escalation;
+  logic            rma_req_changed;
+  logic            valid_lc_esc_req;
 
-  assign invalid_lc_rma_req = lc_ctrl_pkg::lc_tx_test_invalid(lc_rma_req_i);
-  assign invalid_lc_esc_en = lc_ctrl_pkg::lc_tx_test_invalid(lc_escalate_en_i);
-
-  assign valid_lc_rma_req = lc_ctrl_pkg::lc_tx_test_true_strict(lc_rma_req_i);
+  // Anything else than OFF is ON.
   assign valid_lc_esc_req = lc_ctrl_pkg::lc_tx_test_true_loose(lc_escalate_en_i);
-  assign valid_lc_mubi_err =  invalid_lc_rma_req || invalid_lc_esc_en;
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       escalate_fifo <= '0;
       rma_req_fifo <= '0;
-      lc_mubi_err_fifo <= '0;
     end else begin
       escalate_fifo <= {escalate_fifo[1:0], valid_lc_esc_req};
-      rma_req_fifo <= {rma_req_fifo[1:0], valid_lc_rma_req};
-      lc_mubi_err_fifo <= {lc_mubi_err_fifo[2:0], valid_lc_mubi_err};
+      rma_req_fifo <= {rma_req_fifo[1:0], lc_rma_req_i};
     end
   end
   assign new_escalation = escalate_fifo[1] & ~escalate_fifo[2];
-  assign new_rma_req = rma_req_fifo[1] & ~rma_req_fifo[2];
-  // Invalid escalate goes through one cycle faster because its check is done earlier.
-  assign new_lc_mubi_err = invalid_lc_esc_en ? lc_mubi_err_fifo[2] & ~lc_mubi_err_fifo[3] :
-                                               lc_mubi_err_fifo[1] & ~lc_mubi_err_fifo[2];
+  assign rma_req_changed = rma_req_fifo[1] != rma_req_fifo[2];
 
-  assign lock_immediately_d = new_lc_mubi_err | lock_immediately_q;
+  // Currently, the OTBN core model doesn't ever set the lock_immediately_d/q signals. However,
+  // the OTBN model agent provides a function (see lock_immediately() in otbn_model_if.sv) to
+  // tell the model to lock immediately. This is used by sequences testing FI countermeasures.
+  assign lock_immediately_d = lock_immediately_q;
 
   // RND Request starts if OTBN Model raises rnd_req_start while we are not
   // finishing up processing RND.
@@ -176,9 +168,9 @@ module otbn_core_model
   assign start_d = (cmd == CmdExecute) & is_idle;
   assign is_idle = otbn_pkg::status_e'(status_o) == StatusIdle;
 
-  // URND Reseeding is done twice as part of every secure wipe: once before the secure wipe and once
-  // after a first wipe with random data.  A secure wipe happens after reset and when OTBN receives
-  // the `EXECUTE` command.
+  // URND Reseeding is done twice as part of every secure wipe: once before the secure wipe and
+  // once after a first wipe with random data.  A secure wipe happens after reset and when OTBN
+  // receives the `EXECUTE` command.
   typedef enum logic [2:0] {
     OtbnCoreModelUrndStateReset,
     OtbnCoreModelUrndStateAwaitInitialAck,
@@ -190,7 +182,7 @@ module otbn_core_model
   } urnd_state_e;
   urnd_state_e urnd_state_q, urnd_state_d;
 
-  localparam int unsigned WIPE_CYCLES = 67;
+  localparam int unsigned WIPE_CYCLES = 99;
   typedef logic [$clog2(WIPE_CYCLES+1)-1:0] wipe_cyc_cnt_t;
   wipe_cyc_cnt_t wipe_cyc_cnt_q, wipe_cyc_cnt_d;
 
@@ -207,6 +199,10 @@ module otbn_core_model
       OtbnCoreModelUrndStateAwaitInitialAck: begin
         edn_urnd_o = 1'b1;
         if (edn_urnd_cdc_done_i) begin
+          // Bivium has already completed the reseeding operation and does no longer request EDN
+          // data via `otbn_rnd.edn_urnd_o.edn_req` (has to match the model output `edn_urnd_o`)
+          // when the otbn_rnd.urnd_reseed_ack_o (= edn_urnd_cdc_done_i) is pulsed.
+          edn_urnd_o = 1'b0;
           wipe_cyc_cnt_d = wipe_cyc_cnt_t'(WIPE_CYCLES);
           urnd_state_d   = OtbnCoreModelUrndStateAwaitWipe;
         end
@@ -223,6 +219,10 @@ module otbn_core_model
       OtbnCoreModelUrndStateAwaitSecondAck: begin
         edn_urnd_o = 1'b1;
         if (edn_urnd_cdc_done_i) begin
+          // Bivium has already completed the reseeding operation and does no longer request EDN
+          // data via `otbn_rnd.edn_urnd_o.edn_req` (has to match the model output `edn_urnd_o`)
+          // when the otbn_rnd.urnd_reseed_ack_o (= edn_urnd_cdc_done_i) is pulsed.
+          edn_urnd_o = 1'b0;
           urnd_state_d = OtbnCoreModelUrndStateAwaitStart;
         end
       end
@@ -236,6 +236,10 @@ module otbn_core_model
       OtbnCoreModelUrndStateAwaitPostStartAck: begin
         edn_urnd_o = 1'b1;
         if (edn_urnd_cdc_done_i) begin
+          // Bivium has already completed the reseeding operation and does no longer request EDN
+          // data via `otbn_rnd.edn_urnd_o.edn_req` (has to match the model output `edn_urnd_o`)
+          // when the otbn_rnd.urnd_reseed_ack_o (= edn_urnd_cdc_done_i) is pulsed.
+          edn_urnd_o = 1'b0;
           urnd_state_d = OtbnCoreModelUrndStateAwaitPostExecSecWipe;
         end
       end
@@ -296,7 +300,7 @@ module otbn_core_model
   // model the timing too precisely on the SV side.
   logic [3:0] busy_counter_q, busy_counter_d;
   logic       reset_busy_counter, step_iss;
-  // This bit can be set by a hierrachical component when ISS model should step for extra time.
+  // This bit can be set by a hierarchical component when ISS model should step for extra time.
   bit         wakeup_iss;
 
   initial begin
@@ -304,7 +308,7 @@ module otbn_core_model
   end
 
   assign reset_busy_counter = |{running, cmd_en_i, check_due, new_escalation, edn_rnd_cdc_done_i,
-                                ~init_sec_wipe_done_i, wakeup_iss, new_rma_req};
+                                ~init_sec_wipe_done_i, wakeup_iss, rma_req_changed};
   assign step_iss = reset_busy_counter || (busy_counter_q != 0);
 
   always_comb begin
@@ -329,6 +333,8 @@ module otbn_core_model
   // initial block (see declaration of the variable above)
   bit failed_reset, failed_lc_escalate, failed_keymgr_value, failed_lc_rma_req;
   bit failed_urnd_cdc, failed_rnd_cdc, failed_otp_key_cdc;
+  bit failed_set_wfi_enabled;
+  bit failed_set_urnd_ctrl_enabled;
   bit failed_initial_secure_wipe, initial_secure_wipe_started;
   always @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -344,6 +350,8 @@ module otbn_core_model
       failed_urnd_cdc <= 0;
       failed_rnd_cdc <= 0;
       failed_otp_key_cdc <= 0;
+      failed_set_wfi_enabled <= 0;
+      failed_set_urnd_ctrl_enabled <= 0;
       failed_initial_secure_wipe <= 0;
       initial_secure_wipe_started <= 0;
       model_state <= 0;
@@ -359,21 +367,22 @@ module otbn_core_model
                                                               1'b0)
                                != 0);
       end
-      if (new_lc_mubi_err) begin
-        // Setting BAD_INTERNAL_STATE bit
-        failed_lc_escalate <= (otbn_model_send_err_escalation(model_handle,
-                                                              32'd1 << 20,
-                                                              1'b1)
-                               != 0);
-      end
-      if (new_rma_req) begin
-        failed_lc_rma_req <= (otbn_model_send_rma_req(model_handle) != 0);
+      if (rma_req_changed) begin
+        failed_lc_rma_req <= (otbn_model_set_rma_req(model_handle, rma_req_fifo[1]) != 0);
       end
       if (!$stable(keymgr_key_i) || $rose(rst_ni)) begin
         failed_keymgr_value <= (otbn_model_set_keymgr_value(model_handle,
                                                             keymgr_key_i.key[0],
                                                             keymgr_key_i.key[1],
                                                             keymgr_key_i.valid) != 0);
+      end
+      if (!$stable(wfi_enabled_i) || $rose(rst_ni)) begin
+        failed_set_wfi_enabled <= (otbn_model_set_wfi_enabled(model_handle,
+                                                              wfi_enabled_i) != 0);
+      end
+      if (!$stable(urnd_ctrl_enabled_i) || $rose(rst_ni)) begin
+        failed_set_urnd_ctrl_enabled
+            <= (otbn_model_set_urnd_ctrl_enabled(model_handle, urnd_ctrl_enabled_i) != 0);
       end
       if (edn_urnd_cdc_done_i) begin
         failed_urnd_cdc <= (otbn_model_urnd_cdc_done(model_handle) != 0);
@@ -397,8 +406,8 @@ module otbn_core_model
     end
   end
 
-  // If a check is requested, run it on the following negedge. This guarantees that both the ISS and
-  // RTL are "at the end" of a cycle.
+  // If a check is requested, run it on the following negedge. This guarantees that both the ISS
+  // and RTL are "at the end" of a cycle.
   logic check_mismatch_d, check_mismatch_q;
   bit   failed_check;
   always_ff @(negedge clk_i or negedge rst_ni) begin
@@ -417,10 +426,27 @@ module otbn_core_model
   `ASSERT_KNOWN(KeyValidIsKnownChk_A, keymgr_key_i.valid)
   // Assertion to ensure that keymgr key values are never unknown if valid is high.
   `ASSERT_KNOWN_IF(KeyIsKnownChk_A, {keymgr_key_i.key[0], keymgr_key_i.key[1]}, keymgr_key_i.valid)
-  assign unused_raw_err_bits = ^raw_err_bits_q[31:$bits(err_bits_t)];
+  assign unused_raw_err_bits = ^{raw_err_bits_q[31:24], raw_err_bits_q[15:9]};
   assign unused_edn_rsp_fips = edn_urnd_i.edn_fips;
 
-  assign err_bits_o = raw_err_bits_q[$bits(err_bits_t)-1:0];
+  // Convert the error bits to the representation used in ERR_BITS.
+  assign err_bits_o = '{bad_data_addr:        raw_err_bits_q[0],
+                        bad_insn_addr:        raw_err_bits_q[1],
+                        call_stack:           raw_err_bits_q[2],
+                        illegal_insn:         raw_err_bits_q[3],
+                        loop:                 raw_err_bits_q[4],
+                        key_invalid:          raw_err_bits_q[5],
+                        rnd_rep_chk_fail:     raw_err_bits_q[6],
+                        rnd_fips_chk_fail:    raw_err_bits_q[7],
+                        mai_error:            raw_err_bits_q[8],
+                        imem_intg_violation:  raw_err_bits_q[16],
+                        dmem_intg_violation:  raw_err_bits_q[17],
+                        reg_intg_violation:   raw_err_bits_q[18],
+                        bus_intg_violation:   raw_err_bits_q[19],
+                        bad_internal_state:   raw_err_bits_q[20],
+                        illegal_bus_access:   raw_err_bits_q[21],
+                        lifecycle_escalation: raw_err_bits_q[22],
+                        fatal_software:       raw_err_bits_q[23]};
 
   assign status_o = status_q;
   assign insn_cnt_o = insn_cnt_q;
@@ -454,6 +480,7 @@ module otbn_core_model
                    failed_reset, failed_lc_escalate, failed_keymgr_value,
                    failed_edn_flush, failed_rnd_step, failed_urnd_step,
                    failed_urnd_cdc, failed_rnd_cdc, failed_otp_key_cdc,
+                   failed_set_wfi_enabled, failed_set_urnd_ctrl_enabled,
                    failed_initial_secure_wipe, failed_lc_rma_req};
 
   // Derive a "done" signal. This should trigger for a single cycle when OTBN finishes its work.

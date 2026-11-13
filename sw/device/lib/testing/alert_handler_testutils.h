@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,11 +7,16 @@
 
 #include <stdbool.h>
 
+#include "sw/device/lib/base/status.h"
 #include "sw/device/lib/dif/dif_alert_handler.h"
 #include "sw/device/lib/dif/dif_base.h"
 #include "sw/device/lib/dif/dif_rstmgr.h"
 
-#include "alert_handler_regs.h"
+#include "hw/top/alert_handler_regs.h"
+
+enum {
+  kAlertHandlerTestutilsDefaultPingTimeout = 256,
+};
 
 typedef enum alert_handler_class_state {
   kCstateIdle = 0,
@@ -25,29 +30,60 @@ typedef enum alert_handler_class_state {
 } alert_handler_class_state_t;
 
 /**
+ * Alert crash dump layout, LSB first: the escalation states of all classes,
+ * then their escalation counts, then their accumulator counts, then the local
+ * alert and alert cause bits. See
+ * https://opentitan.org/book/hw/top_earlgrey/ip_autogen/alert_handler/doc/theory_of_operation.html#crashdump-output
+ * for Earlgrey as an example.
+ */
+enum {
+  kAlertHandlerClassEscStateBits = 3,
+  kAlertHandlerClassEscCntBits = ALERT_HANDLER_PARAM_ESC_CNT_DW,
+  kAlertHandlerClassAccumCntBits = ALERT_HANDLER_PARAM_ACCU_CNT_DW,
+  kAlertHandlerCrashdumpBits =
+      ALERT_HANDLER_PARAM_N_CLASSES *
+          (kAlertHandlerClassEscStateBits + kAlertHandlerClassEscCntBits +
+           kAlertHandlerClassAccumCntBits) +
+      ALERT_HANDLER_PARAM_N_LOC_ALERT + ALERT_HANDLER_PARAM_N_ALERTS,
+  kAlertHandlerCrashdumpWords = (kAlertHandlerCrashdumpBits + 31) / 32,
+};
+static_assert(kAlertHandlerCrashdumpWords <= DIF_RSTMGR_ALERT_INFO_MAX_SIZE,
+              "Alert crash dump does not fit the rstmgr alert info buffer");
+
+/**
  * Represents the hardware alert crash dump in a more software-friendly manner.
  */
-typedef struct alert_info {
+typedef struct alert_info_testutils_info {
   bool alert_cause[ALERT_HANDLER_PARAM_N_ALERTS];
-  uint8_t loc_alert_cause;                                  // 7bit
-  uint16_t class_accum_cnt[ALERT_HANDLER_PARAM_N_CLASSES];  // 4x16bit
-  uint32_t class_esc_cnt[ALERT_HANDLER_PARAM_N_CLASSES];    // 4x32bit
-  alert_handler_class_state_t
-      class_esc_state[ALERT_HANDLER_PARAM_N_CLASSES];  // 4x3bit
-} alert_info_t;
+  uint8_t loc_alert_cause;
+  uint16_t class_accum_cnt[ALERT_HANDLER_PARAM_N_CLASSES];
+  uint32_t class_esc_cnt[ALERT_HANDLER_PARAM_N_CLASSES];
+  alert_handler_class_state_t class_esc_state[ALERT_HANDLER_PARAM_N_CLASSES];
+} alert_handler_testutils_info_t;
+static_assert(ALERT_HANDLER_PARAM_N_LOC_ALERT <= 8 &&
+                  kAlertHandlerClassAccumCntBits <= 16 &&
+                  kAlertHandlerClassEscCntBits <= 32,
+              "Crash dump fields do not fit alert_handler_testutils_info_t");
 
 /**
- * Converts the hardware alert crash dump into an alert_info_t.
- *
- * This makes it easier to compare and display the different fields.
+ * Converts the hardware alert crash dump into an
+ * `alert_handler_testutils_info_t`. This makes it easier to compare and display
+ * the different fields.
+ * @param dump Buffer containing the dump.
+ * @param dump_size The size of the `dump` in words.
+ * @param[out] info The parsed info.
+ * @return The result of the operation.
  */
-alert_info_t alert_info_dump_to_struct(
-    const dif_rstmgr_alert_info_dump_segment_t *dump, int dump_size);
+OT_WARN_UNUSED_RESULT
+status_t alert_handler_testutils_info_parse(
+    const dif_rstmgr_alert_info_dump_segment_t *dump, int dump_size,
+    alert_handler_testutils_info_t *info);
 
 /**
- * Displays an alert_info_t as strings.
+ * Displays an alert_handler_testutils_info_t as strings.
  */
-void alert_info_to_string(const alert_info_t *info);
+void alert_handler_testutils_info_dump(
+    const alert_handler_testutils_info_t *info);
 
 /**
  * Configures alert handler with all required runtime information.
@@ -61,15 +97,23 @@ void alert_info_to_string(const alert_info_t *info);
  * @param alert_handler An alert handler handle.
  * @param config Runtime configuration parameters.
  * @param locked The locked state to set for each configuration.
+ * @return The result of the operation.
  */
-void alert_handler_testutils_configure_all(
+OT_WARN_UNUSED_RESULT
+status_t alert_handler_testutils_configure_all(
     const dif_alert_handler_t *alert_handler, dif_alert_handler_config_t config,
     dif_toggle_t locked);
 
 /**
  * Returns the number of cycles corresponding to the given microseconds.
+ *
+ * @param microseconds The number of microseconds.
+ * @param[out] cycles The number of AON clock cycles.
+ * @return The result of the operation.
  */
-uint32_t alert_handler_testutils_get_cycles_from_us(uint64_t microseconds);
+OT_WARN_UNUSED_RESULT
+status_t alert_handler_testutils_get_cycles_from_us(uint64_t microseconds,
+                                                    uint32_t *cycles);
 
 /**
  * Returns a scaling factor for conversion of time to cycles.
@@ -87,16 +131,51 @@ uint32_t alert_handler_testutils_get_cycles_from_us(uint64_t microseconds);
  *  cycles = udiv64_slow(micros * clockFreqHz, 1000000, NULL) *
  *           cycle_rescaling_factor();
  */
-uint32_t alert_handler_testutils_cycle_rescaling_factor();
+uint32_t alert_handler_testutils_cycle_rescaling_factor(void);
 
 /**
- * Returns whether an alert is active.
+ * Logs the status of the alert handler.
+ *
+ * This function will log the state of each alert class, including the
+ * number of alerts that have been accumulated.
+ *
+ * Only the alert classes that have accumulated alerts will be logged.
  *
  * @param alert_handler An alert handler handle.
- * @param alert The given alert.
- * @return The status of the given alert as boolean.
+ * @return The result of the operation.
  */
-bool alert_handler_testutils_is_alert_active(
-    const dif_alert_handler_t *alert_handler, dif_alert_handler_alert_t alert);
+OT_WARN_UNUSED_RESULT
+status_t alert_handler_testutils_status_log(
+    const dif_alert_handler_t *alert_handler);
+
+/**
+ * Logs the alert handler crash dump.
+ *
+ * This function will log the state of each alert class, including the
+ * number of alerts that have been accumulated.
+ *
+ * Only alerts that have been set will be logged, as well as the alert
+ * classes that are in non-idle states.
+ *
+ * @param rstmgr A RSTMGR handle.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+status_t alert_handler_testutils_dump_log(const dif_rstmgr_t *rstmgr);
+
+/**
+ * Enables the alert handler crash dump.
+ *
+ * This function will enable the alert handler crash dump, which will
+ * cause the alert handler to dump its state to the RSTMGR when an
+ * alert is triggered.
+ *
+ * @param alert_handler An alert handler handle.
+ * @param rstmgr A RSTMGR handle.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+status_t alert_handler_testutils_dump_enable(
+    const dif_alert_handler_t *alert_handler, const dif_rstmgr_t *rstmgr);
 
 #endif  // OPENTITAN_SW_DEVICE_LIB_TESTING_ALERT_HANDLER_TESTUTILS_H_

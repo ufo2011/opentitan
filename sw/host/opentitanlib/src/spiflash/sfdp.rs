@@ -1,9 +1,8 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use num_enum::FromPrimitive;
 use serde::Serialize;
 use serde_annotate::Annotate;
 use std::convert::TryFrom;
@@ -30,7 +29,7 @@ pub enum Error {
 }
 
 /// The SFDP header identifies a valid SFDP, its version and the number of parameter headers.
-#[derive(Debug, Serialize, Annotate)]
+#[derive(Debug, Annotate)]
 pub struct SfdpHeader {
     #[annotate(format=hex, comment=comment_signature())]
     pub signature: u32,
@@ -179,18 +178,18 @@ impl InternalJedecParams {
     field!(density_pow2 -> bool, 2, 31, 1);
 
     field!(wait_states_144 -> u8, 3, 0, 5);
-    field!(mode_bits_144 -> u8, 3, 0, 3);
-    field!(read_opcode_144 -> u8, 3, 0, 8);
+    field!(mode_bits_144 -> u8, 3, 5, 3);
+    field!(read_opcode_144 -> u8, 3, 8, 8);
     field!(wait_states_114 -> u8, 3, 16, 5);
     field!(mode_bits_114 -> u8, 3, 21, 3);
     field!(read_opcode_114 -> u8, 3, 24, 8);
 
-    field!(wait_states_122 -> u8, 4, 0, 5);
-    field!(mode_bits_122 -> u8, 4, 0, 3);
-    field!(read_opcode_122 -> u8, 4, 0, 8);
-    field!(wait_states_112 -> u8, 4, 16, 5);
-    field!(mode_bits_112 -> u8, 4, 21, 3);
-    field!(read_opcode_112 -> u8, 4, 22, 8);
+    field!(wait_states_112 -> u8, 4, 0, 5);
+    field!(mode_bits_112 -> u8, 4, 5, 3);
+    field!(read_opcode_112 -> u8, 4, 8, 8);
+    field!(wait_states_122 -> u8, 4, 16, 5);
+    field!(mode_bits_122 -> u8, 4, 21, 3);
+    field!(read_opcode_122 -> u8, 4, 24, 8);
 
     field!(support_fast_read_222 -> bool, 5, 0, 1);
     field!(support_fast_read_444 -> bool, 5, 4, 1);
@@ -336,60 +335,60 @@ impl InternalJedecParams {
 
 /// `BlockEraseSize` represents whether or not the device can perform
 /// a 4KiB erase.
-#[derive(Debug, Eq, PartialEq, FromPrimitive, Clone, Copy, Serialize)]
+#[derive(Default, Debug, Eq, PartialEq, strum::FromRepr, Clone, Copy, Serialize)]
 #[repr(u32)]
 pub enum BlockEraseSize {
     Reserved0 = 0,
     Block4KiB = 1,
     Reserved2 = 2,
     BlockNot4KiB = 3,
-    #[num_enum(default)]
+    #[default]
     Invalid,
 }
 
-impl Default for BlockEraseSize {
-    fn default() -> Self {
-        BlockEraseSize::Invalid
+impl From<u32> for BlockEraseSize {
+    fn from(val: u32) -> Self {
+        Self::from_repr(val).unwrap_or(Self::Invalid)
     }
 }
 
 /// `WriteGranularity` represents whether or not the device has an internal
 /// buffer for program operations.
-#[derive(Debug, Eq, PartialEq, FromPrimitive, Clone, Copy, Serialize)]
+#[derive(Default, Debug, Eq, PartialEq, strum::FromRepr, Clone, Copy, Serialize)]
 #[repr(u32)]
 pub enum WriteGranularity {
     Granularity1Byte = 0,
     Granularity64Bytes = 1,
-    #[num_enum(default)]
+    #[default]
     Invalid,
 }
 
-impl Default for WriteGranularity {
-    fn default() -> Self {
-        WriteGranularity::Invalid
+impl From<u32> for WriteGranularity {
+    fn from(val: u32) -> Self {
+        Self::from_repr(val).unwrap_or(Self::Invalid)
     }
 }
 
 /// `SupportedAddressModes` represents which addressing modes are valid for
 /// the device.
-#[derive(Debug, Eq, PartialEq, FromPrimitive, Clone, Copy, Serialize)]
+#[derive(Default, Debug, Eq, PartialEq, strum::FromRepr, Clone, Copy, Serialize)]
 #[repr(u32)]
 pub enum SupportedAddressModes {
     Mode3b = 0,
     Mode3b4b = 1,
     Mode4b = 2,
     Reserved = 3,
-    #[num_enum(default)]
+    #[default]
     Invalid,
 }
 
-impl Default for SupportedAddressModes {
-    fn default() -> Self {
-        SupportedAddressModes::Invalid
+impl From<u32> for SupportedAddressModes {
+    fn from(val: u32) -> Self {
+        Self::from_repr(val).unwrap_or(Self::Invalid)
     }
 }
 
-#[derive(Debug, Eq, PartialEq, FromPrimitive, Clone, Copy, Serialize)]
+#[derive(Default, Debug, Eq, PartialEq, strum::FromRepr, Clone, Copy, Serialize)]
 #[repr(u32)]
 pub enum MaxSpeed {
     Reserved0 = 0,
@@ -407,18 +406,18 @@ pub enum MaxSpeed {
     Speed400MHz,
     Reserved10,
     NotCharacterized,
-    #[num_enum(default)]
+    #[default]
     NotSupported,
 }
 
-impl Default for MaxSpeed {
-    fn default() -> Self {
-        MaxSpeed::NotSupported
+impl From<u32> for MaxSpeed {
+    fn from(val: u32) -> Self {
+        Self::from_repr(val).unwrap_or(Self::NotSupported)
     }
 }
 
 /// `FastReadParam` represents the parameters for the different styles of fast read.
-#[derive(Default, Debug, Serialize, Annotate)]
+#[derive(Clone, Default, Debug, Annotate)]
 pub struct FastReadParam {
     pub wait_states: u8,
     pub mode_bits: u8,
@@ -427,7 +426,7 @@ pub struct FastReadParam {
 }
 
 /// `SectorErase` represents the supported erase sector sizes of the device.
-#[derive(Default, Debug, Serialize, Annotate)]
+#[derive(Clone, Default, Debug, Annotate)]
 pub struct SectorErase {
     pub size: u32,
     #[annotate(format=hex)]
@@ -435,7 +434,7 @@ pub struct SectorErase {
     pub time: Option<TimeBound>,
 }
 
-#[derive(Default, Debug, Serialize)]
+#[derive(Clone, Default, Debug, Serialize)]
 pub struct TimeBound {
     #[serde(with = "humantime_serde")]
     pub typical: Duration,
@@ -461,7 +460,7 @@ pub struct TimeBound {
 ///   eight-lane SPI modes.
 /// - Rev F, version 1.7 extends the table to 23 "dwords", including information about
 ///   dual data rate operations.
-#[derive(Default, Debug, Serialize, Annotate)]
+#[derive(Default, Debug, Annotate)]
 pub struct JedecParams {
     /// Erase granularity.
     pub block_erase_size: BlockEraseSize,
@@ -514,7 +513,7 @@ pub struct JedecParams {
 }
 
 /// The Rev B extensions to the JEDEC parameters table.
-#[derive(Default, Debug, Serialize, Annotate)]
+#[derive(Default, Debug, Annotate)]
 pub struct JedecParamsRevB {
     pub page_size: u32,
     pub page_program_time: TimeBound,
@@ -633,11 +632,7 @@ impl JedecParams {
     ];
 
     fn pow2_size(shift: u8) -> u32 {
-        if shift == 0 {
-            0
-        } else {
-            1u32 << shift
-        }
+        if shift == 0 { 0 } else { 1u32 << shift }
     }
 }
 
@@ -893,6 +888,40 @@ impl TryFrom<&[u8]> for JedecParams {
     }
 }
 
+#[derive(Default, Debug, Clone, Serialize)]
+pub struct Sdfu {
+    pub tag: u32,
+    pub length: u16,
+    pub major: u8,
+    pub minor: u8,
+    pub mailbox_address: u32,
+    pub mailbox_size: u16,
+    pub dfu_size: u16,
+}
+
+impl TryFrom<&[u8]> for Sdfu {
+    type Error = Error;
+    fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
+        const SDFU_TAG: u32 = 0x55464453;
+        log::info!("sdfu from {buf:x?}");
+
+        let mut reader = std::io::Cursor::new(buf);
+        let header = Sdfu {
+            tag: reader.read_u32::<LittleEndian>()?,
+            length: reader.read_u16::<LittleEndian>()?,
+            major: reader.read_u8()?,
+            minor: reader.read_u8()?,
+            mailbox_address: reader.read_u32::<LittleEndian>()?,
+            mailbox_size: reader.read_u16::<LittleEndian>()?,
+            dfu_size: reader.read_u16::<LittleEndian>()?,
+        };
+        match header.tag {
+            SDFU_TAG => Ok(header),
+            v => Err(Error::WrongHeaderSignature(v)),
+        }
+    }
+}
+
 /// An `UnknownParams` structure represents SFDP parameter tables for which
 /// we don't have a specialized parser.
 #[derive(Debug, Serialize)]
@@ -916,10 +945,13 @@ pub struct Sfdp {
     pub header: SfdpHeader,
     pub phdr: Vec<SfdpPhdr>,
     pub jedec: JedecParams,
+    pub sdfu: Option<Sdfu>,
     pub params: Vec<UnknownParams>,
 }
 
 impl Sfdp {
+    const LOWRISC_JEDEC_ID: u8 = 0xEF;
+
     /// Given an initial SFDP buffer calculate the number of bytes needed for
     /// the entire SFDP.
     pub fn length_required(buf: &[u8]) -> Result<usize, Error> {
@@ -968,19 +1000,26 @@ impl TryFrom<&[u8]> for Sfdp {
         let jedec =
             JedecParams::try_from(buf.get(start..end).ok_or(Error::SliceRange(start, end))?)?;
 
+        let mut sdfu: Option<Sdfu> = None;
         let mut params = Vec::new();
         for ph in phdr.iter().take((header.nph as usize) + 1).skip(1) {
             let start = ph.offset as usize;
             let end = start + ph.dwords as usize * 4;
-            params.push(UnknownParams::try_from(
-                buf.get(start..end).ok_or(Error::SliceRange(start, end))?,
-            )?);
+            let data = buf.get(start..end).ok_or(Error::SliceRange(start, end))?;
+            if ph.id == Self::LOWRISC_JEDEC_ID
+                && let Ok(s) = Sdfu::try_from(data)
+            {
+                sdfu = Some(s);
+                continue;
+            }
+            params.push(UnknownParams::try_from(data)?);
         }
 
         Ok(Sfdp {
             header,
             phdr,
             jedec,
+            sdfu,
             params,
         })
     }

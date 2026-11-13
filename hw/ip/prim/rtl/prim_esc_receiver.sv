@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -28,6 +28,9 @@ module prim_esc_receiver
   // The width of the Alert Handler's ping counter. Should be set to the Alert Handler's PING_CNT_DW
   // when this primitive is instantiated.
   parameter int PING_CNT_DW = 16,
+
+  // Number of cycles a differential skew is tolerated on the differential escalation signal.
+  parameter int unsigned SkewCycles = 1,
 
   // This counter monitors incoming ping requests and auto-escalates if the alert handler
   // ceases to send them regularly. The maximum number of cycles between subsequent ping requests
@@ -73,7 +76,8 @@ module prim_esc_receiver
   );
 
   prim_diff_decode #(
-    .AsyncOn(1'b0)
+    .AsyncOn(1'b0),
+    .SkewCycles(SkewCycles)
   ) u_decode_esc (
     .clk_i,
     .rst_ni,
@@ -97,13 +101,16 @@ module prim_esc_receiver
   logic timeout_cnt_set, timeout_cnt_en;
   logic [TimeoutCntDw-1:0] timeout_cnt;
   assign timeout_cnt_set = (ping_en && !(&timeout_cnt));
-  assign timeout_cnt_en = ((timeout_cnt > '0) && !(&timeout_cnt));
+  assign timeout_cnt_en = (timeout_cnt > '0);
 
   prim_count #(
     .Width(TimeoutCntDw),
     // The escalation receiver behaves differently than other comportable IP. I.e., instead of
     // sending out an alert signal, this condition is handled internally in the alert handler.
-    .EnableAlertTriggerSVA(0)
+    .EnableAlertTriggerSVA(0),
+    // Pass a parameter to disable coverage for some assertions that are unreachable because
+    // clr_i and decr_en_i are tied to zero.
+    .PossibleActions(prim_count_pkg::Set | prim_count_pkg::Incr)
   ) u_prim_count (
     .clk_i,
     .rst_ni,
@@ -113,8 +120,9 @@ module prim_esc_receiver
     .incr_en_i(timeout_cnt_en),
     .decr_en_i(1'b0),
     .step_i(TimeoutCntDw'(1)),
+    .commit_i(1'b1),
     .cnt_o(timeout_cnt),
-    .cnt_next_o(),
+    .cnt_after_commit_o(),
     .err_o(timeout_cnt_error)
   );
 
@@ -122,11 +130,21 @@ module prim_esc_receiver
   // - requested via the escalation sender/receiver path,
   // - the ping monitor timeout is reached,
   // - the two ping monitor counters are in an inconsistent state.
-  logic esc_req;
+  // Register the escalation request to avoid potential CDC issues downstream.
+  logic esc_req, esc_req_d, esc_req_q;
+  assign esc_req_d = esc_req || (&timeout_cnt) || timeout_cnt_error;
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      esc_req_q <= 1'b0;
+    end else begin
+      esc_req_q <= esc_req_d;
+    end
+  end
+
   prim_sec_anchor_buf #(
     .Width(1)
   ) u_prim_buf_esc_req (
-    .in_i(esc_req || (&timeout_cnt) || timeout_cnt_error),
+    .in_i (esc_req_q),
     .out_o(esc_req_o)
   );
 
@@ -253,7 +271,7 @@ module prim_esc_receiver
   `ASSERT(SigIntCheck0_A, esc_tx_i.esc_p == esc_tx_i.esc_n |=> esc_rx_o.resp_p == esc_rx_o.resp_n)
   `ASSERT(SigIntCheck1_A, esc_tx_i.esc_p == esc_tx_i.esc_n |=> state_q == SigInt)
   // auto-escalate in case of signal integrity issue
-  `ASSERT(SigIntCheck2_A, esc_tx_i.esc_p == esc_tx_i.esc_n |=> esc_req_o)
+  `ASSERT(SigIntCheck2_A, esc_tx_i.esc_p == esc_tx_i.esc_n |=> esc_req_d)
   // correct diff encoding
   `ASSERT(DiffEncCheck_A, esc_tx_i.esc_p ^ esc_tx_i.esc_n |=> esc_rx_o.resp_p ^ esc_rx_o.resp_n)
   // disable in case of signal integrity issue
@@ -267,10 +285,10 @@ module prim_esc_receiver
   // detect escalation pulse
   `ASSERT(EscEnCheck_A,
           esc_tx_i.esc_p && (esc_tx_i.esc_p ^ esc_tx_i.esc_n) && state_q != SigInt
-      ##1 esc_tx_i.esc_p && (esc_tx_i.esc_p ^ esc_tx_i.esc_n) |-> esc_req_o)
+      ##1 esc_tx_i.esc_p && (esc_tx_i.esc_p ^ esc_tx_i.esc_n) |-> esc_req_d)
   // make sure the counter does not wrap around
   `ASSERT(EscCntWrap_A, &timeout_cnt |=> timeout_cnt != 0)
   // if the counter expires, escalation should be asserted
-  `ASSERT(EscCntEsc_A, &timeout_cnt |-> esc_req_o)
+  `ASSERT(EscCntEsc_A, &timeout_cnt |-> esc_req_d)
 
 endmodule : prim_esc_receiver

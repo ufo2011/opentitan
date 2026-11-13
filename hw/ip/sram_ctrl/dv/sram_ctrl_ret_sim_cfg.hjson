@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
   import_cfgs: ["{proj_root}/hw/ip/sram_ctrl/dv/sram_ctrl_base_sim_cfg.hjson"]
 
   // These parameters are used for top_earlgrey retention sram
-  build_opts: ["+define+SRAM_ADDR_WIDTH=10",
-               "+define+INSTR_EXEC=0"]
+  build_opts: ["+define+SRAM_SIZE_BYTES=2**13",
+               "+define+INSTR_EXEC=0",
+               "+define+NUM_PRINCE_ROUNDS_HALF=3"]
 }

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -137,10 +137,12 @@ class alert_handler_base_vseq extends cip_base_vseq #(
           if (esc_int_errs[index]) begin
             fork
               begin
-                esc_receiver_esc_rsp_seq esc_seq =
-                    esc_receiver_esc_rsp_seq::type_id::create("esc_seq");
-                `DV_CHECK_RANDOMIZE_WITH_FATAL(esc_seq, int_err == 1; standalone_int_err == 1;
-                                               ping_timeout == 0;)
+                esc_receiver_base_seq esc_seq = esc_receiver_base_seq::type_id::create("esc_seq");
+                if (!esc_seq.randomize() with {
+                       int_err == 1; standalone_int_err == 1; ping_timeout == 0;
+                     }) begin
+                  `uvm_fatal(get_full_name(), "Failed to randomize esc_seq.")
+                end
                 esc_seq.start(p_sequencer.esc_device_seqr_h[index]);
               end
             join_none
@@ -152,7 +154,7 @@ class alert_handler_base_vseq extends cip_base_vseq #(
   endtask
 
   // alert_handler scb will compare the read value with expected value
-  // Not using "clear_all_interrupts" function in cip_base_vseq because of the signal interity
+  // Not using "clear_all_interrupts" function in cip_base_vseq because of the signal integrity
   // error: after clearing intr_state, intr_state might come back to 1 in the next cycle.
   virtual task check_alert_interrupts();
     bit [TL_DW-1:0] intr;
@@ -272,7 +274,7 @@ class alert_handler_base_vseq extends cip_base_vseq #(
   // Enable alert's LPG based on alert_i input.
   //
   // Only enable this alert's LPG if the lgp input `lpg_cg_en` or `lpg_rst_en` if not Mubi4True.
-  // Because one LPG will turn off a set of alert sensers. So this task will also set all LPG's
+  // Because one LPG will turn off a set of alert sensors. So this task will also set all LPG's
   // alert_host_cfgs' `en_alert_lpg` to 1.
   virtual function void set_alert_lpg(int alert_i);
     int       lpg_i = alert_handler_reg_pkg::LpgMap[alert_i];
@@ -337,11 +339,21 @@ class alert_handler_base_vseq extends cip_base_vseq #(
         forever begin
           bit esc_int_err      = esc_int_errs[index]      ? $urandom_range(0, 1) : 0;
           bit ping_timeout_err = ping_timeout_errs[index] ? $urandom_range(0, 1) : 0;
-          esc_receiver_esc_rsp_seq esc_seq =
-              esc_receiver_esc_rsp_seq::type_id::create("esc_seq");
-          `DV_CHECK_RANDOMIZE_WITH_FATAL(esc_seq, int_err == esc_int_err; standalone_int_err == 0;
-                                         ping_timeout == ping_timeout_err;)
+          esc_receiver_base_seq esc_seq = esc_receiver_base_seq::type_id::create("esc_seq");
+          if (!esc_seq.randomize() with {
+                 int_err            == local::esc_int_err;
+                 standalone_int_err == 0;
+                 ping_timeout       == local::ping_timeout_err;
+               }) begin
+            `uvm_fatal(get_full_name(), "Failed to randomize esc_seq.")
+          end
           esc_seq.start(p_sequencer.esc_device_seqr_h[index]);
+
+          // The sequence has finished, which either means that we have seen an escalation and sent
+          // a response, or it means that a reset has happened. Watch the agent's configuration to
+          // wait until it is out of reset before starting a sequence to respond to the next
+          // escalation.
+          wait(!cfg.esc_device_cfg[index].in_reset);
         end
       join_none
     end

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -6,7 +6,13 @@
 
 `include "prim_assert.sv"
 
-module i2c_reg_top (
+module i2c_reg_top
+  # (
+    parameter bit          EnableRacl           = 1'b0,
+    parameter bit          RaclErrorRsp         = 1'b1,
+    parameter top_racl_pkg::racl_policy_sel_t RaclPolicySelVec[i2c_reg_pkg::NumRegs] =
+      '{i2c_reg_pkg::NumRegs{0}}
+  ) (
   input clk_i,
   input rst_ni,
   input  tlul_pkg::tl_h2d_t tl_i,
@@ -15,11 +21,12 @@ module i2c_reg_top (
   output i2c_reg_pkg::i2c_reg2hw_t reg2hw, // Write
   input  i2c_reg_pkg::i2c_hw2reg_t hw2reg, // Read
 
-  // Integrity check errors
-  output logic intg_err_o,
+  // RACL interface
+  input  top_racl_pkg::racl_policy_vec_t racl_policies_i,
+  output top_racl_pkg::racl_error_log_t  racl_error_o,
 
-  // Config
-  input devmode_i // If 1, explicit error return for unmapped register access
+  // Integrity check errors
+  output logic intg_err_o
 );
 
   import i2c_reg_pkg::* ;
@@ -55,9 +62,9 @@ module i2c_reg_top (
 
   // also check for spurious write enables
   logic reg_we_err;
-  logic [21:0] reg_we_check;
+  logic [31:0] reg_we_check;
   prim_reg_we_check #(
-    .OneHotWidth(22)
+    .OneHotWidth(32)
   ) u_prim_reg_we_check (
     .clk_i(clk_i),
     .rst_ni(rst_ni),
@@ -113,28 +120,25 @@ module i2c_reg_top (
     .be_o    (reg_be),
     .busy_i  (reg_busy),
     .rdata_i (reg_rdata),
-    .error_i (reg_error)
+    // Translate RACL error to TLUL error if enabled
+    .error_i (reg_error | (RaclErrorRsp & racl_error_o.valid))
   );
 
   // cdc oversampling signals
 
   assign reg_rdata = reg_rdata_next ;
-  assign reg_error = (devmode_i & addrmiss) | wr_err | intg_err;
+  assign reg_error = addrmiss | wr_err | intg_err;
 
   // Define SW related signals
   // Format: <reg>_<field>_{wd|we|qs}
   //        or <reg>_{wd|we|qs} if field == 1 or 0
   logic intr_state_we;
   logic intr_state_fmt_threshold_qs;
-  logic intr_state_fmt_threshold_wd;
   logic intr_state_rx_threshold_qs;
-  logic intr_state_rx_threshold_wd;
-  logic intr_state_fmt_overflow_qs;
-  logic intr_state_fmt_overflow_wd;
+  logic intr_state_acq_threshold_qs;
   logic intr_state_rx_overflow_qs;
   logic intr_state_rx_overflow_wd;
-  logic intr_state_nak_qs;
-  logic intr_state_nak_wd;
+  logic intr_state_controller_halt_qs;
   logic intr_state_scl_interference_qs;
   logic intr_state_scl_interference_wd;
   logic intr_state_sda_interference_qs;
@@ -146,9 +150,8 @@ module i2c_reg_top (
   logic intr_state_cmd_complete_qs;
   logic intr_state_cmd_complete_wd;
   logic intr_state_tx_stretch_qs;
-  logic intr_state_tx_overflow_qs;
-  logic intr_state_tx_overflow_wd;
-  logic intr_state_acq_full_qs;
+  logic intr_state_tx_threshold_qs;
+  logic intr_state_acq_stretch_qs;
   logic intr_state_unexp_stop_qs;
   logic intr_state_unexp_stop_wd;
   logic intr_state_host_timeout_qs;
@@ -158,12 +161,12 @@ module i2c_reg_top (
   logic intr_enable_fmt_threshold_wd;
   logic intr_enable_rx_threshold_qs;
   logic intr_enable_rx_threshold_wd;
-  logic intr_enable_fmt_overflow_qs;
-  logic intr_enable_fmt_overflow_wd;
+  logic intr_enable_acq_threshold_qs;
+  logic intr_enable_acq_threshold_wd;
   logic intr_enable_rx_overflow_qs;
   logic intr_enable_rx_overflow_wd;
-  logic intr_enable_nak_qs;
-  logic intr_enable_nak_wd;
+  logic intr_enable_controller_halt_qs;
+  logic intr_enable_controller_halt_wd;
   logic intr_enable_scl_interference_qs;
   logic intr_enable_scl_interference_wd;
   logic intr_enable_sda_interference_qs;
@@ -176,10 +179,10 @@ module i2c_reg_top (
   logic intr_enable_cmd_complete_wd;
   logic intr_enable_tx_stretch_qs;
   logic intr_enable_tx_stretch_wd;
-  logic intr_enable_tx_overflow_qs;
-  logic intr_enable_tx_overflow_wd;
-  logic intr_enable_acq_full_qs;
-  logic intr_enable_acq_full_wd;
+  logic intr_enable_tx_threshold_qs;
+  logic intr_enable_tx_threshold_wd;
+  logic intr_enable_acq_stretch_qs;
+  logic intr_enable_acq_stretch_wd;
   logic intr_enable_unexp_stop_qs;
   logic intr_enable_unexp_stop_wd;
   logic intr_enable_host_timeout_qs;
@@ -187,21 +190,23 @@ module i2c_reg_top (
   logic intr_test_we;
   logic intr_test_fmt_threshold_wd;
   logic intr_test_rx_threshold_wd;
-  logic intr_test_fmt_overflow_wd;
+  logic intr_test_acq_threshold_wd;
   logic intr_test_rx_overflow_wd;
-  logic intr_test_nak_wd;
+  logic intr_test_controller_halt_wd;
   logic intr_test_scl_interference_wd;
   logic intr_test_sda_interference_wd;
   logic intr_test_stretch_timeout_wd;
   logic intr_test_sda_unstable_wd;
   logic intr_test_cmd_complete_wd;
   logic intr_test_tx_stretch_wd;
-  logic intr_test_tx_overflow_wd;
-  logic intr_test_acq_full_wd;
+  logic intr_test_tx_threshold_wd;
+  logic intr_test_acq_stretch_wd;
   logic intr_test_unexp_stop_wd;
   logic intr_test_host_timeout_wd;
   logic alert_test_we;
-  logic alert_test_wd;
+  logic alert_test_fatal_fault_wd;
+  logic alert_test_regwen_qs;
+  logic alert_test_regwen_wd;
   logic ctrl_we;
   logic ctrl_enablehost_qs;
   logic ctrl_enablehost_wd;
@@ -209,6 +214,14 @@ module i2c_reg_top (
   logic ctrl_enabletarget_wd;
   logic ctrl_llpbk_qs;
   logic ctrl_llpbk_wd;
+  logic ctrl_nack_addr_after_timeout_qs;
+  logic ctrl_nack_addr_after_timeout_wd;
+  logic ctrl_ack_ctrl_en_qs;
+  logic ctrl_ack_ctrl_en_wd;
+  logic ctrl_multi_controller_monitor_en_qs;
+  logic ctrl_multi_controller_monitor_en_wd;
+  logic ctrl_tx_stretch_ctrl_en_qs;
+  logic ctrl_tx_stretch_ctrl_en_wd;
   logic status_re;
   logic status_fmtfull_qs;
   logic status_rxfull_qs;
@@ -220,29 +233,37 @@ module i2c_reg_top (
   logic status_acqfull_qs;
   logic status_txempty_qs;
   logic status_acqempty_qs;
+  logic status_ack_ctrl_stretch_qs;
   logic rdata_re;
   logic [7:0] rdata_qs;
   logic fdata_we;
   logic [7:0] fdata_fbyte_wd;
   logic fdata_start_wd;
   logic fdata_stop_wd;
-  logic fdata_read_wd;
+  logic fdata_readb_wd;
   logic fdata_rcont_wd;
   logic fdata_nakok_wd;
   logic fifo_ctrl_we;
   logic fifo_ctrl_rxrst_wd;
   logic fifo_ctrl_fmtrst_wd;
-  logic [2:0] fifo_ctrl_rxilvl_qs;
-  logic [2:0] fifo_ctrl_rxilvl_wd;
-  logic [1:0] fifo_ctrl_fmtilvl_qs;
-  logic [1:0] fifo_ctrl_fmtilvl_wd;
   logic fifo_ctrl_acqrst_wd;
   logic fifo_ctrl_txrst_wd;
-  logic fifo_status_re;
-  logic [6:0] fifo_status_fmtlvl_qs;
-  logic [6:0] fifo_status_txlvl_qs;
-  logic [6:0] fifo_status_rxlvl_qs;
-  logic [6:0] fifo_status_acqlvl_qs;
+  logic host_fifo_config_we;
+  logic [11:0] host_fifo_config_rx_thresh_qs;
+  logic [11:0] host_fifo_config_rx_thresh_wd;
+  logic [11:0] host_fifo_config_fmt_thresh_qs;
+  logic [11:0] host_fifo_config_fmt_thresh_wd;
+  logic target_fifo_config_we;
+  logic [11:0] target_fifo_config_tx_thresh_qs;
+  logic [11:0] target_fifo_config_tx_thresh_wd;
+  logic [11:0] target_fifo_config_acq_thresh_qs;
+  logic [11:0] target_fifo_config_acq_thresh_wd;
+  logic host_fifo_status_re;
+  logic [11:0] host_fifo_status_fmtlvl_qs;
+  logic [11:0] host_fifo_status_rxlvl_qs;
+  logic target_fifo_status_re;
+  logic [11:0] target_fifo_status_txlvl_qs;
+  logic [11:0] target_fifo_status_acqlvl_qs;
   logic ovrd_we;
   logic ovrd_txovrden_qs;
   logic ovrd_txovrden_wd;
@@ -254,33 +275,35 @@ module i2c_reg_top (
   logic [15:0] val_scl_rx_qs;
   logic [15:0] val_sda_rx_qs;
   logic timing0_we;
-  logic [15:0] timing0_thigh_qs;
-  logic [15:0] timing0_thigh_wd;
-  logic [15:0] timing0_tlow_qs;
-  logic [15:0] timing0_tlow_wd;
+  logic [12:0] timing0_thigh_qs;
+  logic [12:0] timing0_thigh_wd;
+  logic [12:0] timing0_tlow_qs;
+  logic [12:0] timing0_tlow_wd;
   logic timing1_we;
-  logic [15:0] timing1_t_r_qs;
-  logic [15:0] timing1_t_r_wd;
-  logic [15:0] timing1_t_f_qs;
-  logic [15:0] timing1_t_f_wd;
+  logic [9:0] timing1_t_r_qs;
+  logic [9:0] timing1_t_r_wd;
+  logic [8:0] timing1_t_f_qs;
+  logic [8:0] timing1_t_f_wd;
   logic timing2_we;
-  logic [15:0] timing2_tsu_sta_qs;
-  logic [15:0] timing2_tsu_sta_wd;
-  logic [15:0] timing2_thd_sta_qs;
-  logic [15:0] timing2_thd_sta_wd;
+  logic [12:0] timing2_tsu_sta_qs;
+  logic [12:0] timing2_tsu_sta_wd;
+  logic [12:0] timing2_thd_sta_qs;
+  logic [12:0] timing2_thd_sta_wd;
   logic timing3_we;
-  logic [15:0] timing3_tsu_dat_qs;
-  logic [15:0] timing3_tsu_dat_wd;
-  logic [15:0] timing3_thd_dat_qs;
-  logic [15:0] timing3_thd_dat_wd;
+  logic [8:0] timing3_tsu_dat_qs;
+  logic [8:0] timing3_tsu_dat_wd;
+  logic [12:0] timing3_thd_dat_qs;
+  logic [12:0] timing3_thd_dat_wd;
   logic timing4_we;
-  logic [15:0] timing4_tsu_sto_qs;
-  logic [15:0] timing4_tsu_sto_wd;
-  logic [15:0] timing4_t_buf_qs;
-  logic [15:0] timing4_t_buf_wd;
+  logic [12:0] timing4_tsu_sto_qs;
+  logic [12:0] timing4_tsu_sto_wd;
+  logic [12:0] timing4_t_buf_qs;
+  logic [12:0] timing4_t_buf_wd;
   logic timeout_ctrl_we;
-  logic [30:0] timeout_ctrl_val_qs;
-  logic [30:0] timeout_ctrl_val_wd;
+  logic [29:0] timeout_ctrl_val_qs;
+  logic [29:0] timeout_ctrl_val_wd;
+  logic timeout_ctrl_mode_qs;
+  logic timeout_ctrl_mode_wd;
   logic timeout_ctrl_en_qs;
   logic timeout_ctrl_en_wd;
   logic target_id_we;
@@ -294,27 +317,65 @@ module i2c_reg_top (
   logic [6:0] target_id_mask1_wd;
   logic acqdata_re;
   logic [7:0] acqdata_abyte_qs;
-  logic [1:0] acqdata_signal_qs;
+  logic [2:0] acqdata_signal_qs;
   logic txdata_we;
   logic [7:0] txdata_wd;
   logic host_timeout_ctrl_we;
-  logic [31:0] host_timeout_ctrl_qs;
-  logic [31:0] host_timeout_ctrl_wd;
+  logic [19:0] host_timeout_ctrl_qs;
+  logic [19:0] host_timeout_ctrl_wd;
+  logic target_timeout_ctrl_we;
+  logic [30:0] target_timeout_ctrl_val_qs;
+  logic [30:0] target_timeout_ctrl_val_wd;
+  logic target_timeout_ctrl_en_qs;
+  logic target_timeout_ctrl_en_wd;
+  logic target_nack_count_re;
+  logic [7:0] target_nack_count_qs;
+  logic [7:0] target_nack_count_wd;
+  logic target_ack_ctrl_re;
+  logic target_ack_ctrl_we;
+  logic [8:0] target_ack_ctrl_nbytes_qs;
+  logic [8:0] target_ack_ctrl_nbytes_wd;
+  logic target_ack_ctrl_nack_wd;
+  logic acq_fifo_next_data_re;
+  logic [7:0] acq_fifo_next_data_qs;
+  logic host_nack_handler_timeout_we;
+  logic [30:0] host_nack_handler_timeout_val_qs;
+  logic [30:0] host_nack_handler_timeout_val_wd;
+  logic host_nack_handler_timeout_en_qs;
+  logic host_nack_handler_timeout_en_wd;
+  logic controller_events_we;
+  logic controller_events_nack_qs;
+  logic controller_events_nack_wd;
+  logic controller_events_unhandled_nack_timeout_qs;
+  logic controller_events_unhandled_nack_timeout_wd;
+  logic controller_events_bus_timeout_qs;
+  logic controller_events_bus_timeout_wd;
+  logic controller_events_arbitration_lost_qs;
+  logic controller_events_arbitration_lost_wd;
+  logic target_events_we;
+  logic target_events_tx_pending_qs;
+  logic target_events_tx_pending_wd;
+  logic target_events_bus_timeout_qs;
+  logic target_events_bus_timeout_wd;
+  logic target_events_arbitration_lost_qs;
+  logic target_events_arbitration_lost_wd;
 
   // Register instances
   // R[intr_state]: V(False)
   //   F[fmt_threshold]: 0:0
   prim_subreg #(
     .DW      (1),
-    .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .SwAccess(prim_subreg_pkg::SwAccessRO),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_fmt_threshold (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (intr_state_we),
-    .wd     (intr_state_fmt_threshold_wd),
+    .we     (1'b0),
+    .wd     ('0),
 
     // from internal hardware
     .de     (hw2reg.intr_state.fmt_threshold.de),
@@ -332,15 +393,17 @@ module i2c_reg_top (
   //   F[rx_threshold]: 1:1
   prim_subreg #(
     .DW      (1),
-    .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .SwAccess(prim_subreg_pkg::SwAccessRO),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_rx_threshold (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (intr_state_we),
-    .wd     (intr_state_rx_threshold_wd),
+    .we     (1'b0),
+    .wd     ('0),
 
     // from internal hardware
     .de     (hw2reg.intr_state.rx_threshold.de),
@@ -355,40 +418,44 @@ module i2c_reg_top (
     .qs     (intr_state_rx_threshold_qs)
   );
 
-  //   F[fmt_overflow]: 2:2
+  //   F[acq_threshold]: 2:2
   prim_subreg #(
     .DW      (1),
-    .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
-  ) u_intr_state_fmt_overflow (
+    .SwAccess(prim_subreg_pkg::SwAccessRO),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_intr_state_acq_threshold (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (intr_state_we),
-    .wd     (intr_state_fmt_overflow_wd),
+    .we     (1'b0),
+    .wd     ('0),
 
     // from internal hardware
-    .de     (hw2reg.intr_state.fmt_overflow.de),
-    .d      (hw2reg.intr_state.fmt_overflow.d),
+    .de     (hw2reg.intr_state.acq_threshold.de),
+    .d      (hw2reg.intr_state.acq_threshold.d),
 
     // to internal hardware
     .qe     (),
-    .q      (reg2hw.intr_state.fmt_overflow.q),
+    .q      (reg2hw.intr_state.acq_threshold.q),
     .ds     (),
 
     // to register interface (read)
-    .qs     (intr_state_fmt_overflow_qs)
+    .qs     (intr_state_acq_threshold_qs)
   );
 
   //   F[rx_overflow]: 3:3
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_rx_overflow (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state_we),
@@ -407,40 +474,44 @@ module i2c_reg_top (
     .qs     (intr_state_rx_overflow_qs)
   );
 
-  //   F[nak]: 4:4
+  //   F[controller_halt]: 4:4
   prim_subreg #(
     .DW      (1),
-    .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
-  ) u_intr_state_nak (
+    .SwAccess(prim_subreg_pkg::SwAccessRO),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_intr_state_controller_halt (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (intr_state_we),
-    .wd     (intr_state_nak_wd),
+    .we     (1'b0),
+    .wd     ('0),
 
     // from internal hardware
-    .de     (hw2reg.intr_state.nak.de),
-    .d      (hw2reg.intr_state.nak.d),
+    .de     (hw2reg.intr_state.controller_halt.de),
+    .d      (hw2reg.intr_state.controller_halt.d),
 
     // to internal hardware
     .qe     (),
-    .q      (reg2hw.intr_state.nak.q),
+    .q      (reg2hw.intr_state.controller_halt.q),
     .ds     (),
 
     // to register interface (read)
-    .qs     (intr_state_nak_qs)
+    .qs     (intr_state_controller_halt_qs)
   );
 
   //   F[scl_interference]: 5:5
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_scl_interference (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state_we),
@@ -463,10 +534,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_sda_interference (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state_we),
@@ -489,10 +562,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_stretch_timeout (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state_we),
@@ -515,10 +590,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_sda_unstable (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state_we),
@@ -541,10 +618,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_cmd_complete (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state_we),
@@ -567,10 +646,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_tx_stretch (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -589,66 +670,72 @@ module i2c_reg_top (
     .qs     (intr_state_tx_stretch_qs)
   );
 
-  //   F[tx_overflow]: 11:11
-  prim_subreg #(
-    .DW      (1),
-    .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
-  ) u_intr_state_tx_overflow (
-    .clk_i   (clk_i),
-    .rst_ni  (rst_ni),
-
-    // from register interface
-    .we     (intr_state_we),
-    .wd     (intr_state_tx_overflow_wd),
-
-    // from internal hardware
-    .de     (hw2reg.intr_state.tx_overflow.de),
-    .d      (hw2reg.intr_state.tx_overflow.d),
-
-    // to internal hardware
-    .qe     (),
-    .q      (reg2hw.intr_state.tx_overflow.q),
-    .ds     (),
-
-    // to register interface (read)
-    .qs     (intr_state_tx_overflow_qs)
-  );
-
-  //   F[acq_full]: 12:12
+  //   F[tx_threshold]: 11:11
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (1'h0)
-  ) u_intr_state_acq_full (
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_intr_state_tx_threshold (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
     .wd     ('0),
 
     // from internal hardware
-    .de     (hw2reg.intr_state.acq_full.de),
-    .d      (hw2reg.intr_state.acq_full.d),
+    .de     (hw2reg.intr_state.tx_threshold.de),
+    .d      (hw2reg.intr_state.tx_threshold.d),
 
     // to internal hardware
     .qe     (),
-    .q      (reg2hw.intr_state.acq_full.q),
+    .q      (reg2hw.intr_state.tx_threshold.q),
     .ds     (),
 
     // to register interface (read)
-    .qs     (intr_state_acq_full_qs)
+    .qs     (intr_state_tx_threshold_qs)
+  );
+
+  //   F[acq_stretch]: 12:12
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRO),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_intr_state_acq_stretch (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (1'b0),
+    .wd     ('0),
+
+    // from internal hardware
+    .de     (hw2reg.intr_state.acq_stretch.de),
+    .d      (hw2reg.intr_state.acq_stretch.d),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.intr_state.acq_stretch.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (intr_state_acq_stretch_qs)
   );
 
   //   F[unexp_stop]: 13:13
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_unexp_stop (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state_we),
@@ -671,10 +758,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state_host_timeout (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_state_we),
@@ -699,10 +788,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_fmt_threshold (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -725,10 +816,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_rx_threshold (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -747,18 +840,20 @@ module i2c_reg_top (
     .qs     (intr_enable_rx_threshold_qs)
   );
 
-  //   F[fmt_overflow]: 2:2
+  //   F[acq_threshold]: 2:2
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
-  ) u_intr_enable_fmt_overflow (
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_intr_enable_acq_threshold (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
-    .wd     (intr_enable_fmt_overflow_wd),
+    .wd     (intr_enable_acq_threshold_wd),
 
     // from internal hardware
     .de     (1'b0),
@@ -766,21 +861,23 @@ module i2c_reg_top (
 
     // to internal hardware
     .qe     (),
-    .q      (reg2hw.intr_enable.fmt_overflow.q),
+    .q      (reg2hw.intr_enable.acq_threshold.q),
     .ds     (),
 
     // to register interface (read)
-    .qs     (intr_enable_fmt_overflow_qs)
+    .qs     (intr_enable_acq_threshold_qs)
   );
 
   //   F[rx_overflow]: 3:3
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_rx_overflow (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -799,18 +896,20 @@ module i2c_reg_top (
     .qs     (intr_enable_rx_overflow_qs)
   );
 
-  //   F[nak]: 4:4
+  //   F[controller_halt]: 4:4
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
-  ) u_intr_enable_nak (
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_intr_enable_controller_halt (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
-    .wd     (intr_enable_nak_wd),
+    .wd     (intr_enable_controller_halt_wd),
 
     // from internal hardware
     .de     (1'b0),
@@ -818,21 +917,23 @@ module i2c_reg_top (
 
     // to internal hardware
     .qe     (),
-    .q      (reg2hw.intr_enable.nak.q),
+    .q      (reg2hw.intr_enable.controller_halt.q),
     .ds     (),
 
     // to register interface (read)
-    .qs     (intr_enable_nak_qs)
+    .qs     (intr_enable_controller_halt_qs)
   );
 
   //   F[scl_interference]: 5:5
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_scl_interference (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -855,10 +956,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_sda_interference (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -881,10 +984,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_stretch_timeout (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -907,10 +1012,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_sda_unstable (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -933,10 +1040,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_cmd_complete (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -959,10 +1068,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_tx_stretch (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -981,18 +1092,20 @@ module i2c_reg_top (
     .qs     (intr_enable_tx_stretch_qs)
   );
 
-  //   F[tx_overflow]: 11:11
+  //   F[tx_threshold]: 11:11
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
-  ) u_intr_enable_tx_overflow (
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_intr_enable_tx_threshold (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
-    .wd     (intr_enable_tx_overflow_wd),
+    .wd     (intr_enable_tx_threshold_wd),
 
     // from internal hardware
     .de     (1'b0),
@@ -1000,25 +1113,27 @@ module i2c_reg_top (
 
     // to internal hardware
     .qe     (),
-    .q      (reg2hw.intr_enable.tx_overflow.q),
+    .q      (reg2hw.intr_enable.tx_threshold.q),
     .ds     (),
 
     // to register interface (read)
-    .qs     (intr_enable_tx_overflow_qs)
+    .qs     (intr_enable_tx_threshold_qs)
   );
 
-  //   F[acq_full]: 12:12
+  //   F[acq_stretch]: 12:12
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
-  ) u_intr_enable_acq_full (
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_intr_enable_acq_stretch (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
-    .wd     (intr_enable_acq_full_wd),
+    .wd     (intr_enable_acq_stretch_wd),
 
     // from internal hardware
     .de     (1'b0),
@@ -1026,21 +1141,23 @@ module i2c_reg_top (
 
     // to internal hardware
     .qe     (),
-    .q      (reg2hw.intr_enable.acq_full.q),
+    .q      (reg2hw.intr_enable.acq_stretch.q),
     .ds     (),
 
     // to register interface (read)
-    .qs     (intr_enable_acq_full_qs)
+    .qs     (intr_enable_acq_stretch_qs)
   );
 
   //   F[unexp_stop]: 13:13
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_unexp_stop (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -1063,10 +1180,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable_host_timeout (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -1122,21 +1241,21 @@ module i2c_reg_top (
   );
   assign reg2hw.intr_test.rx_threshold.qe = intr_test_qe;
 
-  //   F[fmt_overflow]: 2:2
+  //   F[acq_threshold]: 2:2
   prim_subreg_ext #(
     .DW    (1)
-  ) u_intr_test_fmt_overflow (
+  ) u_intr_test_acq_threshold (
     .re     (1'b0),
     .we     (intr_test_we),
-    .wd     (intr_test_fmt_overflow_wd),
+    .wd     (intr_test_acq_threshold_wd),
     .d      ('0),
     .qre    (),
     .qe     (intr_test_flds_we[2]),
-    .q      (reg2hw.intr_test.fmt_overflow.q),
+    .q      (reg2hw.intr_test.acq_threshold.q),
     .ds     (),
     .qs     ()
   );
-  assign reg2hw.intr_test.fmt_overflow.qe = intr_test_qe;
+  assign reg2hw.intr_test.acq_threshold.qe = intr_test_qe;
 
   //   F[rx_overflow]: 3:3
   prim_subreg_ext #(
@@ -1154,21 +1273,21 @@ module i2c_reg_top (
   );
   assign reg2hw.intr_test.rx_overflow.qe = intr_test_qe;
 
-  //   F[nak]: 4:4
+  //   F[controller_halt]: 4:4
   prim_subreg_ext #(
     .DW    (1)
-  ) u_intr_test_nak (
+  ) u_intr_test_controller_halt (
     .re     (1'b0),
     .we     (intr_test_we),
-    .wd     (intr_test_nak_wd),
+    .wd     (intr_test_controller_halt_wd),
     .d      ('0),
     .qre    (),
     .qe     (intr_test_flds_we[4]),
-    .q      (reg2hw.intr_test.nak.q),
+    .q      (reg2hw.intr_test.controller_halt.q),
     .ds     (),
     .qs     ()
   );
-  assign reg2hw.intr_test.nak.qe = intr_test_qe;
+  assign reg2hw.intr_test.controller_halt.qe = intr_test_qe;
 
   //   F[scl_interference]: 5:5
   prim_subreg_ext #(
@@ -1266,37 +1385,37 @@ module i2c_reg_top (
   );
   assign reg2hw.intr_test.tx_stretch.qe = intr_test_qe;
 
-  //   F[tx_overflow]: 11:11
+  //   F[tx_threshold]: 11:11
   prim_subreg_ext #(
     .DW    (1)
-  ) u_intr_test_tx_overflow (
+  ) u_intr_test_tx_threshold (
     .re     (1'b0),
     .we     (intr_test_we),
-    .wd     (intr_test_tx_overflow_wd),
+    .wd     (intr_test_tx_threshold_wd),
     .d      ('0),
     .qre    (),
     .qe     (intr_test_flds_we[11]),
-    .q      (reg2hw.intr_test.tx_overflow.q),
+    .q      (reg2hw.intr_test.tx_threshold.q),
     .ds     (),
     .qs     ()
   );
-  assign reg2hw.intr_test.tx_overflow.qe = intr_test_qe;
+  assign reg2hw.intr_test.tx_threshold.qe = intr_test_qe;
 
-  //   F[acq_full]: 12:12
+  //   F[acq_stretch]: 12:12
   prim_subreg_ext #(
     .DW    (1)
-  ) u_intr_test_acq_full (
+  ) u_intr_test_acq_stretch (
     .re     (1'b0),
     .we     (intr_test_we),
-    .wd     (intr_test_acq_full_wd),
+    .wd     (intr_test_acq_stretch_wd),
     .d      ('0),
     .qre    (),
     .qe     (intr_test_flds_we[12]),
-    .q      (reg2hw.intr_test.acq_full.q),
+    .q      (reg2hw.intr_test.acq_stretch.q),
     .ds     (),
     .qs     ()
   );
-  assign reg2hw.intr_test.acq_full.qe = intr_test_qe;
+  assign reg2hw.intr_test.acq_stretch.qe = intr_test_qe;
 
   //   F[unexp_stop]: 13:13
   prim_subreg_ext #(
@@ -1333,14 +1452,18 @@ module i2c_reg_top (
 
   // R[alert_test]: V(True)
   logic alert_test_qe;
-  logic [0:0] alert_test_flds_we;
+  logic [1:0] alert_test_flds_we;
   assign alert_test_qe = &alert_test_flds_we;
+  // Create REGWEN-gated WE signal
+  logic alert_test_gated_we;
+  assign alert_test_gated_we = alert_test_we && alert_test_regwen_qs;
+  //   F[fatal_fault]: 0:0
   prim_subreg_ext #(
     .DW    (1)
-  ) u_alert_test (
+  ) u_alert_test_fatal_fault (
     .re     (1'b0),
-    .we     (alert_test_we),
-    .wd     (alert_test_wd),
+    .we     (alert_test_gated_we),
+    .wd     (alert_test_fatal_fault_wd),
     .d      ('0),
     .qre    (),
     .qe     (alert_test_flds_we[0]),
@@ -1350,16 +1473,46 @@ module i2c_reg_top (
   );
   assign reg2hw.alert_test.qe = alert_test_qe;
 
+  //   F[regwen]: 31:31
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW0C),
+    .RESVAL  (1'h1),
+    .Mubi    (1'b0)
+  ) u_alert_test_regwen (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (alert_test_we),
+    .wd     (alert_test_regwen_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (alert_test_flds_we[1]),
+    .q      (),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (alert_test_regwen_qs)
+  );
+
 
   // R[ctrl]: V(False)
   //   F[enablehost]: 0:0
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ctrl_enablehost (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (ctrl_we),
@@ -1382,10 +1535,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ctrl_enabletarget (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (ctrl_we),
@@ -1408,10 +1563,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ctrl_llpbk (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (ctrl_we),
@@ -1428,6 +1585,118 @@ module i2c_reg_top (
 
     // to register interface (read)
     .qs     (ctrl_llpbk_qs)
+  );
+
+  //   F[nack_addr_after_timeout]: 3:3
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_ctrl_nack_addr_after_timeout (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (ctrl_we),
+    .wd     (ctrl_nack_addr_after_timeout_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.ctrl.nack_addr_after_timeout.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (ctrl_nack_addr_after_timeout_qs)
+  );
+
+  //   F[ack_ctrl_en]: 4:4
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_ctrl_ack_ctrl_en (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (ctrl_we),
+    .wd     (ctrl_ack_ctrl_en_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.ctrl.ack_ctrl_en.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (ctrl_ack_ctrl_en_qs)
+  );
+
+  //   F[multi_controller_monitor_en]: 5:5
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_ctrl_multi_controller_monitor_en (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (ctrl_we),
+    .wd     (ctrl_multi_controller_monitor_en_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.ctrl.multi_controller_monitor_en.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (ctrl_multi_controller_monitor_en_qs)
+  );
+
+  //   F[tx_stretch_ctrl_en]: 6:6
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_ctrl_tx_stretch_ctrl_en (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (ctrl_we),
+    .wd     (ctrl_tx_stretch_ctrl_en_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.ctrl.tx_stretch_ctrl_en.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (ctrl_tx_stretch_ctrl_en_qs)
   );
 
 
@@ -1582,6 +1851,21 @@ module i2c_reg_top (
     .qs     (status_acqempty_qs)
   );
 
+  //   F[ack_ctrl_stretch]: 10:10
+  prim_subreg_ext #(
+    .DW    (1)
+  ) u_status_ack_ctrl_stretch (
+    .re     (status_re),
+    .we     (1'b0),
+    .wd     ('0),
+    .d      (hw2reg.status.ack_ctrl_stretch.d),
+    .qre    (),
+    .qe     (),
+    .q      (),
+    .ds     (),
+    .qs     (status_ack_ctrl_stretch_qs)
+  );
+
 
   // R[rdata]: V(True)
   prim_subreg_ext #(
@@ -1615,10 +1899,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (8),
     .SwAccess(prim_subreg_pkg::SwAccessWO),
-    .RESVAL  (8'h0)
+    .RESVAL  (8'h0),
+    .Mubi    (1'b0)
   ) u_fdata_fbyte (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (fdata_we),
@@ -1642,10 +1928,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessWO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fdata_start (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (fdata_we),
@@ -1669,10 +1957,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessWO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fdata_stop (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (fdata_we),
@@ -1692,18 +1982,20 @@ module i2c_reg_top (
   );
   assign reg2hw.fdata.stop.qe = fdata_qe;
 
-  //   F[read]: 10:10
+  //   F[readb]: 10:10
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessWO),
-    .RESVAL  (1'h0)
-  ) u_fdata_read (
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_fdata_readb (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (fdata_we),
-    .wd     (fdata_read_wd),
+    .wd     (fdata_readb_wd),
 
     // from internal hardware
     .de     (1'b0),
@@ -1711,22 +2003,24 @@ module i2c_reg_top (
 
     // to internal hardware
     .qe     (fdata_flds_we[3]),
-    .q      (reg2hw.fdata.read.q),
+    .q      (reg2hw.fdata.readb.q),
     .ds     (),
 
     // to register interface (read)
     .qs     ()
   );
-  assign reg2hw.fdata.read.qe = fdata_qe;
+  assign reg2hw.fdata.readb.qe = fdata_qe;
 
   //   F[rcont]: 11:11
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessWO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fdata_rcont (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (fdata_we),
@@ -1750,10 +2044,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessWO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fdata_nakok (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (fdata_we),
@@ -1776,7 +2072,7 @@ module i2c_reg_top (
 
   // R[fifo_ctrl]: V(False)
   logic fifo_ctrl_qe;
-  logic [5:0] fifo_ctrl_flds_we;
+  logic [3:0] fifo_ctrl_flds_we;
   prim_flop #(
     .Width(1),
     .ResetValue(0)
@@ -1790,10 +2086,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessWO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fifo_ctrl_rxrst (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (fifo_ctrl_we),
@@ -1817,10 +2115,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessWO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fifo_ctrl_fmtrst (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (fifo_ctrl_we),
@@ -1840,68 +2140,16 @@ module i2c_reg_top (
   );
   assign reg2hw.fifo_ctrl.fmtrst.qe = fifo_ctrl_qe;
 
-  //   F[rxilvl]: 4:2
-  prim_subreg #(
-    .DW      (3),
-    .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (3'h0)
-  ) u_fifo_ctrl_rxilvl (
-    .clk_i   (clk_i),
-    .rst_ni  (rst_ni),
-
-    // from register interface
-    .we     (fifo_ctrl_we),
-    .wd     (fifo_ctrl_rxilvl_wd),
-
-    // from internal hardware
-    .de     (1'b0),
-    .d      ('0),
-
-    // to internal hardware
-    .qe     (fifo_ctrl_flds_we[2]),
-    .q      (reg2hw.fifo_ctrl.rxilvl.q),
-    .ds     (),
-
-    // to register interface (read)
-    .qs     (fifo_ctrl_rxilvl_qs)
-  );
-  assign reg2hw.fifo_ctrl.rxilvl.qe = fifo_ctrl_qe;
-
-  //   F[fmtilvl]: 6:5
-  prim_subreg #(
-    .DW      (2),
-    .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (2'h0)
-  ) u_fifo_ctrl_fmtilvl (
-    .clk_i   (clk_i),
-    .rst_ni  (rst_ni),
-
-    // from register interface
-    .we     (fifo_ctrl_we),
-    .wd     (fifo_ctrl_fmtilvl_wd),
-
-    // from internal hardware
-    .de     (1'b0),
-    .d      ('0),
-
-    // to internal hardware
-    .qe     (fifo_ctrl_flds_we[3]),
-    .q      (reg2hw.fifo_ctrl.fmtilvl.q),
-    .ds     (),
-
-    // to register interface (read)
-    .qs     (fifo_ctrl_fmtilvl_qs)
-  );
-  assign reg2hw.fifo_ctrl.fmtilvl.qe = fifo_ctrl_qe;
-
   //   F[acqrst]: 7:7
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessWO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fifo_ctrl_acqrst (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (fifo_ctrl_we),
@@ -1912,7 +2160,7 @@ module i2c_reg_top (
     .d      ('0),
 
     // to internal hardware
-    .qe     (fifo_ctrl_flds_we[4]),
+    .qe     (fifo_ctrl_flds_we[2]),
     .q      (reg2hw.fifo_ctrl.acqrst.q),
     .ds     (),
 
@@ -1925,10 +2173,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessWO),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_fifo_ctrl_txrst (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (fifo_ctrl_we),
@@ -1939,7 +2189,7 @@ module i2c_reg_top (
     .d      ('0),
 
     // to internal hardware
-    .qe     (fifo_ctrl_flds_we[5]),
+    .qe     (fifo_ctrl_flds_we[3]),
     .q      (reg2hw.fifo_ctrl.txrst.q),
     .ds     (),
 
@@ -1949,65 +2199,209 @@ module i2c_reg_top (
   assign reg2hw.fifo_ctrl.txrst.qe = fifo_ctrl_qe;
 
 
-  // R[fifo_status]: V(True)
-  //   F[fmtlvl]: 6:0
+  // R[host_fifo_config]: V(False)
+  logic host_fifo_config_qe;
+  logic [1:0] host_fifo_config_flds_we;
+  prim_flop #(
+    .Width(1),
+    .ResetValue(0)
+  ) u_host_fifo_config0_qe (
+    .clk_i(clk_i),
+    .rst_ni(rst_ni),
+    .d_i(&host_fifo_config_flds_we),
+    .q_o(host_fifo_config_qe)
+  );
+  //   F[rx_thresh]: 11:0
+  prim_subreg #(
+    .DW      (12),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (12'h0),
+    .Mubi    (1'b0)
+  ) u_host_fifo_config_rx_thresh (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (host_fifo_config_we),
+    .wd     (host_fifo_config_rx_thresh_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (host_fifo_config_flds_we[0]),
+    .q      (reg2hw.host_fifo_config.rx_thresh.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (host_fifo_config_rx_thresh_qs)
+  );
+  assign reg2hw.host_fifo_config.rx_thresh.qe = host_fifo_config_qe;
+
+  //   F[fmt_thresh]: 27:16
+  prim_subreg #(
+    .DW      (12),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (12'h0),
+    .Mubi    (1'b0)
+  ) u_host_fifo_config_fmt_thresh (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (host_fifo_config_we),
+    .wd     (host_fifo_config_fmt_thresh_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (host_fifo_config_flds_we[1]),
+    .q      (reg2hw.host_fifo_config.fmt_thresh.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (host_fifo_config_fmt_thresh_qs)
+  );
+  assign reg2hw.host_fifo_config.fmt_thresh.qe = host_fifo_config_qe;
+
+
+  // R[target_fifo_config]: V(False)
+  logic target_fifo_config_qe;
+  logic [1:0] target_fifo_config_flds_we;
+  prim_flop #(
+    .Width(1),
+    .ResetValue(0)
+  ) u_target_fifo_config0_qe (
+    .clk_i(clk_i),
+    .rst_ni(rst_ni),
+    .d_i(&target_fifo_config_flds_we),
+    .q_o(target_fifo_config_qe)
+  );
+  //   F[tx_thresh]: 11:0
+  prim_subreg #(
+    .DW      (12),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (12'h0),
+    .Mubi    (1'b0)
+  ) u_target_fifo_config_tx_thresh (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (target_fifo_config_we),
+    .wd     (target_fifo_config_tx_thresh_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (target_fifo_config_flds_we[0]),
+    .q      (reg2hw.target_fifo_config.tx_thresh.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (target_fifo_config_tx_thresh_qs)
+  );
+  assign reg2hw.target_fifo_config.tx_thresh.qe = target_fifo_config_qe;
+
+  //   F[acq_thresh]: 27:16
+  prim_subreg #(
+    .DW      (12),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (12'h0),
+    .Mubi    (1'b0)
+  ) u_target_fifo_config_acq_thresh (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (target_fifo_config_we),
+    .wd     (target_fifo_config_acq_thresh_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (target_fifo_config_flds_we[1]),
+    .q      (reg2hw.target_fifo_config.acq_thresh.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (target_fifo_config_acq_thresh_qs)
+  );
+  assign reg2hw.target_fifo_config.acq_thresh.qe = target_fifo_config_qe;
+
+
+  // R[host_fifo_status]: V(True)
+  //   F[fmtlvl]: 11:0
   prim_subreg_ext #(
-    .DW    (7)
-  ) u_fifo_status_fmtlvl (
-    .re     (fifo_status_re),
+    .DW    (12)
+  ) u_host_fifo_status_fmtlvl (
+    .re     (host_fifo_status_re),
     .we     (1'b0),
     .wd     ('0),
-    .d      (hw2reg.fifo_status.fmtlvl.d),
+    .d      (hw2reg.host_fifo_status.fmtlvl.d),
     .qre    (),
     .qe     (),
     .q      (),
     .ds     (),
-    .qs     (fifo_status_fmtlvl_qs)
+    .qs     (host_fifo_status_fmtlvl_qs)
   );
 
-  //   F[txlvl]: 14:8
+  //   F[rxlvl]: 27:16
   prim_subreg_ext #(
-    .DW    (7)
-  ) u_fifo_status_txlvl (
-    .re     (fifo_status_re),
+    .DW    (12)
+  ) u_host_fifo_status_rxlvl (
+    .re     (host_fifo_status_re),
     .we     (1'b0),
     .wd     ('0),
-    .d      (hw2reg.fifo_status.txlvl.d),
+    .d      (hw2reg.host_fifo_status.rxlvl.d),
     .qre    (),
     .qe     (),
     .q      (),
     .ds     (),
-    .qs     (fifo_status_txlvl_qs)
+    .qs     (host_fifo_status_rxlvl_qs)
   );
 
-  //   F[rxlvl]: 22:16
+
+  // R[target_fifo_status]: V(True)
+  //   F[txlvl]: 11:0
   prim_subreg_ext #(
-    .DW    (7)
-  ) u_fifo_status_rxlvl (
-    .re     (fifo_status_re),
+    .DW    (12)
+  ) u_target_fifo_status_txlvl (
+    .re     (target_fifo_status_re),
     .we     (1'b0),
     .wd     ('0),
-    .d      (hw2reg.fifo_status.rxlvl.d),
+    .d      (hw2reg.target_fifo_status.txlvl.d),
     .qre    (),
     .qe     (),
     .q      (),
     .ds     (),
-    .qs     (fifo_status_rxlvl_qs)
+    .qs     (target_fifo_status_txlvl_qs)
   );
 
-  //   F[acqlvl]: 30:24
+  //   F[acqlvl]: 27:16
   prim_subreg_ext #(
-    .DW    (7)
-  ) u_fifo_status_acqlvl (
-    .re     (fifo_status_re),
+    .DW    (12)
+  ) u_target_fifo_status_acqlvl (
+    .re     (target_fifo_status_re),
     .we     (1'b0),
     .wd     ('0),
-    .d      (hw2reg.fifo_status.acqlvl.d),
+    .d      (hw2reg.target_fifo_status.acqlvl.d),
     .qre    (),
     .qe     (),
     .q      (),
     .ds     (),
-    .qs     (fifo_status_acqlvl_qs)
+    .qs     (target_fifo_status_acqlvl_qs)
   );
 
 
@@ -2016,10 +2410,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ovrd_txovrden (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (ovrd_we),
@@ -2042,10 +2438,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ovrd_sclval (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (ovrd_we),
@@ -2068,10 +2466,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_ovrd_sdaval (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (ovrd_we),
@@ -2124,14 +2524,16 @@ module i2c_reg_top (
 
 
   // R[timing0]: V(False)
-  //   F[thigh]: 15:0
+  //   F[thigh]: 12:0
   prim_subreg #(
-    .DW      (16),
+    .DW      (13),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h0)
+    .RESVAL  (13'h0),
+    .Mubi    (1'b0)
   ) u_timing0_thigh (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timing0_we),
@@ -2150,14 +2552,16 @@ module i2c_reg_top (
     .qs     (timing0_thigh_qs)
   );
 
-  //   F[tlow]: 31:16
+  //   F[tlow]: 28:16
   prim_subreg #(
-    .DW      (16),
+    .DW      (13),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h0)
+    .RESVAL  (13'h0),
+    .Mubi    (1'b0)
   ) u_timing0_tlow (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timing0_we),
@@ -2178,14 +2582,16 @@ module i2c_reg_top (
 
 
   // R[timing1]: V(False)
-  //   F[t_r]: 15:0
+  //   F[t_r]: 9:0
   prim_subreg #(
-    .DW      (16),
+    .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_timing1_t_r (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timing1_we),
@@ -2204,14 +2610,16 @@ module i2c_reg_top (
     .qs     (timing1_t_r_qs)
   );
 
-  //   F[t_f]: 31:16
+  //   F[t_f]: 24:16
   prim_subreg #(
-    .DW      (16),
+    .DW      (9),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h0)
+    .RESVAL  (9'h0),
+    .Mubi    (1'b0)
   ) u_timing1_t_f (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timing1_we),
@@ -2232,14 +2640,16 @@ module i2c_reg_top (
 
 
   // R[timing2]: V(False)
-  //   F[tsu_sta]: 15:0
+  //   F[tsu_sta]: 12:0
   prim_subreg #(
-    .DW      (16),
+    .DW      (13),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h0)
+    .RESVAL  (13'h0),
+    .Mubi    (1'b0)
   ) u_timing2_tsu_sta (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timing2_we),
@@ -2258,14 +2668,16 @@ module i2c_reg_top (
     .qs     (timing2_tsu_sta_qs)
   );
 
-  //   F[thd_sta]: 31:16
+  //   F[thd_sta]: 28:16
   prim_subreg #(
-    .DW      (16),
+    .DW      (13),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h0)
+    .RESVAL  (13'h0),
+    .Mubi    (1'b0)
   ) u_timing2_thd_sta (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timing2_we),
@@ -2286,14 +2698,16 @@ module i2c_reg_top (
 
 
   // R[timing3]: V(False)
-  //   F[tsu_dat]: 15:0
+  //   F[tsu_dat]: 8:0
   prim_subreg #(
-    .DW      (16),
+    .DW      (9),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h0)
+    .RESVAL  (9'h0),
+    .Mubi    (1'b0)
   ) u_timing3_tsu_dat (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timing3_we),
@@ -2312,14 +2726,16 @@ module i2c_reg_top (
     .qs     (timing3_tsu_dat_qs)
   );
 
-  //   F[thd_dat]: 31:16
+  //   F[thd_dat]: 28:16
   prim_subreg #(
-    .DW      (16),
+    .DW      (13),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h0)
+    .RESVAL  (13'h0),
+    .Mubi    (1'b0)
   ) u_timing3_thd_dat (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timing3_we),
@@ -2340,14 +2756,16 @@ module i2c_reg_top (
 
 
   // R[timing4]: V(False)
-  //   F[tsu_sto]: 15:0
+  //   F[tsu_sto]: 12:0
   prim_subreg #(
-    .DW      (16),
+    .DW      (13),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h0)
+    .RESVAL  (13'h0),
+    .Mubi    (1'b0)
   ) u_timing4_tsu_sto (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timing4_we),
@@ -2366,14 +2784,16 @@ module i2c_reg_top (
     .qs     (timing4_tsu_sto_qs)
   );
 
-  //   F[t_buf]: 31:16
+  //   F[t_buf]: 28:16
   prim_subreg #(
-    .DW      (16),
+    .DW      (13),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h0)
+    .RESVAL  (13'h0),
+    .Mubi    (1'b0)
   ) u_timing4_t_buf (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timing4_we),
@@ -2394,14 +2814,16 @@ module i2c_reg_top (
 
 
   // R[timeout_ctrl]: V(False)
-  //   F[val]: 30:0
+  //   F[val]: 29:0
   prim_subreg #(
-    .DW      (31),
+    .DW      (30),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (31'h0)
+    .RESVAL  (30'h0),
+    .Mubi    (1'b0)
   ) u_timeout_ctrl_val (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timeout_ctrl_we),
@@ -2420,14 +2842,44 @@ module i2c_reg_top (
     .qs     (timeout_ctrl_val_qs)
   );
 
+  //   F[mode]: 30:30
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_timeout_ctrl_mode (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (timeout_ctrl_we),
+    .wd     (timeout_ctrl_mode_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.timeout_ctrl.mode.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (timeout_ctrl_mode_qs)
+  );
+
   //   F[en]: 31:31
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_timeout_ctrl_en (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (timeout_ctrl_we),
@@ -2452,10 +2904,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (7),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (7'h0)
+    .RESVAL  (7'h0),
+    .Mubi    (1'b0)
   ) u_target_id_address0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (target_id_we),
@@ -2478,10 +2932,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (7),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (7'h0)
+    .RESVAL  (7'h0),
+    .Mubi    (1'b0)
   ) u_target_id_mask0 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (target_id_we),
@@ -2504,10 +2960,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (7),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (7'h0)
+    .RESVAL  (7'h0),
+    .Mubi    (1'b0)
   ) u_target_id_address1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (target_id_we),
@@ -2530,10 +2988,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (7),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (7'h0)
+    .RESVAL  (7'h0),
+    .Mubi    (1'b0)
   ) u_target_id_mask1 (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (target_id_we),
@@ -2569,9 +3029,9 @@ module i2c_reg_top (
     .qs     (acqdata_abyte_qs)
   );
 
-  //   F[signal]: 9:8
+  //   F[signal]: 10:8
   prim_subreg_ext #(
-    .DW    (2)
+    .DW    (3)
   ) u_acqdata_signal (
     .re     (acqdata_re),
     .we     (1'b0),
@@ -2600,10 +3060,12 @@ module i2c_reg_top (
   prim_subreg #(
     .DW      (8),
     .SwAccess(prim_subreg_pkg::SwAccessWO),
-    .RESVAL  (8'h0)
+    .RESVAL  (8'h0),
+    .Mubi    (1'b0)
   ) u_txdata (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (txdata_we),
@@ -2626,12 +3088,14 @@ module i2c_reg_top (
 
   // R[host_timeout_ctrl]: V(False)
   prim_subreg #(
-    .DW      (32),
+    .DW      (20),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (32'h0)
+    .RESVAL  (20'h0),
+    .Mubi    (1'b0)
   ) u_host_timeout_ctrl (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (host_timeout_ctrl_we),
@@ -2651,10 +3115,431 @@ module i2c_reg_top (
   );
 
 
+  // R[target_timeout_ctrl]: V(False)
+  //   F[val]: 30:0
+  prim_subreg #(
+    .DW      (31),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (31'h0),
+    .Mubi    (1'b0)
+  ) u_target_timeout_ctrl_val (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
-  logic [21:0] addr_hit;
+    // from register interface
+    .we     (target_timeout_ctrl_we),
+    .wd     (target_timeout_ctrl_val_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.target_timeout_ctrl.val.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (target_timeout_ctrl_val_qs)
+  );
+
+  //   F[en]: 31:31
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_target_timeout_ctrl_en (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (target_timeout_ctrl_we),
+    .wd     (target_timeout_ctrl_en_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.target_timeout_ctrl.en.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (target_timeout_ctrl_en_qs)
+  );
+
+
+  // R[target_nack_count]: V(False)
+  prim_subreg #(
+    .DW      (8),
+    .SwAccess(prim_subreg_pkg::SwAccessRC),
+    .RESVAL  (8'h0),
+    .Mubi    (1'b0)
+  ) u_target_nack_count (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (target_nack_count_re),
+    .wd     (target_nack_count_wd),
+
+    // from internal hardware
+    .de     (hw2reg.target_nack_count.de),
+    .d      (hw2reg.target_nack_count.d),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.target_nack_count.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (target_nack_count_qs)
+  );
+
+
+  // R[target_ack_ctrl]: V(True)
+  logic target_ack_ctrl_qe;
+  logic [1:0] target_ack_ctrl_flds_we;
+  assign target_ack_ctrl_qe = &target_ack_ctrl_flds_we;
+  //   F[nbytes]: 8:0
+  prim_subreg_ext #(
+    .DW    (9)
+  ) u_target_ack_ctrl_nbytes (
+    .re     (target_ack_ctrl_re),
+    .we     (target_ack_ctrl_we),
+    .wd     (target_ack_ctrl_nbytes_wd),
+    .d      (hw2reg.target_ack_ctrl.nbytes.d),
+    .qre    (),
+    .qe     (target_ack_ctrl_flds_we[0]),
+    .q      (reg2hw.target_ack_ctrl.nbytes.q),
+    .ds     (),
+    .qs     (target_ack_ctrl_nbytes_qs)
+  );
+  assign reg2hw.target_ack_ctrl.nbytes.qe = target_ack_ctrl_qe;
+
+  //   F[nack]: 31:31
+  prim_subreg_ext #(
+    .DW    (1)
+  ) u_target_ack_ctrl_nack (
+    .re     (1'b0),
+    .we     (target_ack_ctrl_we),
+    .wd     (target_ack_ctrl_nack_wd),
+    .d      ('0),
+    .qre    (),
+    .qe     (target_ack_ctrl_flds_we[1]),
+    .q      (reg2hw.target_ack_ctrl.nack.q),
+    .ds     (),
+    .qs     ()
+  );
+  assign reg2hw.target_ack_ctrl.nack.qe = target_ack_ctrl_qe;
+
+
+  // R[acq_fifo_next_data]: V(True)
+  prim_subreg_ext #(
+    .DW    (8)
+  ) u_acq_fifo_next_data (
+    .re     (acq_fifo_next_data_re),
+    .we     (1'b0),
+    .wd     ('0),
+    .d      (hw2reg.acq_fifo_next_data.d),
+    .qre    (),
+    .qe     (),
+    .q      (),
+    .ds     (),
+    .qs     (acq_fifo_next_data_qs)
+  );
+
+
+  // R[host_nack_handler_timeout]: V(False)
+  //   F[val]: 30:0
+  prim_subreg #(
+    .DW      (31),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (31'h0),
+    .Mubi    (1'b0)
+  ) u_host_nack_handler_timeout_val (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (host_nack_handler_timeout_we),
+    .wd     (host_nack_handler_timeout_val_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.host_nack_handler_timeout.val.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (host_nack_handler_timeout_val_qs)
+  );
+
+  //   F[en]: 31:31
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_host_nack_handler_timeout_en (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (host_nack_handler_timeout_we),
+    .wd     (host_nack_handler_timeout_en_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.host_nack_handler_timeout.en.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (host_nack_handler_timeout_en_qs)
+  );
+
+
+  // R[controller_events]: V(False)
+  //   F[nack]: 0:0
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW1C),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_controller_events_nack (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (controller_events_we),
+    .wd     (controller_events_nack_wd),
+
+    // from internal hardware
+    .de     (hw2reg.controller_events.nack.de),
+    .d      (hw2reg.controller_events.nack.d),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.controller_events.nack.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (controller_events_nack_qs)
+  );
+
+  //   F[unhandled_nack_timeout]: 1:1
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW1C),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_controller_events_unhandled_nack_timeout (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (controller_events_we),
+    .wd     (controller_events_unhandled_nack_timeout_wd),
+
+    // from internal hardware
+    .de     (hw2reg.controller_events.unhandled_nack_timeout.de),
+    .d      (hw2reg.controller_events.unhandled_nack_timeout.d),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.controller_events.unhandled_nack_timeout.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (controller_events_unhandled_nack_timeout_qs)
+  );
+
+  //   F[bus_timeout]: 2:2
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW1C),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_controller_events_bus_timeout (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (controller_events_we),
+    .wd     (controller_events_bus_timeout_wd),
+
+    // from internal hardware
+    .de     (hw2reg.controller_events.bus_timeout.de),
+    .d      (hw2reg.controller_events.bus_timeout.d),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.controller_events.bus_timeout.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (controller_events_bus_timeout_qs)
+  );
+
+  //   F[arbitration_lost]: 3:3
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW1C),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_controller_events_arbitration_lost (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (controller_events_we),
+    .wd     (controller_events_arbitration_lost_wd),
+
+    // from internal hardware
+    .de     (hw2reg.controller_events.arbitration_lost.de),
+    .d      (hw2reg.controller_events.arbitration_lost.d),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.controller_events.arbitration_lost.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (controller_events_arbitration_lost_qs)
+  );
+
+
+  // R[target_events]: V(False)
+  //   F[tx_pending]: 0:0
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW1C),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_target_events_tx_pending (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (target_events_we),
+    .wd     (target_events_tx_pending_wd),
+
+    // from internal hardware
+    .de     (hw2reg.target_events.tx_pending.de),
+    .d      (hw2reg.target_events.tx_pending.d),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.target_events.tx_pending.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (target_events_tx_pending_qs)
+  );
+
+  //   F[bus_timeout]: 1:1
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW1C),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_target_events_bus_timeout (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (target_events_we),
+    .wd     (target_events_bus_timeout_wd),
+
+    // from internal hardware
+    .de     (hw2reg.target_events.bus_timeout.de),
+    .d      (hw2reg.target_events.bus_timeout.d),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.target_events.bus_timeout.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (target_events_bus_timeout_qs)
+  );
+
+  //   F[arbitration_lost]: 2:2
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW1C),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_target_events_arbitration_lost (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (target_events_we),
+    .wd     (target_events_arbitration_lost_wd),
+
+    // from internal hardware
+    .de     (hw2reg.target_events.arbitration_lost.de),
+    .d      (hw2reg.target_events.arbitration_lost.d),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.target_events.arbitration_lost.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (target_events_arbitration_lost_qs)
+  );
+
+
+
+  logic [31:0] addr_hit;
+  top_racl_pkg::racl_role_vec_t racl_role_vec;
+  top_racl_pkg::racl_role_t racl_role;
+
+  logic [31:0] racl_addr_hit_read;
+  logic [31:0] racl_addr_hit_write;
+
+  if (EnableRacl) begin : gen_racl_role_logic
+    // Retrieve RACL role from user bits and one-hot encode that for the comparison bitmap
+    assign racl_role = top_racl_pkg::tlul_extract_racl_role_bits(tl_i.a_user.rsvd);
+
+    prim_onehot_enc #(
+      .OneHotWidth( $bits(top_racl_pkg::racl_role_vec_t) )
+    ) u_racl_role_encode (
+      .in_i ( racl_role     ),
+      .en_i ( 1'b1          ),
+      .out_o( racl_role_vec )
+    );
+  end else begin : gen_no_racl_role_logic
+    assign racl_role     = '0;
+    assign racl_role_vec = '0;
+  end
+
   always_comb begin
-    addr_hit = '0;
+    racl_addr_hit_read  = '0;
+    racl_addr_hit_write = '0;
     addr_hit[ 0] = (reg_addr == I2C_INTR_STATE_OFFSET);
     addr_hit[ 1] = (reg_addr == I2C_INTR_ENABLE_OFFSET);
     addr_hit[ 2] = (reg_addr == I2C_INTR_TEST_OFFSET);
@@ -2664,62 +3549,102 @@ module i2c_reg_top (
     addr_hit[ 6] = (reg_addr == I2C_RDATA_OFFSET);
     addr_hit[ 7] = (reg_addr == I2C_FDATA_OFFSET);
     addr_hit[ 8] = (reg_addr == I2C_FIFO_CTRL_OFFSET);
-    addr_hit[ 9] = (reg_addr == I2C_FIFO_STATUS_OFFSET);
-    addr_hit[10] = (reg_addr == I2C_OVRD_OFFSET);
-    addr_hit[11] = (reg_addr == I2C_VAL_OFFSET);
-    addr_hit[12] = (reg_addr == I2C_TIMING0_OFFSET);
-    addr_hit[13] = (reg_addr == I2C_TIMING1_OFFSET);
-    addr_hit[14] = (reg_addr == I2C_TIMING2_OFFSET);
-    addr_hit[15] = (reg_addr == I2C_TIMING3_OFFSET);
-    addr_hit[16] = (reg_addr == I2C_TIMING4_OFFSET);
-    addr_hit[17] = (reg_addr == I2C_TIMEOUT_CTRL_OFFSET);
-    addr_hit[18] = (reg_addr == I2C_TARGET_ID_OFFSET);
-    addr_hit[19] = (reg_addr == I2C_ACQDATA_OFFSET);
-    addr_hit[20] = (reg_addr == I2C_TXDATA_OFFSET);
-    addr_hit[21] = (reg_addr == I2C_HOST_TIMEOUT_CTRL_OFFSET);
+    addr_hit[ 9] = (reg_addr == I2C_HOST_FIFO_CONFIG_OFFSET);
+    addr_hit[10] = (reg_addr == I2C_TARGET_FIFO_CONFIG_OFFSET);
+    addr_hit[11] = (reg_addr == I2C_HOST_FIFO_STATUS_OFFSET);
+    addr_hit[12] = (reg_addr == I2C_TARGET_FIFO_STATUS_OFFSET);
+    addr_hit[13] = (reg_addr == I2C_OVRD_OFFSET);
+    addr_hit[14] = (reg_addr == I2C_VAL_OFFSET);
+    addr_hit[15] = (reg_addr == I2C_TIMING0_OFFSET);
+    addr_hit[16] = (reg_addr == I2C_TIMING1_OFFSET);
+    addr_hit[17] = (reg_addr == I2C_TIMING2_OFFSET);
+    addr_hit[18] = (reg_addr == I2C_TIMING3_OFFSET);
+    addr_hit[19] = (reg_addr == I2C_TIMING4_OFFSET);
+    addr_hit[20] = (reg_addr == I2C_TIMEOUT_CTRL_OFFSET);
+    addr_hit[21] = (reg_addr == I2C_TARGET_ID_OFFSET);
+    addr_hit[22] = (reg_addr == I2C_ACQDATA_OFFSET);
+    addr_hit[23] = (reg_addr == I2C_TXDATA_OFFSET);
+    addr_hit[24] = (reg_addr == I2C_HOST_TIMEOUT_CTRL_OFFSET);
+    addr_hit[25] = (reg_addr == I2C_TARGET_TIMEOUT_CTRL_OFFSET);
+    addr_hit[26] = (reg_addr == I2C_TARGET_NACK_COUNT_OFFSET);
+    addr_hit[27] = (reg_addr == I2C_TARGET_ACK_CTRL_OFFSET);
+    addr_hit[28] = (reg_addr == I2C_ACQ_FIFO_NEXT_DATA_OFFSET);
+    addr_hit[29] = (reg_addr == I2C_HOST_NACK_HANDLER_TIMEOUT_OFFSET);
+    addr_hit[30] = (reg_addr == I2C_CONTROLLER_EVENTS_OFFSET);
+    addr_hit[31] = (reg_addr == I2C_TARGET_EVENTS_OFFSET);
+
+    if (EnableRacl) begin : gen_racl_hit
+      for (int unsigned slice_idx = 0; slice_idx < 32; slice_idx++) begin
+        racl_addr_hit_read[slice_idx] =
+            addr_hit[slice_idx] & (|(racl_policies_i[RaclPolicySelVec[slice_idx]].read_perm
+                                      & racl_role_vec));
+        racl_addr_hit_write[slice_idx] =
+            addr_hit[slice_idx] & (|(racl_policies_i[RaclPolicySelVec[slice_idx]].write_perm
+                                      & racl_role_vec));
+      end
+    end else begin : gen_no_racl
+      racl_addr_hit_read  = addr_hit;
+      racl_addr_hit_write = addr_hit;
+    end
   end
 
   assign addrmiss = (reg_re || reg_we) ? ~|addr_hit : 1'b0 ;
+  // A valid address hit, access, but failed the RACL check
+  assign racl_error_o.valid = |addr_hit & ((reg_re & ~|racl_addr_hit_read) |
+                                           (reg_we & ~|racl_addr_hit_write));
+  assign racl_error_o.request_address = top_pkg::TL_AW'(reg_addr);
+  assign racl_error_o.racl_role       = racl_role;
+  assign racl_error_o.overflow        = 1'b0;
+
+  if (EnableRacl) begin : gen_racl_log
+    assign racl_error_o.ctn_uid     = top_racl_pkg::tlul_extract_ctn_uid_bits(tl_i.a_user.rsvd);
+    assign racl_error_o.read_access = tl_i.a_opcode == tlul_pkg::Get;
+  end else begin : gen_no_racl_log
+    assign racl_error_o.ctn_uid     = '0;
+    assign racl_error_o.read_access = 1'b0;
+  end
 
   // Check sub-word write is permitted
   always_comb begin
     wr_err = (reg_we &
-              ((addr_hit[ 0] & (|(I2C_PERMIT[ 0] & ~reg_be))) |
-               (addr_hit[ 1] & (|(I2C_PERMIT[ 1] & ~reg_be))) |
-               (addr_hit[ 2] & (|(I2C_PERMIT[ 2] & ~reg_be))) |
-               (addr_hit[ 3] & (|(I2C_PERMIT[ 3] & ~reg_be))) |
-               (addr_hit[ 4] & (|(I2C_PERMIT[ 4] & ~reg_be))) |
-               (addr_hit[ 5] & (|(I2C_PERMIT[ 5] & ~reg_be))) |
-               (addr_hit[ 6] & (|(I2C_PERMIT[ 6] & ~reg_be))) |
-               (addr_hit[ 7] & (|(I2C_PERMIT[ 7] & ~reg_be))) |
-               (addr_hit[ 8] & (|(I2C_PERMIT[ 8] & ~reg_be))) |
-               (addr_hit[ 9] & (|(I2C_PERMIT[ 9] & ~reg_be))) |
-               (addr_hit[10] & (|(I2C_PERMIT[10] & ~reg_be))) |
-               (addr_hit[11] & (|(I2C_PERMIT[11] & ~reg_be))) |
-               (addr_hit[12] & (|(I2C_PERMIT[12] & ~reg_be))) |
-               (addr_hit[13] & (|(I2C_PERMIT[13] & ~reg_be))) |
-               (addr_hit[14] & (|(I2C_PERMIT[14] & ~reg_be))) |
-               (addr_hit[15] & (|(I2C_PERMIT[15] & ~reg_be))) |
-               (addr_hit[16] & (|(I2C_PERMIT[16] & ~reg_be))) |
-               (addr_hit[17] & (|(I2C_PERMIT[17] & ~reg_be))) |
-               (addr_hit[18] & (|(I2C_PERMIT[18] & ~reg_be))) |
-               (addr_hit[19] & (|(I2C_PERMIT[19] & ~reg_be))) |
-               (addr_hit[20] & (|(I2C_PERMIT[20] & ~reg_be))) |
-               (addr_hit[21] & (|(I2C_PERMIT[21] & ~reg_be)))));
+              ((racl_addr_hit_write[ 0] & (|(I2C_PERMIT[ 0] & ~reg_be))) |
+               (racl_addr_hit_write[ 1] & (|(I2C_PERMIT[ 1] & ~reg_be))) |
+               (racl_addr_hit_write[ 2] & (|(I2C_PERMIT[ 2] & ~reg_be))) |
+               (racl_addr_hit_write[ 3] & (|(I2C_PERMIT[ 3] & ~reg_be))) |
+               (racl_addr_hit_write[ 4] & (|(I2C_PERMIT[ 4] & ~reg_be))) |
+               (racl_addr_hit_write[ 5] & (|(I2C_PERMIT[ 5] & ~reg_be))) |
+               (racl_addr_hit_write[ 6] & (|(I2C_PERMIT[ 6] & ~reg_be))) |
+               (racl_addr_hit_write[ 7] & (|(I2C_PERMIT[ 7] & ~reg_be))) |
+               (racl_addr_hit_write[ 8] & (|(I2C_PERMIT[ 8] & ~reg_be))) |
+               (racl_addr_hit_write[ 9] & (|(I2C_PERMIT[ 9] & ~reg_be))) |
+               (racl_addr_hit_write[10] & (|(I2C_PERMIT[10] & ~reg_be))) |
+               (racl_addr_hit_write[11] & (|(I2C_PERMIT[11] & ~reg_be))) |
+               (racl_addr_hit_write[12] & (|(I2C_PERMIT[12] & ~reg_be))) |
+               (racl_addr_hit_write[13] & (|(I2C_PERMIT[13] & ~reg_be))) |
+               (racl_addr_hit_write[14] & (|(I2C_PERMIT[14] & ~reg_be))) |
+               (racl_addr_hit_write[15] & (|(I2C_PERMIT[15] & ~reg_be))) |
+               (racl_addr_hit_write[16] & (|(I2C_PERMIT[16] & ~reg_be))) |
+               (racl_addr_hit_write[17] & (|(I2C_PERMIT[17] & ~reg_be))) |
+               (racl_addr_hit_write[18] & (|(I2C_PERMIT[18] & ~reg_be))) |
+               (racl_addr_hit_write[19] & (|(I2C_PERMIT[19] & ~reg_be))) |
+               (racl_addr_hit_write[20] & (|(I2C_PERMIT[20] & ~reg_be))) |
+               (racl_addr_hit_write[21] & (|(I2C_PERMIT[21] & ~reg_be))) |
+               (racl_addr_hit_write[22] & (|(I2C_PERMIT[22] & ~reg_be))) |
+               (racl_addr_hit_write[23] & (|(I2C_PERMIT[23] & ~reg_be))) |
+               (racl_addr_hit_write[24] & (|(I2C_PERMIT[24] & ~reg_be))) |
+               (racl_addr_hit_write[25] & (|(I2C_PERMIT[25] & ~reg_be))) |
+               (racl_addr_hit_write[26] & (|(I2C_PERMIT[26] & ~reg_be))) |
+               (racl_addr_hit_write[27] & (|(I2C_PERMIT[27] & ~reg_be))) |
+               (racl_addr_hit_write[28] & (|(I2C_PERMIT[28] & ~reg_be))) |
+               (racl_addr_hit_write[29] & (|(I2C_PERMIT[29] & ~reg_be))) |
+               (racl_addr_hit_write[30] & (|(I2C_PERMIT[30] & ~reg_be))) |
+               (racl_addr_hit_write[31] & (|(I2C_PERMIT[31] & ~reg_be)))));
   end
 
   // Generate write-enables
-  assign intr_state_we = addr_hit[0] & reg_we & !reg_error;
-
-  assign intr_state_fmt_threshold_wd = reg_wdata[0];
-
-  assign intr_state_rx_threshold_wd = reg_wdata[1];
-
-  assign intr_state_fmt_overflow_wd = reg_wdata[2];
+  assign intr_state_we = racl_addr_hit_write[0] & reg_we & !reg_error;
 
   assign intr_state_rx_overflow_wd = reg_wdata[3];
-
-  assign intr_state_nak_wd = reg_wdata[4];
 
   assign intr_state_scl_interference_wd = reg_wdata[5];
 
@@ -2731,22 +3656,20 @@ module i2c_reg_top (
 
   assign intr_state_cmd_complete_wd = reg_wdata[9];
 
-  assign intr_state_tx_overflow_wd = reg_wdata[11];
-
   assign intr_state_unexp_stop_wd = reg_wdata[13];
 
   assign intr_state_host_timeout_wd = reg_wdata[14];
-  assign intr_enable_we = addr_hit[1] & reg_we & !reg_error;
+  assign intr_enable_we = racl_addr_hit_write[1] & reg_we & !reg_error;
 
   assign intr_enable_fmt_threshold_wd = reg_wdata[0];
 
   assign intr_enable_rx_threshold_wd = reg_wdata[1];
 
-  assign intr_enable_fmt_overflow_wd = reg_wdata[2];
+  assign intr_enable_acq_threshold_wd = reg_wdata[2];
 
   assign intr_enable_rx_overflow_wd = reg_wdata[3];
 
-  assign intr_enable_nak_wd = reg_wdata[4];
+  assign intr_enable_controller_halt_wd = reg_wdata[4];
 
   assign intr_enable_scl_interference_wd = reg_wdata[5];
 
@@ -2760,24 +3683,24 @@ module i2c_reg_top (
 
   assign intr_enable_tx_stretch_wd = reg_wdata[10];
 
-  assign intr_enable_tx_overflow_wd = reg_wdata[11];
+  assign intr_enable_tx_threshold_wd = reg_wdata[11];
 
-  assign intr_enable_acq_full_wd = reg_wdata[12];
+  assign intr_enable_acq_stretch_wd = reg_wdata[12];
 
   assign intr_enable_unexp_stop_wd = reg_wdata[13];
 
   assign intr_enable_host_timeout_wd = reg_wdata[14];
-  assign intr_test_we = addr_hit[2] & reg_we & !reg_error;
+  assign intr_test_we = racl_addr_hit_write[2] & reg_we & !reg_error;
 
   assign intr_test_fmt_threshold_wd = reg_wdata[0];
 
   assign intr_test_rx_threshold_wd = reg_wdata[1];
 
-  assign intr_test_fmt_overflow_wd = reg_wdata[2];
+  assign intr_test_acq_threshold_wd = reg_wdata[2];
 
   assign intr_test_rx_overflow_wd = reg_wdata[3];
 
-  assign intr_test_nak_wd = reg_wdata[4];
+  assign intr_test_controller_halt_wd = reg_wdata[4];
 
   assign intr_test_scl_interference_wd = reg_wdata[5];
 
@@ -2791,26 +3714,36 @@ module i2c_reg_top (
 
   assign intr_test_tx_stretch_wd = reg_wdata[10];
 
-  assign intr_test_tx_overflow_wd = reg_wdata[11];
+  assign intr_test_tx_threshold_wd = reg_wdata[11];
 
-  assign intr_test_acq_full_wd = reg_wdata[12];
+  assign intr_test_acq_stretch_wd = reg_wdata[12];
 
   assign intr_test_unexp_stop_wd = reg_wdata[13];
 
   assign intr_test_host_timeout_wd = reg_wdata[14];
-  assign alert_test_we = addr_hit[3] & reg_we & !reg_error;
+  assign alert_test_we = racl_addr_hit_write[3] & reg_we & !reg_error;
 
-  assign alert_test_wd = reg_wdata[0];
-  assign ctrl_we = addr_hit[4] & reg_we & !reg_error;
+  assign alert_test_fatal_fault_wd = reg_wdata[0];
+
+  assign alert_test_regwen_wd = reg_wdata[31];
+  assign ctrl_we = racl_addr_hit_write[4] & reg_we & !reg_error;
 
   assign ctrl_enablehost_wd = reg_wdata[0];
 
   assign ctrl_enabletarget_wd = reg_wdata[1];
 
   assign ctrl_llpbk_wd = reg_wdata[2];
-  assign status_re = addr_hit[5] & reg_re & !reg_error;
-  assign rdata_re = addr_hit[6] & reg_re & !reg_error;
-  assign fdata_we = addr_hit[7] & reg_we & !reg_error;
+
+  assign ctrl_nack_addr_after_timeout_wd = reg_wdata[3];
+
+  assign ctrl_ack_ctrl_en_wd = reg_wdata[4];
+
+  assign ctrl_multi_controller_monitor_en_wd = reg_wdata[5];
+
+  assign ctrl_tx_stretch_ctrl_en_wd = reg_wdata[6];
+  assign status_re = racl_addr_hit_read[5] & reg_re & !reg_error;
+  assign rdata_re = racl_addr_hit_read[6] & reg_re & !reg_error;
+  assign fdata_we = racl_addr_hit_write[7] & reg_we & !reg_error;
 
   assign fdata_fbyte_wd = reg_wdata[7:0];
 
@@ -2818,64 +3751,73 @@ module i2c_reg_top (
 
   assign fdata_stop_wd = reg_wdata[9];
 
-  assign fdata_read_wd = reg_wdata[10];
+  assign fdata_readb_wd = reg_wdata[10];
 
   assign fdata_rcont_wd = reg_wdata[11];
 
   assign fdata_nakok_wd = reg_wdata[12];
-  assign fifo_ctrl_we = addr_hit[8] & reg_we & !reg_error;
+  assign fifo_ctrl_we = racl_addr_hit_write[8] & reg_we & !reg_error;
 
   assign fifo_ctrl_rxrst_wd = reg_wdata[0];
 
   assign fifo_ctrl_fmtrst_wd = reg_wdata[1];
 
-  assign fifo_ctrl_rxilvl_wd = reg_wdata[4:2];
-
-  assign fifo_ctrl_fmtilvl_wd = reg_wdata[6:5];
-
   assign fifo_ctrl_acqrst_wd = reg_wdata[7];
 
   assign fifo_ctrl_txrst_wd = reg_wdata[8];
-  assign fifo_status_re = addr_hit[9] & reg_re & !reg_error;
-  assign ovrd_we = addr_hit[10] & reg_we & !reg_error;
+  assign host_fifo_config_we = racl_addr_hit_write[9] & reg_we & !reg_error;
+
+  assign host_fifo_config_rx_thresh_wd = reg_wdata[11:0];
+
+  assign host_fifo_config_fmt_thresh_wd = reg_wdata[27:16];
+  assign target_fifo_config_we = racl_addr_hit_write[10] & reg_we & !reg_error;
+
+  assign target_fifo_config_tx_thresh_wd = reg_wdata[11:0];
+
+  assign target_fifo_config_acq_thresh_wd = reg_wdata[27:16];
+  assign host_fifo_status_re = racl_addr_hit_read[11] & reg_re & !reg_error;
+  assign target_fifo_status_re = racl_addr_hit_read[12] & reg_re & !reg_error;
+  assign ovrd_we = racl_addr_hit_write[13] & reg_we & !reg_error;
 
   assign ovrd_txovrden_wd = reg_wdata[0];
 
   assign ovrd_sclval_wd = reg_wdata[1];
 
   assign ovrd_sdaval_wd = reg_wdata[2];
-  assign val_re = addr_hit[11] & reg_re & !reg_error;
-  assign timing0_we = addr_hit[12] & reg_we & !reg_error;
+  assign val_re = racl_addr_hit_read[14] & reg_re & !reg_error;
+  assign timing0_we = racl_addr_hit_write[15] & reg_we & !reg_error;
 
-  assign timing0_thigh_wd = reg_wdata[15:0];
+  assign timing0_thigh_wd = reg_wdata[12:0];
 
-  assign timing0_tlow_wd = reg_wdata[31:16];
-  assign timing1_we = addr_hit[13] & reg_we & !reg_error;
+  assign timing0_tlow_wd = reg_wdata[28:16];
+  assign timing1_we = racl_addr_hit_write[16] & reg_we & !reg_error;
 
-  assign timing1_t_r_wd = reg_wdata[15:0];
+  assign timing1_t_r_wd = reg_wdata[9:0];
 
-  assign timing1_t_f_wd = reg_wdata[31:16];
-  assign timing2_we = addr_hit[14] & reg_we & !reg_error;
+  assign timing1_t_f_wd = reg_wdata[24:16];
+  assign timing2_we = racl_addr_hit_write[17] & reg_we & !reg_error;
 
-  assign timing2_tsu_sta_wd = reg_wdata[15:0];
+  assign timing2_tsu_sta_wd = reg_wdata[12:0];
 
-  assign timing2_thd_sta_wd = reg_wdata[31:16];
-  assign timing3_we = addr_hit[15] & reg_we & !reg_error;
+  assign timing2_thd_sta_wd = reg_wdata[28:16];
+  assign timing3_we = racl_addr_hit_write[18] & reg_we & !reg_error;
 
-  assign timing3_tsu_dat_wd = reg_wdata[15:0];
+  assign timing3_tsu_dat_wd = reg_wdata[8:0];
 
-  assign timing3_thd_dat_wd = reg_wdata[31:16];
-  assign timing4_we = addr_hit[16] & reg_we & !reg_error;
+  assign timing3_thd_dat_wd = reg_wdata[28:16];
+  assign timing4_we = racl_addr_hit_write[19] & reg_we & !reg_error;
 
-  assign timing4_tsu_sto_wd = reg_wdata[15:0];
+  assign timing4_tsu_sto_wd = reg_wdata[12:0];
 
-  assign timing4_t_buf_wd = reg_wdata[31:16];
-  assign timeout_ctrl_we = addr_hit[17] & reg_we & !reg_error;
+  assign timing4_t_buf_wd = reg_wdata[28:16];
+  assign timeout_ctrl_we = racl_addr_hit_write[20] & reg_we & !reg_error;
 
-  assign timeout_ctrl_val_wd = reg_wdata[30:0];
+  assign timeout_ctrl_val_wd = reg_wdata[29:0];
+
+  assign timeout_ctrl_mode_wd = reg_wdata[30];
 
   assign timeout_ctrl_en_wd = reg_wdata[31];
-  assign target_id_we = addr_hit[18] & reg_we & !reg_error;
+  assign target_id_we = racl_addr_hit_write[21] & reg_we & !reg_error;
 
   assign target_id_address0_wd = reg_wdata[6:0];
 
@@ -2884,17 +3826,52 @@ module i2c_reg_top (
   assign target_id_address1_wd = reg_wdata[20:14];
 
   assign target_id_mask1_wd = reg_wdata[27:21];
-  assign acqdata_re = addr_hit[19] & reg_re & !reg_error;
-  assign txdata_we = addr_hit[20] & reg_we & !reg_error;
+  assign acqdata_re = racl_addr_hit_read[22] & reg_re & !reg_error;
+  assign txdata_we = racl_addr_hit_write[23] & reg_we & !reg_error;
 
   assign txdata_wd = reg_wdata[7:0];
-  assign host_timeout_ctrl_we = addr_hit[21] & reg_we & !reg_error;
+  assign host_timeout_ctrl_we = racl_addr_hit_write[24] & reg_we & !reg_error;
 
-  assign host_timeout_ctrl_wd = reg_wdata[31:0];
+  assign host_timeout_ctrl_wd = reg_wdata[19:0];
+  assign target_timeout_ctrl_we = racl_addr_hit_write[25] & reg_we & !reg_error;
+
+  assign target_timeout_ctrl_val_wd = reg_wdata[30:0];
+
+  assign target_timeout_ctrl_en_wd = reg_wdata[31];
+  assign target_nack_count_re = racl_addr_hit_read[26] & reg_re & !reg_error;
+
+  assign target_nack_count_wd = '1;
+  assign target_ack_ctrl_re = racl_addr_hit_read[27] & reg_re & !reg_error;
+  assign target_ack_ctrl_we = racl_addr_hit_write[27] & reg_we & !reg_error;
+
+  assign target_ack_ctrl_nbytes_wd = reg_wdata[8:0];
+
+  assign target_ack_ctrl_nack_wd = reg_wdata[31];
+  assign acq_fifo_next_data_re = racl_addr_hit_read[28] & reg_re & !reg_error;
+  assign host_nack_handler_timeout_we = racl_addr_hit_write[29] & reg_we & !reg_error;
+
+  assign host_nack_handler_timeout_val_wd = reg_wdata[30:0];
+
+  assign host_nack_handler_timeout_en_wd = reg_wdata[31];
+  assign controller_events_we = racl_addr_hit_write[30] & reg_we & !reg_error;
+
+  assign controller_events_nack_wd = reg_wdata[0];
+
+  assign controller_events_unhandled_nack_timeout_wd = reg_wdata[1];
+
+  assign controller_events_bus_timeout_wd = reg_wdata[2];
+
+  assign controller_events_arbitration_lost_wd = reg_wdata[3];
+  assign target_events_we = racl_addr_hit_write[31] & reg_we & !reg_error;
+
+  assign target_events_tx_pending_wd = reg_wdata[0];
+
+  assign target_events_bus_timeout_wd = reg_wdata[1];
+
+  assign target_events_arbitration_lost_wd = reg_wdata[2];
 
   // Assign write-enables to checker logic vector.
   always_comb begin
-    reg_we_check = '0;
     reg_we_check[0] = intr_state_we;
     reg_we_check[1] = intr_enable_we;
     reg_we_check[2] = intr_test_we;
@@ -2904,62 +3881,72 @@ module i2c_reg_top (
     reg_we_check[6] = 1'b0;
     reg_we_check[7] = fdata_we;
     reg_we_check[8] = fifo_ctrl_we;
-    reg_we_check[9] = 1'b0;
-    reg_we_check[10] = ovrd_we;
+    reg_we_check[9] = host_fifo_config_we;
+    reg_we_check[10] = target_fifo_config_we;
     reg_we_check[11] = 1'b0;
-    reg_we_check[12] = timing0_we;
-    reg_we_check[13] = timing1_we;
-    reg_we_check[14] = timing2_we;
-    reg_we_check[15] = timing3_we;
-    reg_we_check[16] = timing4_we;
-    reg_we_check[17] = timeout_ctrl_we;
-    reg_we_check[18] = target_id_we;
-    reg_we_check[19] = 1'b0;
-    reg_we_check[20] = txdata_we;
-    reg_we_check[21] = host_timeout_ctrl_we;
+    reg_we_check[12] = 1'b0;
+    reg_we_check[13] = ovrd_we;
+    reg_we_check[14] = 1'b0;
+    reg_we_check[15] = timing0_we;
+    reg_we_check[16] = timing1_we;
+    reg_we_check[17] = timing2_we;
+    reg_we_check[18] = timing3_we;
+    reg_we_check[19] = timing4_we;
+    reg_we_check[20] = timeout_ctrl_we;
+    reg_we_check[21] = target_id_we;
+    reg_we_check[22] = 1'b0;
+    reg_we_check[23] = txdata_we;
+    reg_we_check[24] = host_timeout_ctrl_we;
+    reg_we_check[25] = target_timeout_ctrl_we;
+    reg_we_check[26] = 1'b0;
+    reg_we_check[27] = target_ack_ctrl_we;
+    reg_we_check[28] = 1'b0;
+    reg_we_check[29] = host_nack_handler_timeout_we;
+    reg_we_check[30] = controller_events_we;
+    reg_we_check[31] = target_events_we;
   end
 
   // Read data return
   always_comb begin
     reg_rdata_next = '0;
     unique case (1'b1)
-      addr_hit[0]: begin
+      racl_addr_hit_read[0]: begin
         reg_rdata_next[0] = intr_state_fmt_threshold_qs;
         reg_rdata_next[1] = intr_state_rx_threshold_qs;
-        reg_rdata_next[2] = intr_state_fmt_overflow_qs;
+        reg_rdata_next[2] = intr_state_acq_threshold_qs;
         reg_rdata_next[3] = intr_state_rx_overflow_qs;
-        reg_rdata_next[4] = intr_state_nak_qs;
+        reg_rdata_next[4] = intr_state_controller_halt_qs;
         reg_rdata_next[5] = intr_state_scl_interference_qs;
         reg_rdata_next[6] = intr_state_sda_interference_qs;
         reg_rdata_next[7] = intr_state_stretch_timeout_qs;
         reg_rdata_next[8] = intr_state_sda_unstable_qs;
         reg_rdata_next[9] = intr_state_cmd_complete_qs;
         reg_rdata_next[10] = intr_state_tx_stretch_qs;
-        reg_rdata_next[11] = intr_state_tx_overflow_qs;
-        reg_rdata_next[12] = intr_state_acq_full_qs;
+        reg_rdata_next[11] = intr_state_tx_threshold_qs;
+        reg_rdata_next[12] = intr_state_acq_stretch_qs;
         reg_rdata_next[13] = intr_state_unexp_stop_qs;
         reg_rdata_next[14] = intr_state_host_timeout_qs;
       end
 
-      addr_hit[1]: begin
+      racl_addr_hit_read[1]: begin
         reg_rdata_next[0] = intr_enable_fmt_threshold_qs;
         reg_rdata_next[1] = intr_enable_rx_threshold_qs;
-        reg_rdata_next[2] = intr_enable_fmt_overflow_qs;
+        reg_rdata_next[2] = intr_enable_acq_threshold_qs;
         reg_rdata_next[3] = intr_enable_rx_overflow_qs;
-        reg_rdata_next[4] = intr_enable_nak_qs;
+        reg_rdata_next[4] = intr_enable_controller_halt_qs;
         reg_rdata_next[5] = intr_enable_scl_interference_qs;
         reg_rdata_next[6] = intr_enable_sda_interference_qs;
         reg_rdata_next[7] = intr_enable_stretch_timeout_qs;
         reg_rdata_next[8] = intr_enable_sda_unstable_qs;
         reg_rdata_next[9] = intr_enable_cmd_complete_qs;
         reg_rdata_next[10] = intr_enable_tx_stretch_qs;
-        reg_rdata_next[11] = intr_enable_tx_overflow_qs;
-        reg_rdata_next[12] = intr_enable_acq_full_qs;
+        reg_rdata_next[11] = intr_enable_tx_threshold_qs;
+        reg_rdata_next[12] = intr_enable_acq_stretch_qs;
         reg_rdata_next[13] = intr_enable_unexp_stop_qs;
         reg_rdata_next[14] = intr_enable_host_timeout_qs;
       end
 
-      addr_hit[2]: begin
+      racl_addr_hit_read[2]: begin
         reg_rdata_next[0] = '0;
         reg_rdata_next[1] = '0;
         reg_rdata_next[2] = '0;
@@ -2977,17 +3964,22 @@ module i2c_reg_top (
         reg_rdata_next[14] = '0;
       end
 
-      addr_hit[3]: begin
+      racl_addr_hit_read[3]: begin
         reg_rdata_next[0] = '0;
+        reg_rdata_next[31] = alert_test_regwen_qs;
       end
 
-      addr_hit[4]: begin
+      racl_addr_hit_read[4]: begin
         reg_rdata_next[0] = ctrl_enablehost_qs;
         reg_rdata_next[1] = ctrl_enabletarget_qs;
         reg_rdata_next[2] = ctrl_llpbk_qs;
+        reg_rdata_next[3] = ctrl_nack_addr_after_timeout_qs;
+        reg_rdata_next[4] = ctrl_ack_ctrl_en_qs;
+        reg_rdata_next[5] = ctrl_multi_controller_monitor_en_qs;
+        reg_rdata_next[6] = ctrl_tx_stretch_ctrl_en_qs;
       end
 
-      addr_hit[5]: begin
+      racl_addr_hit_read[5]: begin
         reg_rdata_next[0] = status_fmtfull_qs;
         reg_rdata_next[1] = status_rxfull_qs;
         reg_rdata_next[2] = status_fmtempty_qs;
@@ -2998,13 +3990,14 @@ module i2c_reg_top (
         reg_rdata_next[7] = status_acqfull_qs;
         reg_rdata_next[8] = status_txempty_qs;
         reg_rdata_next[9] = status_acqempty_qs;
+        reg_rdata_next[10] = status_ack_ctrl_stretch_qs;
       end
 
-      addr_hit[6]: begin
+      racl_addr_hit_read[6]: begin
         reg_rdata_next[7:0] = rdata_qs;
       end
 
-      addr_hit[7]: begin
+      racl_addr_hit_read[7]: begin
         reg_rdata_next[7:0] = '0;
         reg_rdata_next[8] = '0;
         reg_rdata_next[9] = '0;
@@ -3013,81 +4006,129 @@ module i2c_reg_top (
         reg_rdata_next[12] = '0;
       end
 
-      addr_hit[8]: begin
+      racl_addr_hit_read[8]: begin
         reg_rdata_next[0] = '0;
         reg_rdata_next[1] = '0;
-        reg_rdata_next[4:2] = fifo_ctrl_rxilvl_qs;
-        reg_rdata_next[6:5] = fifo_ctrl_fmtilvl_qs;
         reg_rdata_next[7] = '0;
         reg_rdata_next[8] = '0;
       end
 
-      addr_hit[9]: begin
-        reg_rdata_next[6:0] = fifo_status_fmtlvl_qs;
-        reg_rdata_next[14:8] = fifo_status_txlvl_qs;
-        reg_rdata_next[22:16] = fifo_status_rxlvl_qs;
-        reg_rdata_next[30:24] = fifo_status_acqlvl_qs;
+      racl_addr_hit_read[9]: begin
+        reg_rdata_next[11:0] = host_fifo_config_rx_thresh_qs;
+        reg_rdata_next[27:16] = host_fifo_config_fmt_thresh_qs;
       end
 
-      addr_hit[10]: begin
+      racl_addr_hit_read[10]: begin
+        reg_rdata_next[11:0] = target_fifo_config_tx_thresh_qs;
+        reg_rdata_next[27:16] = target_fifo_config_acq_thresh_qs;
+      end
+
+      racl_addr_hit_read[11]: begin
+        reg_rdata_next[11:0] = host_fifo_status_fmtlvl_qs;
+        reg_rdata_next[27:16] = host_fifo_status_rxlvl_qs;
+      end
+
+      racl_addr_hit_read[12]: begin
+        reg_rdata_next[11:0] = target_fifo_status_txlvl_qs;
+        reg_rdata_next[27:16] = target_fifo_status_acqlvl_qs;
+      end
+
+      racl_addr_hit_read[13]: begin
         reg_rdata_next[0] = ovrd_txovrden_qs;
         reg_rdata_next[1] = ovrd_sclval_qs;
         reg_rdata_next[2] = ovrd_sdaval_qs;
       end
 
-      addr_hit[11]: begin
+      racl_addr_hit_read[14]: begin
         reg_rdata_next[15:0] = val_scl_rx_qs;
         reg_rdata_next[31:16] = val_sda_rx_qs;
       end
 
-      addr_hit[12]: begin
-        reg_rdata_next[15:0] = timing0_thigh_qs;
-        reg_rdata_next[31:16] = timing0_tlow_qs;
+      racl_addr_hit_read[15]: begin
+        reg_rdata_next[12:0] = timing0_thigh_qs;
+        reg_rdata_next[28:16] = timing0_tlow_qs;
       end
 
-      addr_hit[13]: begin
-        reg_rdata_next[15:0] = timing1_t_r_qs;
-        reg_rdata_next[31:16] = timing1_t_f_qs;
+      racl_addr_hit_read[16]: begin
+        reg_rdata_next[9:0] = timing1_t_r_qs;
+        reg_rdata_next[24:16] = timing1_t_f_qs;
       end
 
-      addr_hit[14]: begin
-        reg_rdata_next[15:0] = timing2_tsu_sta_qs;
-        reg_rdata_next[31:16] = timing2_thd_sta_qs;
+      racl_addr_hit_read[17]: begin
+        reg_rdata_next[12:0] = timing2_tsu_sta_qs;
+        reg_rdata_next[28:16] = timing2_thd_sta_qs;
       end
 
-      addr_hit[15]: begin
-        reg_rdata_next[15:0] = timing3_tsu_dat_qs;
-        reg_rdata_next[31:16] = timing3_thd_dat_qs;
+      racl_addr_hit_read[18]: begin
+        reg_rdata_next[8:0] = timing3_tsu_dat_qs;
+        reg_rdata_next[28:16] = timing3_thd_dat_qs;
       end
 
-      addr_hit[16]: begin
-        reg_rdata_next[15:0] = timing4_tsu_sto_qs;
-        reg_rdata_next[31:16] = timing4_t_buf_qs;
+      racl_addr_hit_read[19]: begin
+        reg_rdata_next[12:0] = timing4_tsu_sto_qs;
+        reg_rdata_next[28:16] = timing4_t_buf_qs;
       end
 
-      addr_hit[17]: begin
-        reg_rdata_next[30:0] = timeout_ctrl_val_qs;
+      racl_addr_hit_read[20]: begin
+        reg_rdata_next[29:0] = timeout_ctrl_val_qs;
+        reg_rdata_next[30] = timeout_ctrl_mode_qs;
         reg_rdata_next[31] = timeout_ctrl_en_qs;
       end
 
-      addr_hit[18]: begin
+      racl_addr_hit_read[21]: begin
         reg_rdata_next[6:0] = target_id_address0_qs;
         reg_rdata_next[13:7] = target_id_mask0_qs;
         reg_rdata_next[20:14] = target_id_address1_qs;
         reg_rdata_next[27:21] = target_id_mask1_qs;
       end
 
-      addr_hit[19]: begin
+      racl_addr_hit_read[22]: begin
         reg_rdata_next[7:0] = acqdata_abyte_qs;
-        reg_rdata_next[9:8] = acqdata_signal_qs;
+        reg_rdata_next[10:8] = acqdata_signal_qs;
       end
 
-      addr_hit[20]: begin
+      racl_addr_hit_read[23]: begin
         reg_rdata_next[7:0] = '0;
       end
 
-      addr_hit[21]: begin
-        reg_rdata_next[31:0] = host_timeout_ctrl_qs;
+      racl_addr_hit_read[24]: begin
+        reg_rdata_next[19:0] = host_timeout_ctrl_qs;
+      end
+
+      racl_addr_hit_read[25]: begin
+        reg_rdata_next[30:0] = target_timeout_ctrl_val_qs;
+        reg_rdata_next[31] = target_timeout_ctrl_en_qs;
+      end
+
+      racl_addr_hit_read[26]: begin
+        reg_rdata_next[7:0] = target_nack_count_qs;
+      end
+
+      racl_addr_hit_read[27]: begin
+        reg_rdata_next[8:0] = target_ack_ctrl_nbytes_qs;
+        reg_rdata_next[31] = '0;
+      end
+
+      racl_addr_hit_read[28]: begin
+        reg_rdata_next[7:0] = acq_fifo_next_data_qs;
+      end
+
+      racl_addr_hit_read[29]: begin
+        reg_rdata_next[30:0] = host_nack_handler_timeout_val_qs;
+        reg_rdata_next[31] = host_nack_handler_timeout_en_qs;
+      end
+
+      racl_addr_hit_read[30]: begin
+        reg_rdata_next[0] = controller_events_nack_qs;
+        reg_rdata_next[1] = controller_events_unhandled_nack_timeout_qs;
+        reg_rdata_next[2] = controller_events_bus_timeout_qs;
+        reg_rdata_next[3] = controller_events_arbitration_lost_qs;
+      end
+
+      racl_addr_hit_read[31]: begin
+        reg_rdata_next[0] = target_events_tx_pending_qs;
+        reg_rdata_next[1] = target_events_bus_timeout_qs;
+        reg_rdata_next[2] = target_events_arbitration_lost_qs;
       end
 
       default: begin
@@ -3111,6 +4152,8 @@ module i2c_reg_top (
   logic unused_be;
   assign unused_wdata = ^reg_wdata;
   assign unused_be = ^reg_be;
+  logic unused_policy_sel;
+  assign unused_policy_sel = ^racl_policies_i;
 
   // Assertions for Register Interface
   `ASSERT_PULSE(wePulse, reg_we, clk_i, !rst_ni)

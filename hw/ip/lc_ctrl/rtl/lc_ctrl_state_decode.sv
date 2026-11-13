@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -63,7 +63,7 @@ module lc_ctrl_state_decode
       PostTransSt: dec_lc_state = {DecLcStateNumRep{DecLcStPostTrans}};
       InvalidSt:   dec_lc_state = {DecLcStateNumRep{DecLcStInvalid}};
       ScrapSt:     dec_lc_state = {DecLcStateNumRep{DecLcStScrap}};
-      // Otherwise check and decode the life cycle state continously.
+      // Otherwise check and decode the life cycle state continuously.
       default: begin
         // Note that we require that the valid signal from OTP is
         // asserted at all times except when the LC controller is in ResetSt.
@@ -147,7 +147,7 @@ module lc_ctrl_state_decode
         // We can't have a personalized device that is
         // still in RAW or any of the test states.
         // SEC_CM: MANUF.STATE.BKGN_CHK
-        if ((secrets_valid_i == On) &&
+        if (lc_tx_test_true_strict(secrets_valid_i) &&
             !(lc_state_i inside {LcStDev,
                                  LcStProd,
                                  LcStProdEnd,

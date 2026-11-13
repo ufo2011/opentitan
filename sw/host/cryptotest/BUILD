@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@ rust_library(
     name = "cryptotest_parser",
     srcs = ["cryptotest_parser.rs"],
     deps = [
-        "@crate_index//:lazy_static",
         "@crate_index//:regex",
         "@crate_index//:thiserror",
     ],

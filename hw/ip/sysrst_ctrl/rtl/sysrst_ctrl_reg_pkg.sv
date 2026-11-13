@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -8,12 +8,21 @@ package sysrst_ctrl_reg_pkg;
 
   // Param list
   parameter int NumCombo = 4;
+  parameter int NumKeyIntr = 7;
   parameter int TimerWidth = 16;
   parameter int DetTimerWidth = 32;
   parameter int NumAlerts = 1;
 
   // Address widths within the block
   parameter int BlockAw = 8;
+
+  // Number of registers for every interface
+  parameter int NumRegs = 43;
+
+  // Alert indices
+  typedef enum int {
+    AlertFatalFaultIdx = 0
+  } sysrst_ctrl_alert_idx_t;
 
   ////////////////////////////
   // Typedefs for registers //
@@ -59,195 +68,199 @@ package sysrst_ctrl_reg_pkg;
 
   typedef struct packed {
     logic        q;
+  } sysrst_ctrl_reg2hw_ulp_status_reg_t;
+
+  typedef struct packed {
+    logic        q;
   } sysrst_ctrl_reg2hw_wkup_status_reg_t;
 
   typedef struct packed {
     struct packed {
       logic        q;
-    } key0_in;
-    struct packed {
-      logic        q;
-    } key0_out;
-    struct packed {
-      logic        q;
-    } key1_in;
-    struct packed {
-      logic        q;
-    } key1_out;
-    struct packed {
-      logic        q;
-    } key2_in;
-    struct packed {
-      logic        q;
-    } key2_out;
-    struct packed {
-      logic        q;
-    } pwrb_in;
-    struct packed {
-      logic        q;
-    } pwrb_out;
-    struct packed {
-      logic        q;
-    } ac_present;
-    struct packed {
-      logic        q;
-    } bat_disable;
+    } z3_wakeup;
     struct packed {
       logic        q;
     } lid_open;
     struct packed {
       logic        q;
-    } z3_wakeup;
+    } bat_disable;
+    struct packed {
+      logic        q;
+    } ac_present;
+    struct packed {
+      logic        q;
+    } pwrb_out;
+    struct packed {
+      logic        q;
+    } pwrb_in;
+    struct packed {
+      logic        q;
+    } key2_out;
+    struct packed {
+      logic        q;
+    } key2_in;
+    struct packed {
+      logic        q;
+    } key1_out;
+    struct packed {
+      logic        q;
+    } key1_in;
+    struct packed {
+      logic        q;
+    } key0_out;
+    struct packed {
+      logic        q;
+    } key0_in;
   } sysrst_ctrl_reg2hw_key_invert_ctl_reg_t;
 
   typedef struct packed {
     struct packed {
       logic        q;
-    } bat_disable_0;
-    struct packed {
-      logic        q;
-    } ec_rst_l_0;
-    struct packed {
-      logic        q;
-    } pwrb_out_0;
-    struct packed {
-      logic        q;
-    } key0_out_0;
-    struct packed {
-      logic        q;
-    } key1_out_0;
-    struct packed {
-      logic        q;
-    } key2_out_0;
-    struct packed {
-      logic        q;
-    } z3_wakeup_0;
-    struct packed {
-      logic        q;
-    } flash_wp_l_0;
-    struct packed {
-      logic        q;
-    } bat_disable_1;
-    struct packed {
-      logic        q;
-    } ec_rst_l_1;
-    struct packed {
-      logic        q;
-    } pwrb_out_1;
-    struct packed {
-      logic        q;
-    } key0_out_1;
-    struct packed {
-      logic        q;
-    } key1_out_1;
-    struct packed {
-      logic        q;
-    } key2_out_1;
+    } flash_wp_l_1;
     struct packed {
       logic        q;
     } z3_wakeup_1;
     struct packed {
       logic        q;
-    } flash_wp_l_1;
+    } key2_out_1;
+    struct packed {
+      logic        q;
+    } key1_out_1;
+    struct packed {
+      logic        q;
+    } key0_out_1;
+    struct packed {
+      logic        q;
+    } pwrb_out_1;
+    struct packed {
+      logic        q;
+    } ec_rst_l_1;
+    struct packed {
+      logic        q;
+    } bat_disable_1;
+    struct packed {
+      logic        q;
+    } flash_wp_l_0;
+    struct packed {
+      logic        q;
+    } z3_wakeup_0;
+    struct packed {
+      logic        q;
+    } key2_out_0;
+    struct packed {
+      logic        q;
+    } key1_out_0;
+    struct packed {
+      logic        q;
+    } key0_out_0;
+    struct packed {
+      logic        q;
+    } pwrb_out_0;
+    struct packed {
+      logic        q;
+    } ec_rst_l_0;
+    struct packed {
+      logic        q;
+    } bat_disable_0;
   } sysrst_ctrl_reg2hw_pin_allowed_ctl_reg_t;
 
   typedef struct packed {
     struct packed {
       logic        q;
-    } bat_disable;
-    struct packed {
-      logic        q;
-    } ec_rst_l;
-    struct packed {
-      logic        q;
-    } pwrb_out;
-    struct packed {
-      logic        q;
-    } key0_out;
-    struct packed {
-      logic        q;
-    } key1_out;
-    struct packed {
-      logic        q;
-    } key2_out;
+    } flash_wp_l;
     struct packed {
       logic        q;
     } z3_wakeup;
     struct packed {
       logic        q;
-    } flash_wp_l;
+    } key2_out;
+    struct packed {
+      logic        q;
+    } key1_out;
+    struct packed {
+      logic        q;
+    } key0_out;
+    struct packed {
+      logic        q;
+    } pwrb_out;
+    struct packed {
+      logic        q;
+    } ec_rst_l;
+    struct packed {
+      logic        q;
+    } bat_disable;
   } sysrst_ctrl_reg2hw_pin_out_ctl_reg_t;
 
   typedef struct packed {
     struct packed {
       logic        q;
-    } bat_disable;
-    struct packed {
-      logic        q;
-    } ec_rst_l;
-    struct packed {
-      logic        q;
-    } pwrb_out;
-    struct packed {
-      logic        q;
-    } key0_out;
-    struct packed {
-      logic        q;
-    } key1_out;
-    struct packed {
-      logic        q;
-    } key2_out;
+    } flash_wp_l;
     struct packed {
       logic        q;
     } z3_wakeup;
     struct packed {
       logic        q;
-    } flash_wp_l;
+    } key2_out;
+    struct packed {
+      logic        q;
+    } key1_out;
+    struct packed {
+      logic        q;
+    } key0_out;
+    struct packed {
+      logic        q;
+    } pwrb_out;
+    struct packed {
+      logic        q;
+    } ec_rst_l;
+    struct packed {
+      logic        q;
+    } bat_disable;
   } sysrst_ctrl_reg2hw_pin_out_value_reg_t;
 
   typedef struct packed {
     struct packed {
       logic        q;
-    } pwrb_in_h2l;
-    struct packed {
-      logic        q;
-    } key0_in_h2l;
-    struct packed {
-      logic        q;
-    } key1_in_h2l;
-    struct packed {
-      logic        q;
-    } key2_in_h2l;
-    struct packed {
-      logic        q;
-    } ac_present_h2l;
-    struct packed {
-      logic        q;
-    } ec_rst_l_h2l;
-    struct packed {
-      logic        q;
-    } flash_wp_l_h2l;
-    struct packed {
-      logic        q;
-    } pwrb_in_l2h;
-    struct packed {
-      logic        q;
-    } key0_in_l2h;
-    struct packed {
-      logic        q;
-    } key1_in_l2h;
-    struct packed {
-      logic        q;
-    } key2_in_l2h;
-    struct packed {
-      logic        q;
-    } ac_present_l2h;
+    } flash_wp_l_l2h;
     struct packed {
       logic        q;
     } ec_rst_l_l2h;
     struct packed {
       logic        q;
-    } flash_wp_l_l2h;
+    } ac_present_l2h;
+    struct packed {
+      logic        q;
+    } key2_in_l2h;
+    struct packed {
+      logic        q;
+    } key1_in_l2h;
+    struct packed {
+      logic        q;
+    } key0_in_l2h;
+    struct packed {
+      logic        q;
+    } pwrb_in_l2h;
+    struct packed {
+      logic        q;
+    } flash_wp_l_h2l;
+    struct packed {
+      logic        q;
+    } ec_rst_l_h2l;
+    struct packed {
+      logic        q;
+    } ac_present_h2l;
+    struct packed {
+      logic        q;
+    } key2_in_h2l;
+    struct packed {
+      logic        q;
+    } key1_in_h2l;
+    struct packed {
+      logic        q;
+    } key0_in_h2l;
+    struct packed {
+      logic        q;
+    } pwrb_in_h2l;
   } sysrst_ctrl_reg2hw_key_intr_ctl_reg_t;
 
   typedef struct packed {
@@ -256,50 +269,50 @@ package sysrst_ctrl_reg_pkg;
 
   typedef struct packed {
     struct packed {
-      logic [15:0] q;
-    } debounce_timer;
-    struct packed {
       logic        q;
     } auto_block_enable;
+    struct packed {
+      logic [15:0] q;
+    } debounce_timer;
   } sysrst_ctrl_reg2hw_auto_block_debounce_ctl_reg_t;
 
   typedef struct packed {
     struct packed {
       logic        q;
-    } key0_out_sel;
-    struct packed {
-      logic        q;
-    } key1_out_sel;
-    struct packed {
-      logic        q;
-    } key2_out_sel;
-    struct packed {
-      logic        q;
-    } key0_out_value;
+    } key2_out_value;
     struct packed {
       logic        q;
     } key1_out_value;
     struct packed {
       logic        q;
-    } key2_out_value;
+    } key0_out_value;
+    struct packed {
+      logic        q;
+    } key2_out_sel;
+    struct packed {
+      logic        q;
+    } key1_out_sel;
+    struct packed {
+      logic        q;
+    } key0_out_sel;
   } sysrst_ctrl_reg2hw_auto_block_out_ctl_reg_t;
 
   typedef struct packed {
     struct packed {
       logic        q;
-    } key0_in_sel;
-    struct packed {
-      logic        q;
-    } key1_in_sel;
-    struct packed {
-      logic        q;
-    } key2_in_sel;
+    } ac_present_sel;
     struct packed {
       logic        q;
     } pwrb_in_sel;
     struct packed {
       logic        q;
-    } ac_present_sel;
+    } key2_in_sel;
+    struct packed {
+      logic        q;
+    } key1_in_sel;
+    struct packed {
+      logic        q;
+    } key0_in_sel;
   } sysrst_ctrl_reg2hw_com_pre_sel_ctl_mreg_t;
 
   typedef struct packed {
@@ -309,19 +322,19 @@ package sysrst_ctrl_reg_pkg;
   typedef struct packed {
     struct packed {
       logic        q;
-    } key0_in_sel;
-    struct packed {
-      logic        q;
-    } key1_in_sel;
-    struct packed {
-      logic        q;
-    } key2_in_sel;
+    } ac_present_sel;
     struct packed {
       logic        q;
     } pwrb_in_sel;
     struct packed {
       logic        q;
-    } ac_present_sel;
+    } key2_in_sel;
+    struct packed {
+      logic        q;
+    } key1_in_sel;
+    struct packed {
+      logic        q;
+    } key0_in_sel;
   } sysrst_ctrl_reg2hw_com_sel_ctl_mreg_t;
 
   typedef struct packed {
@@ -331,17 +344,77 @@ package sysrst_ctrl_reg_pkg;
   typedef struct packed {
     struct packed {
       logic        q;
-    } bat_disable;
-    struct packed {
-      logic        q;
-    } interrupt;
+    } rst_req;
     struct packed {
       logic        q;
     } ec_rst;
     struct packed {
       logic        q;
-    } rst_req;
+    } interrupt;
+    struct packed {
+      logic        q;
+    } bat_disable;
   } sysrst_ctrl_reg2hw_com_out_ctl_mreg_t;
+
+  typedef struct packed {
+    struct packed {
+      logic        q;
+    } combo3_h2l;
+    struct packed {
+      logic        q;
+    } combo2_h2l;
+    struct packed {
+      logic        q;
+    } combo1_h2l;
+    struct packed {
+      logic        q;
+    } combo0_h2l;
+  } sysrst_ctrl_reg2hw_combo_intr_status_reg_t;
+
+  typedef struct packed {
+    struct packed {
+      logic        q;
+    } flash_wp_l_l2h;
+    struct packed {
+      logic        q;
+    } ec_rst_l_l2h;
+    struct packed {
+      logic        q;
+    } ac_present_l2h;
+    struct packed {
+      logic        q;
+    } key2_in_l2h;
+    struct packed {
+      logic        q;
+    } key1_in_l2h;
+    struct packed {
+      logic        q;
+    } key0_in_l2h;
+    struct packed {
+      logic        q;
+    } pwrb_l2h;
+    struct packed {
+      logic        q;
+    } flash_wp_l_h2l;
+    struct packed {
+      logic        q;
+    } ec_rst_l_h2l;
+    struct packed {
+      logic        q;
+    } ac_present_h2l;
+    struct packed {
+      logic        q;
+    } key2_in_h2l;
+    struct packed {
+      logic        q;
+    } key1_in_h2l;
+    struct packed {
+      logic        q;
+    } key0_in_h2l;
+    struct packed {
+      logic        q;
+    } pwrb_h2l;
+  } sysrst_ctrl_reg2hw_key_intr_status_reg_t;
 
   typedef struct packed {
     logic        d;
@@ -362,27 +435,7 @@ package sysrst_ctrl_reg_pkg;
     struct packed {
       logic        d;
       logic        de;
-    } pwrb_in;
-    struct packed {
-      logic        d;
-      logic        de;
-    } key0_in;
-    struct packed {
-      logic        d;
-      logic        de;
-    } key1_in;
-    struct packed {
-      logic        d;
-      logic        de;
-    } key2_in;
-    struct packed {
-      logic        d;
-      logic        de;
-    } lid_open;
-    struct packed {
-      logic        d;
-      logic        de;
-    } ac_present;
+    } flash_wp_l;
     struct packed {
       logic        d;
       logic        de;
@@ -390,18 +443,34 @@ package sysrst_ctrl_reg_pkg;
     struct packed {
       logic        d;
       logic        de;
-    } flash_wp_l;
+    } ac_present;
+    struct packed {
+      logic        d;
+      logic        de;
+    } lid_open;
+    struct packed {
+      logic        d;
+      logic        de;
+    } key2_in;
+    struct packed {
+      logic        d;
+      logic        de;
+    } key1_in;
+    struct packed {
+      logic        d;
+      logic        de;
+    } key0_in;
+    struct packed {
+      logic        d;
+      logic        de;
+    } pwrb_in;
   } sysrst_ctrl_hw2reg_pin_in_value_reg_t;
 
   typedef struct packed {
     struct packed {
       logic        d;
       logic        de;
-    } combo0_h2l;
-    struct packed {
-      logic        d;
-      logic        de;
-    } combo1_h2l;
+    } combo3_h2l;
     struct packed {
       logic        d;
       logic        de;
@@ -409,58 +478,18 @@ package sysrst_ctrl_reg_pkg;
     struct packed {
       logic        d;
       logic        de;
-    } combo3_h2l;
+    } combo1_h2l;
+    struct packed {
+      logic        d;
+      logic        de;
+    } combo0_h2l;
   } sysrst_ctrl_hw2reg_combo_intr_status_reg_t;
 
   typedef struct packed {
     struct packed {
       logic        d;
       logic        de;
-    } pwrb_h2l;
-    struct packed {
-      logic        d;
-      logic        de;
-    } key0_in_h2l;
-    struct packed {
-      logic        d;
-      logic        de;
-    } key1_in_h2l;
-    struct packed {
-      logic        d;
-      logic        de;
-    } key2_in_h2l;
-    struct packed {
-      logic        d;
-      logic        de;
-    } ac_present_h2l;
-    struct packed {
-      logic        d;
-      logic        de;
-    } ec_rst_l_h2l;
-    struct packed {
-      logic        d;
-      logic        de;
-    } flash_wp_l_h2l;
-    struct packed {
-      logic        d;
-      logic        de;
-    } pwrb_l2h;
-    struct packed {
-      logic        d;
-      logic        de;
-    } key0_in_l2h;
-    struct packed {
-      logic        d;
-      logic        de;
-    } key1_in_l2h;
-    struct packed {
-      logic        d;
-      logic        de;
-    } key2_in_l2h;
-    struct packed {
-      logic        d;
-      logic        de;
-    } ac_present_l2h;
+    } flash_wp_l_l2h;
     struct packed {
       logic        d;
       logic        de;
@@ -468,34 +497,81 @@ package sysrst_ctrl_reg_pkg;
     struct packed {
       logic        d;
       logic        de;
-    } flash_wp_l_l2h;
+    } ac_present_l2h;
+    struct packed {
+      logic        d;
+      logic        de;
+    } key2_in_l2h;
+    struct packed {
+      logic        d;
+      logic        de;
+    } key1_in_l2h;
+    struct packed {
+      logic        d;
+      logic        de;
+    } key0_in_l2h;
+    struct packed {
+      logic        d;
+      logic        de;
+    } pwrb_l2h;
+    struct packed {
+      logic        d;
+      logic        de;
+    } flash_wp_l_h2l;
+    struct packed {
+      logic        d;
+      logic        de;
+    } ec_rst_l_h2l;
+    struct packed {
+      logic        d;
+      logic        de;
+    } ac_present_h2l;
+    struct packed {
+      logic        d;
+      logic        de;
+    } key2_in_h2l;
+    struct packed {
+      logic        d;
+      logic        de;
+    } key1_in_h2l;
+    struct packed {
+      logic        d;
+      logic        de;
+    } key0_in_h2l;
+    struct packed {
+      logic        d;
+      logic        de;
+    } pwrb_h2l;
   } sysrst_ctrl_hw2reg_key_intr_status_reg_t;
 
   // Register -> HW type
   typedef struct packed {
-    sysrst_ctrl_reg2hw_intr_state_reg_t intr_state; // [480:480]
-    sysrst_ctrl_reg2hw_intr_enable_reg_t intr_enable; // [479:479]
-    sysrst_ctrl_reg2hw_intr_test_reg_t intr_test; // [478:477]
-    sysrst_ctrl_reg2hw_alert_test_reg_t alert_test; // [476:475]
-    sysrst_ctrl_reg2hw_ec_rst_ctl_reg_t ec_rst_ctl; // [474:459]
-    sysrst_ctrl_reg2hw_ulp_ac_debounce_ctl_reg_t ulp_ac_debounce_ctl; // [458:443]
-    sysrst_ctrl_reg2hw_ulp_lid_debounce_ctl_reg_t ulp_lid_debounce_ctl; // [442:427]
-    sysrst_ctrl_reg2hw_ulp_pwrb_debounce_ctl_reg_t ulp_pwrb_debounce_ctl; // [426:411]
-    sysrst_ctrl_reg2hw_ulp_ctl_reg_t ulp_ctl; // [410:410]
-    sysrst_ctrl_reg2hw_wkup_status_reg_t wkup_status; // [409:409]
-    sysrst_ctrl_reg2hw_key_invert_ctl_reg_t key_invert_ctl; // [408:397]
-    sysrst_ctrl_reg2hw_pin_allowed_ctl_reg_t pin_allowed_ctl; // [396:381]
-    sysrst_ctrl_reg2hw_pin_out_ctl_reg_t pin_out_ctl; // [380:373]
-    sysrst_ctrl_reg2hw_pin_out_value_reg_t pin_out_value; // [372:365]
-    sysrst_ctrl_reg2hw_key_intr_ctl_reg_t key_intr_ctl; // [364:351]
-    sysrst_ctrl_reg2hw_key_intr_debounce_ctl_reg_t key_intr_debounce_ctl; // [350:335]
-    sysrst_ctrl_reg2hw_auto_block_debounce_ctl_reg_t auto_block_debounce_ctl; // [334:318]
-    sysrst_ctrl_reg2hw_auto_block_out_ctl_reg_t auto_block_out_ctl; // [317:312]
-    sysrst_ctrl_reg2hw_com_pre_sel_ctl_mreg_t [3:0] com_pre_sel_ctl; // [311:292]
-    sysrst_ctrl_reg2hw_com_pre_det_ctl_mreg_t [3:0] com_pre_det_ctl; // [291:164]
-    sysrst_ctrl_reg2hw_com_sel_ctl_mreg_t [3:0] com_sel_ctl; // [163:144]
-    sysrst_ctrl_reg2hw_com_det_ctl_mreg_t [3:0] com_det_ctl; // [143:16]
-    sysrst_ctrl_reg2hw_com_out_ctl_mreg_t [3:0] com_out_ctl; // [15:0]
+    sysrst_ctrl_reg2hw_intr_state_reg_t intr_state; // [499:499]
+    sysrst_ctrl_reg2hw_intr_enable_reg_t intr_enable; // [498:498]
+    sysrst_ctrl_reg2hw_intr_test_reg_t intr_test; // [497:496]
+    sysrst_ctrl_reg2hw_alert_test_reg_t alert_test; // [495:494]
+    sysrst_ctrl_reg2hw_ec_rst_ctl_reg_t ec_rst_ctl; // [493:478]
+    sysrst_ctrl_reg2hw_ulp_ac_debounce_ctl_reg_t ulp_ac_debounce_ctl; // [477:462]
+    sysrst_ctrl_reg2hw_ulp_lid_debounce_ctl_reg_t ulp_lid_debounce_ctl; // [461:446]
+    sysrst_ctrl_reg2hw_ulp_pwrb_debounce_ctl_reg_t ulp_pwrb_debounce_ctl; // [445:430]
+    sysrst_ctrl_reg2hw_ulp_ctl_reg_t ulp_ctl; // [429:429]
+    sysrst_ctrl_reg2hw_ulp_status_reg_t ulp_status; // [428:428]
+    sysrst_ctrl_reg2hw_wkup_status_reg_t wkup_status; // [427:427]
+    sysrst_ctrl_reg2hw_key_invert_ctl_reg_t key_invert_ctl; // [426:415]
+    sysrst_ctrl_reg2hw_pin_allowed_ctl_reg_t pin_allowed_ctl; // [414:399]
+    sysrst_ctrl_reg2hw_pin_out_ctl_reg_t pin_out_ctl; // [398:391]
+    sysrst_ctrl_reg2hw_pin_out_value_reg_t pin_out_value; // [390:383]
+    sysrst_ctrl_reg2hw_key_intr_ctl_reg_t key_intr_ctl; // [382:369]
+    sysrst_ctrl_reg2hw_key_intr_debounce_ctl_reg_t key_intr_debounce_ctl; // [368:353]
+    sysrst_ctrl_reg2hw_auto_block_debounce_ctl_reg_t auto_block_debounce_ctl; // [352:336]
+    sysrst_ctrl_reg2hw_auto_block_out_ctl_reg_t auto_block_out_ctl; // [335:330]
+    sysrst_ctrl_reg2hw_com_pre_sel_ctl_mreg_t [3:0] com_pre_sel_ctl; // [329:310]
+    sysrst_ctrl_reg2hw_com_pre_det_ctl_mreg_t [3:0] com_pre_det_ctl; // [309:182]
+    sysrst_ctrl_reg2hw_com_sel_ctl_mreg_t [3:0] com_sel_ctl; // [181:162]
+    sysrst_ctrl_reg2hw_com_det_ctl_mreg_t [3:0] com_det_ctl; // [161:34]
+    sysrst_ctrl_reg2hw_com_out_ctl_mreg_t [3:0] com_out_ctl; // [33:18]
+    sysrst_ctrl_reg2hw_combo_intr_status_reg_t combo_intr_status; // [17:14]
+    sysrst_ctrl_reg2hw_key_intr_status_reg_t key_intr_status; // [13:0]
   } sysrst_ctrl_reg2hw_t;
 
   // HW -> register type
@@ -556,8 +632,9 @@ package sysrst_ctrl_reg_pkg;
   // Reset values for hwext registers and their fields
   parameter logic [0:0] SYSRST_CTRL_INTR_TEST_RESVAL = 1'h 0;
   parameter logic [0:0] SYSRST_CTRL_INTR_TEST_EVENT_DETECTED_RESVAL = 1'h 0;
-  parameter logic [0:0] SYSRST_CTRL_ALERT_TEST_RESVAL = 1'h 0;
+  parameter logic [31:0] SYSRST_CTRL_ALERT_TEST_RESVAL = 32'h 80000000;
   parameter logic [0:0] SYSRST_CTRL_ALERT_TEST_FATAL_FAULT_RESVAL = 1'h 0;
+  parameter logic [0:0] SYSRST_CTRL_ALERT_TEST_REGWEN_RESVAL = 1'h 1;
 
   // Register index
   typedef enum int {
@@ -611,7 +688,7 @@ package sysrst_ctrl_reg_pkg;
     4'b 0001, // index[ 0] SYSRST_CTRL_INTR_STATE
     4'b 0001, // index[ 1] SYSRST_CTRL_INTR_ENABLE
     4'b 0001, // index[ 2] SYSRST_CTRL_INTR_TEST
-    4'b 0001, // index[ 3] SYSRST_CTRL_ALERT_TEST
+    4'b 1111, // index[ 3] SYSRST_CTRL_ALERT_TEST
     4'b 0001, // index[ 4] SYSRST_CTRL_REGWEN
     4'b 0011, // index[ 5] SYSRST_CTRL_EC_RST_CTL
     4'b 0011, // index[ 6] SYSRST_CTRL_ULP_AC_DEBOUNCE_CTL

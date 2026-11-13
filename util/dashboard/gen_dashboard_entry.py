@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -7,10 +7,9 @@ Generate HTML documentation from validated dashboard Hjson tree
 
 import html
 import logging as log
-import os.path
-import re
 import sys
 from pathlib import Path
+from typing import TextIO, Tuple, Union
 
 import dashboard.dashboard_validate as dashboard_validate
 import hjson
@@ -63,18 +62,19 @@ def get_doc_url(base, url):
     """
     assert isinstance(url, str) and len(url) > 0
     if url[0] == '/':
-        return url
+        return '/book' + url
     else:
-        return '/' + base + '/' + url
+        return '/book/' + base + '/' + url
 
 
 # Link module name with its design spec doc.
 def get_linked_design_spec(obj):
     result = ""
     if 'design_spec' in obj:
-        result = "<span title='Design Spec'><a href='{}'>".format(
-            get_doc_url(obj['_ip_desc_hjson_dir'], obj['design_spec']))
-        result += "<code>{}</code></a></span>".format(html.escape(obj['name']))
+        design_spec_url = get_doc_url(
+            obj['_ip_desc_hjson_dir'], obj['design_spec']) + "/.."
+        result = f"<span title='Design Spec'><a href='{design_spec_url}'>"
+        result += f"<code>{html.escape(obj['name'])}</code></a></span>"
     else:
         result = html.escape(obj['name'])
 
@@ -84,8 +84,9 @@ def get_linked_design_spec(obj):
 # Provide the link to the DV document.
 def get_linked_dv_doc(obj):
     if 'dv_doc' in obj:
-        return "<span title='DV Document'><a href=\"{}\">DV</a></span>".format(
-            get_doc_url(obj['_ip_desc_hjson_dir'], obj['dv_doc']))
+        url = (get_doc_url(obj['_ip_desc_hjson_dir'], obj['dv_doc']) +
+               "/../../dv")
+        return f"<span title='DV Document'><a href=\"{url}\">DV</a></span>"
     else:
         return ""
 
@@ -94,9 +95,8 @@ def get_linked_dv_doc(obj):
 def get_linked_version(rev):
     version = html.escape(rev['version'])
     tree = rev['commit_id'] if 'commit_id' in rev else 'master'
-    url = "https://github.com/lowrisc/opentitan/tree/{}".format(tree)
-    return "<span title='{}'><a href=\"{}\">{}</a></span>".format(
-        tree, url, version)
+    url = f"https://github.com/lowrisc/opentitan/tree/{tree}"
+    return f"<span title='{tree}'><a href=\"{url}\">{version}</a></span>"
 
 
 # Link D/V stages with the checklist table.
@@ -108,7 +108,7 @@ def get_linked_checklist(obj, rev, stage, is_latest_rev=True):
     in_page_ref = ""
     # if N/A or in D0/V0 stage, there is no in-page reference.
     if rev[stage] not in ["D0", "V0", "N/A"]:
-        in_page_ref = "#{}".format(html.escape(rev[stage]).lower())
+        in_page_ref = f"#{html.escape(rev[stage]).lower()}"
 
     # If the checklist is available, the commit id is available, and it is not
     # the latest revision, link to the committed version of the checklist.
@@ -116,11 +116,11 @@ def get_linked_checklist(obj, rev, stage, is_latest_rev=True):
     # checklist html.
     # Else, link to the template.
     if 'hw_checklist' in obj and 'commit_id' in rev and not is_latest_rev:
-        url = "https://github.com/lowrisc/opentitan/tree/{}/{}.md{}".format(
-            rev['commit_id'], obj['hw_checklist'], in_page_ref)
+        url = (f"https://github.com/lowrisc/opentitan/tree/{rev['commit_id']}/"
+               f"{obj['hw_checklist']}.md{in_page_ref}")
     elif 'hw_checklist' in obj:
         url = get_doc_url(obj['_ip_desc_hjson_dir'],
-                          obj['hw_checklist'] + in_page_ref)
+                          obj['hw_checklist'] + ".html" + in_page_ref)
     else:
         # There is no checklist available, so point to the template.
         # doc/project/hw_checklist.md.tpl is a symlink to ip_checklist.md.tpl,
@@ -153,7 +153,7 @@ def get_linked_sw_checklist(obj, rev, stage, is_latest_rev=True):
             rev['commit_id'], obj['sw_checklist'], in_page_ref)
     elif 'sw_checklist' in obj:
         url = get_doc_url(obj['_ip_desc_hjson_dir'],
-                          obj['sw_checklist'] + in_page_ref)
+                          obj['sw_checklist'] + ".html" + in_page_ref)
     else:
         # There is no checklist available, so point to the template.
         url = "https://github.com/lowrisc/opentitan/tree/master/"
@@ -205,13 +205,47 @@ def get_development_stage(obj, rev, is_latest_rev=True):
 
 
 # Create dashboard of hardware IP development status
-def gen_dashboard_html(hjson_path, outfile):
-    with hjson_path:
-        prjfile = open(str(hjson_path))
-        try:
-            obj = hjson.load(prjfile)
-        except ValueError:
-            raise SystemExit(sys.exc_info()[1])
+def gen_dashboard_row_html(config: Union[Path, Tuple[Path, Path]],
+                           outfile: TextIO):
+    """Generate summary HTML table row from an IP block's configuration data.
+
+    Parameters
+        ----------
+        config : Union[
+            Path,              # Path to a block configuration file
+            Tuple[Path, Path], # Path to a block configuration file +
+                                 Path to the block's ip documentation dir
+        ]
+            The source configuration data the table row is generated from.
+        outfile : TextIO
+            io object the generated HTML is written into.
+
+    The Union of options for the 'config' argument allows us to handle some
+    special cases, such as templated IP that are instantiated as part of the
+    SoC generation process.
+    e.g
+    Path  ->  `hw/ip/aes/data/aes.hjson`
+    Tuple -> (`hw/top_earlgrey/ip/clkmgr/data/autogen/clkmgr.hjson`,
+              `hw/ip/clkmgr/`)
+    """
+    # TODO: the tuple is obsolete since there are no more "templated" IPs.
+
+    if isinstance(config, Tuple):
+        hjson_path = config[0]
+        ip_desc_hjson_dir = str((config[1] / "data").relative_to(REPO_TOP))
+    else:
+        hjson_path = config
+        ip_desc_hjson_dir = str(hjson_path.parent.relative_to(REPO_TOP))
+
+    try:
+        with open(str(hjson_path)) as prjfile:
+            try:
+                obj = hjson.load(prjfile)
+            except ValueError:
+                raise SystemExit(sys.exc_info()[1])
+    except IOError as e:
+        log.error("Error opening file %s: %s", hjson_path, e)
+        return
 
     if hjson_path.suffixes == ['.prj', '.hjson']:
         is_comportable_spec = False
@@ -223,8 +257,7 @@ def gen_dashboard_html(hjson_path, outfile):
     else:
         log.fail("hjson file import failed\n")
 
-    ip_desc_hjson_dir = hjson_path.parent.relative_to(REPO_TOP)
-    obj['_ip_desc_hjson_dir'] = str(ip_desc_hjson_dir)
+    obj['_ip_desc_hjson_dir'] = ip_desc_hjson_dir
 
     # If `revisions` field doesn't exist, the tool assumes the Hjson
     # as the previous project format, which has only one version entry.
@@ -303,61 +336,3 @@ def print_multiversion_format(obj, outfile):
         outstr += "      </tr>\n"
 
     genout(outfile, outstr)
-
-
-# Create table of hardware specifications
-def gen_specboard_html(hjson_path, rel_hjson_path, outfile):
-    with hjson_path:
-        prjfile = open(str(hjson_path))
-        try:
-            obj = hjson.load(prjfile)
-        except ValueError:
-            raise SystemExit(sys.exc_info()[1])
-
-    if hjson_path.suffixes == ['.prj', '.hjson']:
-        is_comportable_spec = False
-    else:
-        is_comportable_spec = True
-
-    if dashboard_validate.validate(obj, is_comportable_spec) == 0:
-        log.info("Generated dashboard object for " + str(hjson_path))
-    else:
-        log.error("hjson file import failed")
-
-    name = hjson_path.name.split('.')[0]
-    # get filename witout any suffixes
-    hjson_stem = hjson_path.with_name(name)
-
-    # create design spec and DV doc references, check for existence below
-    design_spec_md = re.sub(r'/data/', '/doc/',
-                            hjson_stem.with_suffix('.md'))
-    dv_doc_md = re.sub(
-        r'/data/', '/doc/dv',
-        hjson_stem.with_name('index.md'))
-    design_spec_html = re.sub(
-        r'/data/', '/doc/',
-        hjson_stem.with_suffix('.html'))
-    dv_doc_html = re.sub(
-        r'/data/', '/doc/dv',
-        hjson_stem.with_name('index.html'))
-
-    # yapf: disable
-    genout(outfile, "      <tr>\n")
-    genout(outfile, "        <td class=\"fixleft\">" +
-                    html.escape(obj['name']) + "</td>\n")
-    if os.path.exists(design_spec_md):
-        genout(outfile, "        <td class=\"fixleft\"><a href=\"" +
-               html.escape(design_spec_html) + "\">" +
-               "design spec</a>\n")
-    else:
-        genout(outfile, "        <td>&nbsp;</td>\n")
-    if os.path.exists(dv_doc_md):
-        genout(outfile, "        <td class=\"fixleft\"><a href=\"" +
-               html.escape(dv_doc_html) + "\">" +
-               "DV document</a>\n")
-    else:
-        genout(outfile, "        <td>&nbsp;</td>\n")
-
-    genout(outfile, "      </tr>\n")
-    # yapf: enable
-    return

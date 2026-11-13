@@ -16,6 +16,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class TestType(Enum):
+    """Type of the test."""
+
+    RISCVDV = 0
+    DIRECTED = 1
+
+
 class Failure_Modes(Enum):
     """Descriptive enum for the mode in which a test fails"""
 
@@ -43,6 +50,7 @@ class TestRunResult(scripts_lib.testdata_cls):
     failure_message: Optional[str] = None
     timeout_s: Optional[int] = None
 
+    testtype: Optional[TestType] = None
     testdotseed: Optional[str] = None
     testname: Optional[str] = None        # Name of test
     seed: Optional[int] = None            # Seed of test
@@ -50,11 +58,22 @@ class TestRunResult(scripts_lib.testdata_cls):
     rtl_simulator: Optional[str] = None   # Which simulator is used
     iss_cosim: Optional[str] = None       # Which ISS are we cosimulating with?
 
+    # Options for discrete debug module memory heirarchy
+    is_discrete_debug_module: Optional[bool] = None
+    binary_main: Optional[pathlib.Path] = None
+    binary_dm: Optional[pathlib.Path] = None
+    vmem_main: Optional[pathlib.Path] = None
+    vmem_dm: Optional[pathlib.Path] = None
+    ddm_sim_opts: Optional[List[str]] = None
+
     # RISCV_DV specific test parameters
-    gen_test: Optional[str] = None
-    gen_opts: Optional[str] = None
-    rtl_test: Optional[str] = None
-    sim_opts: Optional[str] = None
+    gen_test: Optional[List[str]] = None
+    gen_opts: Optional[List[str]] = None
+    rtl_test: Optional[List[str]] = None
+    sim_opts: Optional[List[str]] = None
+
+    # Directed Test specific parameters
+    directed_data: Optional[dict] = None
 
     dir_test: Optional[pathlib.Path] = None
     assembly: Optional[pathlib.Path] = None         # Path to assembly file

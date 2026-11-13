@@ -1,19 +1,21 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Core Implemenation module for Serial Peripheral Interface (SPI) Host IP.
+// Core Implementation module for Serial Peripheral Interface (SPI) Host IP.
 //
 
 module spi_host_fsm
   import spi_host_cmd_pkg::*;
 #(
-  parameter  int NumCS = 1
+  parameter  int NumCS = 1,
+  localparam int CSW   = prim_util_pkg::vbits(NumCS)
 ) (
   input                              clk_i,
   input                              rst_ni,
   input                              en_i,
   input  command_t                   command_i,
+  input  logic [CSW-1:0]             command_csid_i,
   input                              command_valid_i,
   output logic                       command_ready_o,
   output logic                       sck_o,
@@ -41,8 +43,6 @@ module spi_host_fsm
   logic [15:0]      clk_cntr_q, clk_cntr_d;
   logic             clk_cntr_en;
 
-  logic [1:0]       speed_cpha0, speed_cpha1;
-
   logic [CSW-1:0]   csid;
   logic [CSW-1:0]   csid_q;
 
@@ -51,33 +51,33 @@ module spi_host_fsm
   logic             full_cyc, cpha, cpol;
   logic             full_cyc_q, cpha_q, cpol_q;
 
-  // Unlike the configopts fields, the segment fields can change in back-to-backsegment operation.
+  // Unlike the configopts fields, the segment fields can change in back-to-back segment operation.
   // (If a change in only the configopts fields is detected, the FSM transitions to idle instead).
   // For that reason, when using the segment fields in back-to-back operations,  we have to bear
   // in mind context and determine whether it is appropriate to use the value for the previous
   // segment or the following segment.
-  // For instance, the cmd_rd_en signal is sometimes used to push segment byte into the shift
-  // register, and so in that case it is important to use cmd_rd_en_q in that sense.  The same
+  // For instance, the cmd_rd_en signal is sometimes used to push segment bytes into the shift
+  // register, and so in that case it is important to use cmd_rd_en_q in that sense. The same
   // signal is consulted to load the bit counter at the /beginning/ of each byte or dummy cycle,
   // and so in this context it is appropriate to use cmd_rd_en_d (which refers to the value from
   // the immediately following segment).
   logic [1:0]       cmd_speed_d, cmd_speed_q;
   logic             cmd_wr_en_d, cmd_wr_en_q;
   logic             cmd_rd_en_d, cmd_rd_en_q;
-  logic [8:0]       cmd_len_d, cmd_len_q;
+  logic [19:0]      cmd_len_d, cmd_len_q;
   logic             csaat;
   logic             csaat_q;
 
   logic [2:0]       bit_cntr_d, bit_cntr_q;
-  logic [8:0]       byte_cntr_cpha0_d, byte_cntr_cpha1_d, byte_cntr_cpha0_q, byte_cntr_cpha1_q;
-  logic [8:0]       byte_cntr_early, byte_cntr_late;
+  logic [19:0]      byte_cntr_cpha0_d, byte_cntr_cpha1_d, byte_cntr_cpha0_q, byte_cntr_cpha1_q;
+  logic [19:0]      byte_cntr_early, byte_cntr_late;
   logic [3:0]       wait_cntr_d, wait_cntr_q;
   logic             last_bit, last_byte;
 
   logic             state_changing;
-  logic             byte_starting, byte_starting_cpha0, byte_starting_cpha0_q, byte_starting_cpha1;
-  logic             bit_shifting, bit_shifting_cpha0, bit_shifting_cpha0_q, bit_shifting_cpha1;
-  logic             byte_ending, byte_ending_cpha0, byte_ending_cpha0_q, byte_ending_cpha1;
+  logic             byte_starting, byte_starting_cpha0, byte_starting_cpha1;
+  logic             bit_shifting, bit_shifting_cpha0, bit_shifting_cpha1;
+  logic             byte_ending, byte_ending_cpha0, byte_ending_cpha1;
 
   logic             sample_en_d, sample_en_q, sample_en_q2;
 
@@ -85,9 +85,7 @@ module spi_host_fsm
   logic             fsm_en;
 
   // new_command: signals a new segment input
-  // new_command_cpha1: delayed copy for updating the byte_cntr (do not use the delayed copy for
-  //                    updating the FSM state)
-  logic             new_command, new_command_cpha1;
+  logic             new_command;
 
   logic             csb_single_d;
   logic [NumCS-1:0] csb_q;
@@ -132,7 +130,7 @@ module spi_host_fsm
                           (command_i.configopts.clkdiv   != clkdiv_q);
 
   always_comb begin
-    csid      = new_command ? command_i.csid : csid_q;
+    csid      = new_command ? command_csid_i : csid_q;
     cpol      = new_command ? command_i.configopts.cpol : cpol_q;
     cpha      = new_command ? command_i.configopts.cpha : cpha_q;
     full_cyc  = new_command ? command_i.configopts.full_cyc : full_cyc_q;
@@ -161,7 +159,7 @@ module spi_host_fsm
       cmd_rd_en_q <= 1'b0;
       cmd_wr_en_q <= 1'b0;
       cmd_speed_q <= 2'b00;
-      cmd_len_q   <= 9'h0;
+      cmd_len_q   <= 20'h0;
     end else begin
       csid_q      <= (new_command && !stall) ? csid : csid_q;
       cpol_q      <= (new_command && !stall) ? cpol : cpol_q;
@@ -183,17 +181,18 @@ module spi_host_fsm
 
   assign active_o   = ~is_idle;
 
+  // New commands must always ensure there is the full setup time available.
   assign clk_cntr_d = sw_rst_i              ? 16'h0 :
                       !clk_cntr_en          ? clk_cntr_q :
-                      is_idle               ? 16'h0 :
                       new_command           ? clkdiv :
+                      is_idle               ? clk_cntr_q :
                       (clk_cntr_q == 16'h0) ? clkdiv :
                       clk_cntr_q - 1;
 
   assign tx_stall_o = wr_en_internal & ~sr_wr_ready_i;
   assign rx_stall_o = rd_en_internal & ~sr_rd_ready_i;
   assign clk_cntr_en = en_i;
-  assign fsm_en = (clk_cntr_en && clk_cntr_q == 0);
+  assign fsm_en = (clk_cntr_en && ((clk_cntr_q == 0) || is_idle));
 
   spi_host_st_e next_state_after_idle;
   always_comb begin
@@ -212,7 +211,7 @@ module spi_host_fsm
   logic         command_ready_idle_csb_active;
   always_comb begin
     if (command_valid_i) begin
-      if (command_i.csid != csid_q) begin
+      if (command_csid_i != csid_q) begin
         //
         // Do not acknowledge the command now, as it will trigger
         // an update of the internal command and configuration registers.
@@ -223,7 +222,11 @@ module spi_host_fsm
         // Explicitly *suppress* command_ready
         command_ready_idle_csb_active = 1'b0;
       end else begin
-        next_state_after_idle_csb_active = InternalClkLow;
+        if (cpha_q) begin
+          next_state_after_idle_csb_active = InternalClkHigh;
+        end else begin
+          next_state_after_idle_csb_active = InternalClkLow;
+        end
         command_ready_idle_csb_active = 1'b1;
       end
     end else begin
@@ -254,14 +257,26 @@ module spi_host_fsm
           end
         end
         InternalClkLow: begin
+          // Launch clock and full-cycle sampling clock for CPHA=0.
+          // Half-cycle sampling clock for CPHA=1.
+          // End-of-transaction clock level for both CPHA=0 and CPHA=1.
           // One of two active clock states. sck is low when CPOL=0.
-          state_d = InternalClkHigh;
+          if (!last_bit || !last_byte || !cpha_q) begin
+            state_d = InternalClkHigh;
+          end else if (!csaat_q) begin
+            state_d = WaitTrail;
+          end else begin
+            state_d = next_state_after_idle_csb_active;
+            command_ready_int = command_ready_idle_csb_active;
+          end
         end
         InternalClkHigh: begin
+          // Half-cycle sampling clock for CPHA=0.
+          // Launch clock for CPHA=1. Note: Full-cycle sampling is not compatible with CPHA=1.
           // One of two active clock states. sck is low when CPOL=0.
           // Typically often the last state in a command, and so the next state depends on CSAAT,
           // and of CSAAT is asserted, the details of the subsequent command.
-          if (!last_bit || !last_byte) begin
+          if (!last_bit || !last_byte || cpha_q) begin
             state_d = InternalClkLow;
           // Check value of csaat for the previously submitted segment
           end else if (!csaat_q) begin
@@ -334,38 +349,31 @@ module spi_host_fsm
   assign byte_ending_cpha0   = ~sw_rst_i & state_changing &
                                (state_q == InternalClkHigh & bit_cntr_q == 0);
 
-  assign speed_cpha0         = cmd_speed_q;
   assign segment_rd_en_cpha0 = cmd_rd_en_q;
 
-  // We can calculate byte transitions for CHPA=1 by noting
-  // that in this implmentation, the sck edges have a 1-1
+  // We can calculate byte transitions for CPHA=1 by noting
+  // that in this implementation, the sck edges have a 1-1
   // correspondence with FSM transitions.
   // New bytes are loaded exactly one state transition behind the time
   // when they would be loaded if CPHA=0
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      byte_starting_cpha0_q <= 1'b0;
-      byte_ending_cpha0_q   <= 1'b0;
-      bit_shifting_cpha0_q  <= 1'b0;
-      speed_cpha1           <= Standard;
       segment_rd_en_cpha1   <= 1'b0;
-      new_command_cpha1     <= 1'b0;
     end else if (state_changing && !stall) begin
-      byte_ending_cpha0_q   <= byte_ending_cpha0;
-      byte_starting_cpha0_q <= byte_starting_cpha0;
-      bit_shifting_cpha0_q  <= bit_shifting_cpha0;
-      speed_cpha1           <= speed_cpha0;
       segment_rd_en_cpha1   <= segment_rd_en_cpha0;
-      new_command_cpha1     <= new_command;
     end
   end
 
-  // The <XYZ>_cpha0_q pulse registers queue up a delayed <XYZ> pulse for use
-  // in CPHA=1 mode. Here we also have to ensure that the resulting
-  // pulse is only one cycle long.
-  assign byte_starting_cpha1 = byte_starting_cpha0_q & state_changing;
-  assign byte_ending_cpha1   = byte_ending_cpha0_q   & state_changing;
-  assign bit_shifting_cpha1  = bit_shifting_cpha0_q  & state_changing;
+  // For CPHA=1, the launch and capture states flip roles, and data output
+  // does not begin in the WaitIdle state, when CSB first asserts. They
+  // otherwise look very similar to the CPHA=0 case.
+  assign byte_starting_cpha1 = ~sw_rst_i & state_changing &
+                                (state_d == InternalClkHigh & bit_cntr_q==0);
+  assign bit_shifting_cpha1  = ~sw_rst_i & state_changing &
+                               (state_d == InternalClkHigh & bit_cntr_q != 0);
+  assign byte_ending_cpha1   = ~sw_rst_i & state_changing &
+                               (state_q == InternalClkLow & bit_cntr_q == 0);
+
 
   assign byte_starting = (cpha == 1'b0) ? byte_starting_cpha0 :
                                           byte_starting_cpha1;
@@ -376,8 +384,7 @@ module spi_host_fsm
   assign bit_shifting  = (cpha == 1'b0) ? bit_shifting_cpha0 :
                                           bit_shifting_cpha1;
 
-  assign speed_o       = (cpha == 1'b0) ? speed_cpha0:
-                                          speed_cpha1;
+  assign speed_o       = cmd_speed_q;
 
   assign segment_rd_en = (cpha == 1'b0) ? segment_rd_en_cpha0:
                                           segment_rd_en_cpha1;
@@ -435,22 +442,25 @@ module spi_host_fsm
   // can drive the FSM properly.  However, we explicitly choose
   // byte_cntr_cpha0_q to avoid a combinational logic loop.
   //
-  assign last_byte = (byte_cntr_cpha0_q == 9'h0);
+  always_comb begin
+    if (cpha_q) begin
+      last_byte = (byte_cntr_cpha1_q == 20'h0);
+    end else begin
+      last_byte = (byte_cntr_cpha0_q == 20'h0);
+    end
+  end
 
   // Note: when updating the byte_cntr in CPHA=0 mode with a new command value, the length must
   // be pulled in directly from the command bus, cmd_len_d;
-  assign byte_cntr_cpha0_d = sw_rst_i    ? 9'h0 :
+  assign byte_cntr_cpha0_d = sw_rst_i    ? 20'h0 :
                              !fsm_en     ? byte_cntr_cpha0_q :
                              new_command ? cmd_len_d :
                              byte_ending_cpha0 ? byte_cntr_cpha0_q - 1 :
                              byte_cntr_cpha0_q;
 
-  // Note: when updating the byte_cntr in CPHA=1 mode with a new command value, the length must
-  // be pulled in with a single state delay (using new_command_cpha1) and must use the
-  // registered value, cmd_len_q;
-  assign byte_cntr_cpha1_d = sw_rst_i          ? 9'h0 :
+  assign byte_cntr_cpha1_d = sw_rst_i          ? 20'h0 :
                              !fsm_en           ? byte_cntr_cpha1_q :
-                             new_command_cpha1 ? cmd_len_q :
+                             new_command       ? cmd_len_d :
                              byte_ending_cpha1 ? byte_cntr_cpha1_q - 1 :
                              byte_cntr_cpha1_q;
 
@@ -489,8 +499,8 @@ module spi_host_fsm
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
       bit_cntr_q        <= 3'h0;
-      byte_cntr_cpha0_q <= 9'h0;
-      byte_cntr_cpha1_q <= 9'h0;
+      byte_cntr_cpha0_q <= 20'h0;
+      byte_cntr_cpha1_q <= 20'h0;
       wait_cntr_q       <= 4'h0;
     end else begin
       bit_cntr_q        <= stall ? bit_cntr_q        : bit_cntr_d;
@@ -556,6 +566,25 @@ module spi_host_fsm
     end
   end : gen_csb_gen
 
+  // When 'cmd_wr_en_q' deasserts, we need to stretch the enable used
+  // to drive sd_en_o[0] until the end of the bit period. This is because
+  // 'cmd_wr_en_q' can change up to 1/2 cycle before the end of the period
+  // (depending on cpol/cpha).
+  // The signal 'last_bit' is active in the final period, so use that to start
+  // stretching the enable, and 'byte_ending' marks the period end.
+  logic cmd_wr_en_last_bit;
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      cmd_wr_en_last_bit <= 1'b0;
+    end else if (cmd_wr_en_q & last_bit) begin
+      cmd_wr_en_last_bit <= 1'b1;
+    end else if (byte_ending) begin
+      cmd_wr_en_last_bit <= 1'b0;
+    end else begin // Stretching..
+      cmd_wr_en_last_bit <= cmd_wr_en_last_bit;
+    end
+  end
+
   assign csb_o = csb_q;
 
   always_comb begin
@@ -564,7 +593,8 @@ module spi_host_fsm
     end else begin
       unique case (speed_o)
         Standard: begin
-          sd_en_o[0]   = 1'b1;
+          // Observing 'last_bit' ensures we do not deassert the enable too early
+          sd_en_o[0]   = cmd_wr_en_q | cmd_wr_en_last_bit;
           sd_en_o[1]   = 1'b0;
           sd_en_o[3:2] = 2'b00;
         end

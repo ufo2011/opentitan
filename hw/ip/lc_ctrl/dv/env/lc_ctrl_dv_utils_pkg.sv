@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,15 @@ package lc_ctrl_dv_utils_pkg;
   import dv_utils_pkg::*;
   import dv_lib_pkg::*;
   import lc_ctrl_pkg::*;
+  import lc_ctrl_reg_pkg::*;
   import lc_ctrl_state_pkg::*;
   import otp_ctrl_pkg::*;
+
+`ifdef USE_1_RMI_INTF
+  parameter uint NUM_RMA_ACK_SIGS = 1;
+`else
+  parameter uint NUM_RMA_ACK_SIGS = 2;
+`endif
 
   // associative array cannot declare parameter here, so we used const instead
   // verilog_format: off - avoid bad formatting

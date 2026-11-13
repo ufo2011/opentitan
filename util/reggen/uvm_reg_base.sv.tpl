@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 <%!
@@ -11,17 +11,17 @@
   # Get a list reg and its instance name
   # For single reg, return Dict[reg_inst:reg]
   # For multireg, if it's dv_compact, return Dict[mr.name[idx]:mr.reg],
-  # if not, return all the mr.regs with their name
+  # if not, return all the items of mr.cregs with their names.
   def get_inst_to_reg_dict(r) -> Dict:
     inst_regs = {} # type: Dict[inst_name:Register]
     if isinstance(r, MultiRegister):
       if r.dv_compact:
-        inst_base = r.reg.name.lower()
-        for idx, reg in enumerate(r.regs):
+        inst_base = r.pregs[0].name.lower()
+        for idx, reg in enumerate(r.cregs):
           inst_name = f'{inst_base}[{idx}]'
           inst_regs[inst_name] = reg
       else:
-        for r0 in r.regs:
+        for r0 in r.cregs:
           inst_regs[r0.name] = r0
     else:
       inst_regs[r.name.lower()] = r
@@ -59,9 +59,9 @@ ${make_ral_pkg_fwd_decls(esc_if_name, rb.type_regs, rb.windows)}
     if isinstance(r, MultiRegister):
       mr = r
       if r.dv_compact:
-        regs = [r.reg]
+        regs = [r.pregs[0]]
       else:
-        regs = r.regs
+        regs = r.cregs
     else:
       regs = [r]
 %>\
@@ -88,10 +88,10 @@ ${make_ral_pkg_window_class(dv_base_names.mem, esc_if_name, window)}
       count = 0
       if isinstance(r, MultiRegister):
         if r.dv_compact:
-          regs = [r.reg]
-          count = len(r.regs)
+          regs = [r.pregs[0]]
+          count = len(r.cregs)
         else:
-          regs = r.regs
+          regs = r.cregs
       else:
         regs = [r]
 %>\
@@ -121,13 +121,18 @@ ${make_ral_pkg_window_class(dv_base_names.mem, esc_if_name, window)}
 
     `uvm_object_utils(${reg_block_name})
 
-    function new(string name = "${reg_block_name}",
+    function new(string name = "",
                  int    has_coverage = UVM_NO_COVERAGE);
       super.new(name, has_coverage);
     endfunction : new
 
     virtual function void build(uvm_reg_addr_t base_addr,
-                                csr_excl_item csr_excl = null);
+                                csr_excl_item  csr_excl,
+                                int unsigned   addr_width,
+                                int unsigned   data_width,
+                                int unsigned   be_width);
+      super.build(base_addr, csr_excl, addr_width, data_width, be_width);
+
       // create default map
       this.default_map = create_map(.name("default_map"),
                                     .base_addr(base_addr),
@@ -143,11 +148,11 @@ ${make_ral_pkg_window_class(dv_base_names.mem, esc_if_name, window)}
       // create registers
   % for r in rb.all_regs:
 <%
-    r0 = r.reg if isinstance(r, MultiRegister) else r
+    r0 = r.pregs[0] if isinstance(r, MultiRegister) else r
     reg_type = gen_dv.rcname(esc_if_name, r0)
 %>\
     % if isinstance(r, MultiRegister):
-      % for idx, reg in enumerate(r.regs):
+      % for idx, reg in enumerate(r.cregs):
 <%
         if r.dv_compact:
           inst_base = r0.name.lower()
@@ -308,11 +313,13 @@ reg_block_path, reg, mr, reg_idx)">\
       fields = reg.fields
   else:
     if not mr.compact:
-      fields = mr.reg.fields
+      # Without dv_compact, each copy of the register gets its own class, which may differ in
+      # reset values.
+      fields = mr.pregs[0 if mr.dv_compact else reg_idx].fields
     else:
-      fields = mr.regs[reg_idx].fields
-      compact_field_inst_name = mr.reg.fields[0].name.lower()
-      compact_alias_field_inst_name = mr.reg.fields[0].alias_target
+      fields = mr.cregs[reg_idx].fields
+      compact_field_inst_name = mr.pregs[0].fields[0].name.lower()
+      compact_alias_field_inst_name = mr.pregs[0].fields[0].alias_target
       if mr.dv_compact:
         # The dv_compact flag means that the fields of the multi-reg divide equally into registers.
         # In this case, there's an array of registers and make_ral_pkg_reg_class() gets called once
@@ -353,10 +360,13 @@ reg_block_path, reg, mr, reg_idx)">\
 
     `uvm_object_utils(${class_name})
 
-    function new(string       name = "${class_name}",
+    function new(string       name = "",
                  int unsigned n_bits = ${reg_width},
                  int          has_coverage = UVM_NO_COVERAGE);
       super.new(name, n_bits, has_coverage);
+% if reg.writes_ignore_errors:
+      writes_ignore_errors = 1'b1;
+% endif
     endfunction : new
 
     virtual function void build(csr_excl_item csr_excl = null);
@@ -422,6 +432,7 @@ reg_field_name, field)">\
 <%
   field_size = field.bits.width()
   field_access = field.swaccess.dv_rights()
+  field_mubi_access = field.swaccess.dv_mubi_rights()
 
   if not field.hwaccess.allows_write():
     field_volatile = 0
@@ -430,15 +441,16 @@ reg_field_name, field)">\
   field_tags = field.tags
 
   fname = reg_field_name
-  type_id_indent = ' ' * (len(fname) + 4)
 %>\
-      ${fname} = (${dv_base_reg_field_name}::
-      ${type_id_indent}type_id::create("${field.name.lower()}"));
+      ${fname} =
+          (${dv_base_reg_field_name}::
+           type_id::create("${field.name.lower()}"));
       ${fname}.configure(
         .parent(this),
         .size(${field_size}),
         .lsb_pos(${field.bits.lsb}),
         .access("${field_access}"),
+        .mubi_access("${field_mubi_access}"),
         .volatile(${field_volatile}),
         .reset(${reg_width}'h${format(field.resval or 0, 'x')}),
         .has_reset(1),
@@ -448,7 +460,6 @@ reg_field_name, field)">\
 % if field.alias_target is not None:
       ${fname}.set_alias_name("${field.alias_target.lower()}");
 % endif
-      ${fname}.set_original_access("${field_access}");
 % if field.mubi:
       ${fname}.set_mubi_width(${field_size});
 % endif
@@ -489,7 +500,7 @@ reg_field_name, field)">\
 
     `uvm_object_utils(${class_name})
 
-    function new(string           name = "${class_name}",
+    function new(string           name = "",
                  longint unsigned size = ${mem_size},
                  int unsigned     n_bits = ${mem_n_bits},
                  string           access = "${mem_right}",
@@ -565,11 +576,10 @@ reg_field_name, field)">\
 <%
       reg_name = reg.name.lower()
       reg_offset = "{}'h{:x}".format(reg_width, reg.offset)
-
-      inst_id_indent = ' ' * (len(reg_inst) + 4)
 %>\
-      ${reg_inst} = (${reg_type}::
-      ${inst_id_indent}type_id::create("${reg_name}"));
+      ${reg_inst} =
+          (${reg_type}::
+           type_id::create("${reg_name}"));
       ${reg_inst}.configure(.blk_parent(this));
       ${reg_inst}.build(csr_excl);
       default_map.add_reg(.rg(${reg_inst}),
@@ -597,10 +607,10 @@ reg_field_name, field)">\
         assert 0
 %>\
       ${reg_inst}.add_hdl_path_slice(
-          "${shadowed_reg_path}.committed_reg.q",
+          "${shadowed_reg_path}.committed_reg.q", // verilog_lint: waive line-length
           ${field.bits.lsb}, ${field.bits.width()}, 0, "BkdrRegPathRtl");
       ${reg_inst}.add_hdl_path_slice(
-          "${shadowed_reg_path}.shadow_reg.q",
+          "${shadowed_reg_path}.shadow_q", // verilog_lint: waive line-length
           ${field.bits.lsb}, ${field.bits.width()}, 0, "BkdrRegPathRtlShadow");
     % endfor
   % endif
@@ -633,7 +643,7 @@ reg_field_name, field)">\
           "${reg_block_path}.u_${reg_field_name}.committed_reg.q",
           ${field.bits.lsb}, ${field_size}, 0, "BkdrRegPathRtl");
       ${reg_inst}.add_hdl_path_slice(
-          "${reg_block_path}.u_${reg_field_name}.shadow_reg.q",
+          "${reg_block_path}.u_${reg_field_name}.shadow_q",
           ${field.bits.lsb}, ${field_size}, 0, "BkdrRegPathRtlShadow");
 %   endif
 % endfor
@@ -648,7 +658,8 @@ reg_field_name, field)">\
         tag = reg_tag.split(":")
 %>\
 %         if tag[0] == "excl":
-      csr_excl.add_excl(${reg_inst}.get_full_name(), ${tag[2]}, ${tag[1]});
+      csr_excl.add_excl(${reg_inst}.get_full_name(),
+                        ${tag[2]}, ${tag[1]});
 %         endif
 %       endfor
 %     endif

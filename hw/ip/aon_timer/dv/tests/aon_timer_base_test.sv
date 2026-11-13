@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ class aon_timer_base_test extends cip_base_test #(
     super.add_message_demotes(catcher);
 
     // Demote intr_enable register non-existent warnings to infos
-    msg = "\s*Unable to locate register 'intr_enable' in block 'aon_timer_reg_block'*";
+    msg = "Unable to locate register 'intr_enable' in block 'aon_timer_reg_block'";
     catcher.add_change_sev("RegModel", msg, UVM_INFO);
 
   endfunction

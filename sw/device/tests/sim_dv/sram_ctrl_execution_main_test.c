@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,8 +20,8 @@
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 #include "sw/device/lib/testing/test_framework/status.h"
 
+#include "hw/top/otp_ctrl_regs.h"  // Generated
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "otp_ctrl_regs.h"  // Generated
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -44,13 +44,9 @@ static const uint32_t kRamEndAddr = TOP_EARLGREY_SRAM_CTRL_MAIN_RAM_BASE_ADDR +
 
 /**
  * OTP HW partition relative IFETCH offset in bytes.
- *
- * x = OTP_CTRL_PARAM_EN_SRAM_IFETCH_OFFSET (1728)
- * y = OTP_CTRL_PARAM_HW_CFG_OFFSET (1664)
- * IFETCH_OFFSET = (x - y) = 64
  */
 static const uint32_t kOtpIfetchHwRelativeOffset =
-    OTP_CTRL_PARAM_EN_SRAM_IFETCH_OFFSET - OTP_CTRL_PARAM_HW_CFG_OFFSET;
+    OTP_CTRL_PARAM_EN_SRAM_IFETCH_OFFSET - OTP_CTRL_PARAM_HW_CFG1_OFFSET;
 
 /**
  * Executes the return instruction from MAIN SRAM.
@@ -74,10 +70,10 @@ static bool otp_ifetch_enabled(void) {
   };
   CHECK_DIF_OK(dif_otp_ctrl_configure(&otp, config));
 
-  CHECK_DIF_OK(dif_otp_ctrl_dai_read_start(&otp, kDifOtpCtrlPartitionHwCfg,
+  CHECK_DIF_OK(dif_otp_ctrl_dai_read_start(&otp, kDifOtpCtrlPartitionHwCfg1,
                                            kOtpIfetchHwRelativeOffset));
 
-  otp_ctrl_testutils_wait_for_dai(&otp);
+  CHECK_STATUS_OK(otp_ctrl_testutils_wait_for_dai(&otp));
 
   uint32_t value;
   CHECK_DIF_OK(dif_otp_ctrl_dai_read32_end(&otp, &value));
@@ -107,7 +103,7 @@ static bool otp_ifetch_enabled(void) {
  * stack by the OTTF exception handler entry subroutine, which means that the
  * return address can be loaded from there. See comments below for more details.
  */
-void ottf_exception_handler(void) {
+void ottf_exception_handler(uint32_t *exc_info) {
   // The frame address is the address of the stack location that holds the
   // `mepc`, since the OTTF exception handler entry code saves the `mepc` to
   // the top of the stack before transferring control flow to the exception
@@ -210,12 +206,13 @@ bool test_main(void) {
 
   dif_lc_ctrl_t lc;
   CHECK_DIF_OK(dif_lc_ctrl_init(
-      mmio_region_from_addr(TOP_EARLGREY_LC_CTRL_BASE_ADDR), &lc));
+      mmio_region_from_addr(TOP_EARLGREY_LC_CTRL_REGS_BASE_ADDR), &lc));
 
+  bool debug_func = false;
+  CHECK_STATUS_OK(lc_ctrl_testutils_debug_func_enabled(&lc, &debug_func));
   // For the current configuration (set by the testbench)
   // check that execution exceptions are as expected.
-  do_execute_test(lc_ctrl_testutils_debug_func_enabled(&lc),
-                  otp_ifetch_enabled());
+  do_execute_test(debug_func, otp_ifetch_enabled());
 
   // When the test is complete flag WFI status so
   // the testbench can reset and progress to the next

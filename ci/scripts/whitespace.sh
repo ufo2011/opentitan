@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,9 +25,11 @@ echo "Checking whitespace on files changed since $merge_base"
 set -o pipefail
 git diff --name-only --diff-filter=ACMRTUXB "$merge_base" -- \
         ':!third_party/rust/crates/*' \
+        ':!signing/softhsm/tokens/*' \
+        ':!*/testdata/*' \
         ':!*/vendor/*' | \
     xargs -r util/fix_trailing_whitespace.py --dry-run || {
-    echo -n "##vso[task.logissue type=error]"
+    echo -n "::error::"
     echo "Whitespace check failed. Please run util/fix_trailing_whitespace.py on the above files."
     exit 1
 }

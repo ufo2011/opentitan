@@ -1,31 +1,37 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sw/device/silicon_creator/lib/drivers/rstmgr.h"
 
 #include "gtest/gtest.h"
+#include "hw/top/dt/api.h"
+#include "hw/top/dt/rstmgr.h"
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/base/mock_abs_mmio.h"
 #include "sw/device/lib/base/multibits.h"
 #include "sw/device/silicon_creator/testing/rom_test.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "rstmgr_regs.h"  // Generated.
-
+#include "hw/top/rstmgr_regs.h"  // Generated.
+                                 //
 namespace rstmgr_unittest {
 namespace {
 using ::testing::ElementsAre;
 
 class RstmgrTest : public rom_test::RomTest {
  protected:
-  uint32_t base_ = TOP_EARLGREY_RSTMGR_AON_BASE_ADDR;
+  uint32_t base_ = dt_rstmgr_primary_reg_block(kDtRstmgr);
   rom_test::MockAbsMmio mmio_;
 };
 
 TEST_F(RstmgrTest, GetResetReason) {
-  EXPECT_ABS_READ32(base_ + RSTMGR_ALERT_INFO_ATTR_REG_OFFSET, 5);
+  EXPECT_ABS_READ32(base_ + RSTMGR_RESET_INFO_REG_OFFSET, 0x12345);
 
+  EXPECT_EQ(rstmgr_reason_get(), 0x12345);
+}
+
+TEST_F(RstmgrTest, CollectAlertInfo) {
+  EXPECT_ABS_READ32(base_ + RSTMGR_ALERT_INFO_ATTR_REG_OFFSET, 5);
   EXPECT_ABS_WRITE32(base_ + RSTMGR_ALERT_INFO_CTRL_REG_OFFSET, 0x00);
   EXPECT_ABS_READ32(base_ + RSTMGR_ALERT_INFO_REG_OFFSET, 1);
   EXPECT_ABS_WRITE32(base_ + RSTMGR_ALERT_INFO_CTRL_REG_OFFSET, 0x10);
@@ -37,11 +43,10 @@ TEST_F(RstmgrTest, GetResetReason) {
   EXPECT_ABS_WRITE32(base_ + RSTMGR_ALERT_INFO_CTRL_REG_OFFSET, 0x40);
   EXPECT_ABS_READ32(base_ + RSTMGR_ALERT_INFO_REG_OFFSET, 5);
 
-  EXPECT_ABS_READ32(base_ + RSTMGR_RESET_INFO_REG_OFFSET, 0x12345);
-
-  EXPECT_EQ(rstmgr_reason_get(), 0x12345);
-  EXPECT_EQ(rstmgr_alert_info.length, 5);
-  EXPECT_THAT(rstmgr_alert_info.info,
+  rstmgr_info_t alert_info{};
+  rstmgr_alert_info_collect(&alert_info);
+  EXPECT_EQ(alert_info.length, 5);
+  EXPECT_THAT(alert_info.info,
               ElementsAre(1, 2, 3, 4, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
 }
 

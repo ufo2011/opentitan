@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ class jtag_riscv_monitor extends dv_base_monitor #(
   endfunction
 
   // collect transactions
-  virtual protected task collect_trans(uvm_phase phase);
+  virtual protected task collect_trans();
     jtag_item item;
     logic [DMI_OPW-1:0] op_raw;
     jtag_op_e op;

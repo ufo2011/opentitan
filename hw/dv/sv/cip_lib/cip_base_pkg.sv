@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ package cip_base_pkg;
   import dv_base_reg_pkg::*;
   import tlul_pkg::*;
   import tl_agent_pkg::*;
-  import alert_esc_agent_pkg::*;
+  import alert_agent_pkg::*;
   import push_pull_agent_pkg::*;
   import mem_model_pkg::*;
   import prim_mubi_pkg::*;
@@ -63,10 +63,16 @@ package cip_base_pkg;
     uvm_mem mems[$];
     reg_block.get_memories(mems);
 
+    has_mem_byte_access_err = 0;
+    has_wo_mem              = 0;
+    has_ro_mem              = 0;
+
     foreach (mems[i]) begin
       dv_base_mem dv_mem;
       `downcast(dv_mem, mems[i], , , msg_id)
-      if (!dv_mem.get_mem_partial_write_support() && dv_mem.get_access() == "RO") begin
+      // If the memory supports write (WO or RW) and doesn't have partial write support then it can
+      // generate a memory byte access error.
+      if (!dv_mem.get_mem_partial_write_support() && dv_mem.get_access() != "RO") begin
         has_mem_byte_access_err = 1;
       end
       if (dv_mem.get_access() == "WO") has_wo_mem = 1;

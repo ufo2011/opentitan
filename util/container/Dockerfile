@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,25 +7,20 @@
 
 # Global configuration options.
 ARG VERILATOR_VERSION=4.210
-ARG VERIBLE_VERSION=v0.0-2135-gb534c1fe
+ARG VERIBLE_VERSION=v0.0-3622-g07b310a3
 # The RISCV toolchain version should match the release tag used in GitHub.
 ARG RISCV_TOOLCHAIN_TAR_VERSION=20220210-1
-ARG RUST_VERSION=1.60.0
 # This should match the version in bazelish.sh.
-ARG BAZELISK_VERSION=v1.11.0
-# This should match the version in ci/install-package-dependencies.sh
-ARG GCC_VERSION=9
+ARG BAZELISK_VERSION=v1.24.1
 # This should match the version of the lowRISC RISC-V toolchain.
-ARG CLANG_VERSION=13
+ARG CLANG_VERSION=16
 
 # Main container image.
-FROM ubuntu:20.04 AS opentitan
+FROM ubuntu:22.04 AS opentitan
 ARG VERILATOR_VERSION
 ARG VERIBLE_VERSION
 ARG RISCV_TOOLCHAIN_TAR_VERSION
-ARG RUST_VERSION
 ARG BAZELISK_VERSION
-ARG GCC_VERSION
 ARG CLANG_VERSION
 
 LABEL version="1.0"
@@ -34,24 +29,6 @@ LABEL maintainer="opentitan-dev@opentitan.org"
 
 # Use bash as default shell.
 RUN ln -sf /bin/bash /bin/sh
-
-# Add OBS repository to apt sources.
-RUN OBS_URL="https://download.opensuse.org/repositories"; \
-    OBS_PATH="/home:/phiwag:/edatools/xUbuntu_20.04"; \
-    REPO_URL="${OBS_URL}${OBS_PATH}"; \
-    \
-    EDATOOLS_REPO_KEY="${REPO_URL}/Release.key"; \
-    EDATOOLS_REPO="deb ${REPO_URL}/ /"; \
-    \
-    apt-get update && \
-    apt-get install -y curl && \
-    \
-    curl -f -sL -o "$TMPDIR/obs.asc" "$EDATOOLS_REPO_KEY" || { \
-        error "Failed to download repository key from ${REPO_URL}"; \
-    } && \
-    echo "$EDATOOLS_REPO" > "$TMPDIR/obs.list" && \
-    mv "$TMPDIR/obs.asc"  /etc/apt/trusted.gpg.d/obs.asc && \
-    mv "$TMPDIR/obs.list" /etc/apt/sources.list.d/edatools.list
 
 # Install system packages
 #
@@ -70,8 +47,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
 COPY apt-requirements.txt /tmp/apt-requirements.txt
-RUN echo "verilator-${VERILATOR_VERSION}" >>/tmp/apt-requirements.txt \
-    && sed -i -e '/^$/d' -e '/^#/d' -e 's/#.*//' /tmp/apt-requirements.txt \
+RUN sed -i -e '/^$/d' -e '/^#/d' -e 's/#.*//' /tmp/apt-requirements.txt \
     && apt-get update \
     && xargs apt-get install -y </tmp/apt-requirements.txt \
     && apt-get install -y \
@@ -87,24 +63,12 @@ RUN echo "verilator-${VERILATOR_VERSION}" >>/tmp/apt-requirements.txt \
     && apt-get clean; \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /usr/share/doc/*
 
-# Install the CI version of gcc and g++
-RUN add-apt-repository ppa:ubuntu-toolchain-r/test \
-    && apt-get update \
-    && apt-get install -y gcc-${GCC_VERSION} g++-${GCC_VERSION} \
-    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90 \
-    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} 90
-
-# RISC-V device toolchain
-COPY util/get-toolchain.py /tmp/get-toolchain.py
-RUN /tmp/get-toolchain.py -r ${RISCV_TOOLCHAIN_TAR_VERSION} \
-    && rm -f /tmp/get-toolchain.py
-
 # Install and configure clang and llvm tools for coverage measurements.
 # Note: Some commands listed below are missing in 13.0.1 and cause warnings during
 # build. These are kept intentionally since we plan to use them in the future, e.g.
 # `llvm-remark-size-diff` and `llvm-tli-checker`.
 RUN curl https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add \
-    && add-apt-repository "deb https://apt.llvm.org/focal/ llvm-toolchain-focal-${CLANG_VERSION} main" \
+    && add-apt-repository "deb https://apt.llvm.org/jammy/ llvm-toolchain-jammy-${CLANG_VERSION} main" \
     && apt update \
     && apt install -y clang-${CLANG_VERSION} lldb-${CLANG_VERSION} lld-${CLANG_VERSION} \
         clangd-${CLANG_VERSION} clang-tidy-${CLANG_VERSION} clang-format-${CLANG_VERSION} \
@@ -147,17 +111,22 @@ RUN curl https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add \
         ${cmd} ; \
     )
 
+# Install verilator prebuild binary
+RUN mkdir -p /tools/verilator \
+    && curl -sSfL https://storage.googleapis.com/verilator-builds/verilator-v${VERILATOR_VERSION}.tar.gz | tar -C /tools/verilator -xvzf -
+ENV PATH="/tools/verilator/v${VERILATOR_VERSION}/bin:${PATH}"
+
 # Install Verible
 RUN curl -f -Ls -o verible.tar.gz \
-        https://github.com/chipsalliance/verible/releases/download/${VERIBLE_VERSION}/verible-${VERIBLE_VERSION}-Ubuntu-18.04-bionic-x86_64.tar.gz \
+        https://github.com/chipsalliance/verible/releases/download/${VERIBLE_VERSION}/verible-${VERIBLE_VERSION}-linux-static-x86_64.tar.gz \
     && mkdir -p /tools/verible \
     && tar -C /tools/verible -xf verible.tar.gz --strip-components=1
-ENV PATH "/tools/verible/bin:${PATH}"
+ENV PATH="/tools/verible/bin:${PATH}"
 
 # Set Locale to utf-8 everywhere
-ENV LC_ALL en_US.UTF-8
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
+ENV LC_ALL=en_US.UTF-8
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
 
 # Scripting for use within this container.
 COPY util/container/start.sh /start.sh
@@ -169,13 +138,13 @@ RUN groupadd dev \
     && usermod -p '*' dev \
     && passwd -u dev
 
+# Give the dev user access to `/tools` so they can install the toolchain later.
+RUN mkdir -p /tools \
+    && chown dev:dev /tools \
+    && chmod 775 /tools
+
 # All subsequent steps are performed as user.
 USER dev:dev
-
-# Install Rust plus packages.
-COPY --chown=dev:dev sw/vendor/rustup/rustup-init.sh /tmp/rustup-init.sh
-RUN /tmp/rustup-init.sh -y --default-toolchain ${RUST_VERSION} \
-    && rm -f /tmp/rustup-init.sh
 
 # Install Python plus packages.
 #
@@ -184,12 +153,17 @@ RUN /tmp/rustup-init.sh -y --default-toolchain ${RUST_VERSION} \
 # specify that an older version of a package must be used for a certain
 # Python version. If that information is not read, pip installs the latest
 # version, which then fails to run.
-ENV PATH "/home/dev/.local/bin:${PATH}"
+ENV PATH="/home/dev/.local/bin:${PATH}"
 COPY --chown=dev:dev python-requirements.txt /tmp/python-requirements.txt
 RUN python3 -m pip install --user -U pip "setuptools<66.0.0" \
     && python3 -m pip install --user -r /tmp/python-requirements.txt \
         --no-warn-script-location \
     && rm -f /tmp/python-requirements.txt
+
+# Get the RISC-V device toolchain
+COPY --chown=dev:dev util/get-toolchain.py /tmp/get-toolchain.py
+RUN /tmp/get-toolchain.py -r ${RISCV_TOOLCHAIN_TAR_VERSION} \
+    && rm -f /tmp/get-toolchain.py
 
 USER root:root
 
@@ -200,6 +174,11 @@ RUN BAZELISK_PATH="/usr/local/bin/bazelisk"; \
     chmod +x ${BAZELISK_PATH} && \
     ln -s ${BAZELISK_PATH} /usr/local/bin/bazel
 
-RUN runuser dev -c "bazel > /dev/null"
+# We want to make sure that bazelisk can see the pinned .bazelversion, even
+# outside any workspace.
+COPY --chown=dev:dev .bazelversion /tmp/.bazelversion
+
+RUN runuser dev -c "USE_BAZEL_VERSION=$(cat /tmp/.bazelversion) bazel version > /dev/null" \
+    && rm -f /tmp/.bazelversion
 
 ENTRYPOINT [ "/start.sh" ]

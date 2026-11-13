@@ -1,9 +1,9 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //############################################################################
 // *Name: usb_osc
-// *Module Description: USB Clock Oscilator
+// *Module Description: USB Clock Oscillator
 //############################################################################
 
 module usb_osc (
@@ -151,7 +151,7 @@ prim_clock_gating #(
 
 logic en_osc_fe;
 
-// Syncronize en_osc to clk FE for glitch free disable
+// Synchronize en_osc to clk FE for glitch free disable
 always_ff @( negedge clk, negedge vcore_pok_h_i ) begin
   if ( !vcore_pok_h_i ) begin
     en_osc_fe <= 1'b0;
@@ -177,7 +177,7 @@ prim_clock_buf #(
 // Unused Signals
 ///////////////////////
 logic unused_sigs;
-assign unused_sigs = ^{ usb_osc_cal_i, usb_ref_pulse_i, usb_ref_val_i };
+assign unused_sigs = ^{ usb_osc_cal_i, usb_ref_pulse_i, usb_ref_val_i, en_osc, en_osc_fe };
 `endif
 
 endmodule : usb_osc

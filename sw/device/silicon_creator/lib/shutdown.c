@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,12 @@
 
 #include <assert.h>
 
+#include "hw/top/dt/lc_ctrl.h"
+#include "hw/top/dt/otp_ctrl.h"
+#include "hw/top/dt/rstmgr.h"
+#include "hw/top/dt/rv_core_ibex.h"
+#include "hw/top/dt/sram_ctrl.h"
+#include "hw/top/dt/uart.h"
 #include "sw/device/lib/arch/device.h"
 #include "sw/device/lib/base/abs_mmio.h"
 #include "sw/device/lib/base/bitfield.h"
@@ -15,21 +21,32 @@
 #include "sw/device/lib/base/memory.h"
 #include "sw/device/lib/base/multibits.h"
 #include "sw/device/lib/base/stdasm.h"
+#include "sw/device/lib/coverage/api.h"
+#include "sw/device/silicon_creator/lib/build_info.h"
 #include "sw/device/silicon_creator/lib/drivers/alert.h"
 #include "sw/device/silicon_creator/lib/drivers/lifecycle.h"
 #include "sw/device/silicon_creator/lib/drivers/otp.h"
+#include "sw/device/silicon_creator/lib/drivers/retention_sram.h"
 #include "sw/device/silicon_creator/lib/epmp_defs.h"
+#include "sw/device/silicon_creator/lib/stack_utilization.h"
 
-#include "alert_handler_regs.h"
-#include "flash_ctrl_regs.h"
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "keymgr_regs.h"
-#include "lc_ctrl_regs.h"
-#include "otp_ctrl_regs.h"
-#include "rstmgr_regs.h"
-#include "rv_core_ibex_regs.h"
-#include "sram_ctrl_regs.h"
-#include "uart_regs.h"
+#if defined(USE_FLASH)
+#include "sw/device/silicon_creator/lib/drivers/flash_ctrl.h"
+#elif defined(USE_RRAM)
+#include "sw/device/silicon_creator/lib/drivers/rram_ctrl.h"
+#endif
+
+#ifdef HAS_KEYMGR_DPE
+#include "sw/device/silicon_creator/lib/drivers/keymgr_dpe.h"
+#endif
+
+#include "hw/top/alert_handler_regs.h"
+#include "hw/top/lc_ctrl_regs.h"
+#include "hw/top/otp_ctrl_regs.h"
+#include "hw/top/rstmgr_regs.h"
+#include "hw/top/rv_core_ibex_regs.h"
+#include "hw/top/sram_ctrl_regs.h"
+#include "hw/top/uart_regs.h"
 
 static_assert(ALERT_HANDLER_ALERT_CLASS_SHADOWED_MULTIREG_COUNT <=
                   OTP_CTRL_PARAM_OWNER_SW_CFG_ROM_ALERT_CLASSIFICATION_SIZE / 4,
@@ -57,9 +74,14 @@ static_assert(
   static modifiers_ void name_
 #endif
 
+static inline uint32_t uart0_base(void) {
+  return dt_uart_primary_reg_block(kDtUart0);
+}
+
 // Convert the alert class to an index.
 // This is required because I expect to change the constant definitions in
 // alert_class_t to have reasonable hamming distances.
+OT_WARN_UNUSED_RESULT
 static size_t clsindex(alert_class_t cls) {
   switch (cls) {
     case kAlertClassA:
@@ -116,7 +138,7 @@ rom_error_t shutdown_init(lifecycle_state_t lc_state) {
       lc_shift_masked = launder32(kLcShiftRma) ^ kLcStateRma;
       break;
     default:
-      HARDENED_UNREACHABLE();
+      HARDENED_TRAP();
   }
 
   // Get the enable and escalation settings for all four alert classes.
@@ -232,6 +254,7 @@ rom_error_t shutdown_init(lifecycle_state_t lc_state) {
  * This function must be inlined because it is called from `shutdown_finalize`.
  */
 OT_ALWAYS_INLINE
+OT_WARN_UNUSED_RESULT
 static uint32_t shutdown_redact_inline(rom_error_t reason,
                                        shutdown_error_redact_t severity) {
   uint32_t redacted = (uint32_t)reason;
@@ -265,8 +288,10 @@ uint32_t shutdown_redact(rom_error_t reason, shutdown_error_redact_t severity) {
  * This function must be inlined because it is called from `shutdown_finalize`.
  */
 OT_ALWAYS_INLINE
+OT_WARN_UNUSED_RESULT
 static shutdown_error_redact_t shutdown_redact_policy_inline(
     uint32_t raw_state) {
+  const uint32_t otp_ctrl_base = dt_otp_ctrl_primary_reg_block(kDtOtpCtrl);
   switch (raw_state) {
     case LC_CTRL_LC_STATE_STATE_VALUE_TEST_UNLOCKED0:
     case LC_CTRL_LC_STATE_STATE_VALUE_TEST_UNLOCKED1:
@@ -284,8 +309,7 @@ static shutdown_error_redact_t shutdown_redact_policy_inline(
     case LC_CTRL_LC_STATE_STATE_VALUE_PROD_END:
       // In production states use the redaction level specified in OTP.
       return (shutdown_error_redact_t)abs_mmio_read32(
-          TOP_EARLGREY_OTP_CTRL_CORE_BASE_ADDR +
-          OTP_CTRL_SW_CFG_WINDOW_REG_OFFSET +
+          otp_ctrl_base + OTP_CTRL_SW_CFG_WINDOW_REG_OFFSET +
           OTP_CTRL_PARAM_OWNER_SW_CFG_ROM_ERROR_REPORTING_OFFSET);
     default:
       // Redact everything if in an unexpected lifecycle state.
@@ -294,15 +318,15 @@ static shutdown_error_redact_t shutdown_redact_policy_inline(
 }
 
 shutdown_error_redact_t shutdown_redact_policy(void) {
+  const uint32_t lc_ctrl_base = dt_lc_ctrl_primary_reg_block(kDtLcCtrl);
   // Determine the error code redaction policy to apply according to the
   // lifecycle state and OTP configuration.
   //
   // Note that we cannot use the lifecycle or OTP libraries since an error
   // may trigger a call to `shutdown_finalize`.
-  uint32_t raw_state =
-      bitfield_field32_read(abs_mmio_read32(TOP_EARLGREY_LC_CTRL_BASE_ADDR +
-                                            LC_CTRL_LC_STATE_REG_OFFSET),
-                            LC_CTRL_LC_STATE_STATE_FIELD);
+  uint32_t raw_state = bitfield_field32_read(
+      abs_mmio_read32(lc_ctrl_base + LC_CTRL_LC_STATE_REG_OFFSET),
+      LC_CTRL_LC_STATE_STATE_FIELD);
   return shutdown_redact_policy_inline(raw_state);
 }
 
@@ -319,14 +343,33 @@ enum {
    */
   kErrorMsgLen = kHexStrLen + 6,
   /**
-   * Base address of UART.
-   */
-  kUartBase = TOP_EARLGREY_UART0_BASE_ADDR,
-  /**
    * UART TX FIFO size.
    */
-  kUartFifoSize = 32,
+  kUartFifoSize = UART_PARAM_TX_FIFO_DEPTH,
 };
+
+// Returns the argument if its under the uint32_t max, UINT32_MAX otherwise.
+#define IDENTITY_U32(a) ((uint32_t)((a) < UINT32_MAX ? (a) : UINT32_MAX))
+
+OT_ALWAYS_INLINE
+static void shutdown_tx_wait(void) {
+#ifdef OT_PLATFORM_RV32
+  // Wait until UART TX is complete.
+  static_assert(kErrorMsgLen <= kUartFifoSize,
+                "Total message length must be less than TX FIFO size.");
+  CSR_WRITE(CSR_REG_MCYCLE, 0);
+  uint32_t mcycle;
+  uint32_t uart_tx_fifo_cycles = IDENTITY_U32(CALCULATE_UART_TX_FIFO_CPU_CYCLES(
+      kUartBaudrate, kClockFreqCpuHz, UART_PARAM_TX_FIFO_DEPTH));
+  bool tx_idle;
+  do {
+    tx_idle = bitfield_bit32_read(
+        abs_mmio_read32(uart0_base() + UART_STATUS_REG_OFFSET),
+        UART_STATUS_TXIDLE_BIT);
+    CSR_READ(CSR_REG_MCYCLE, &mcycle);
+  } while (mcycle < uart_tx_fifo_cycles && !tx_idle);
+#endif
+}
 
 /**
  * Prints a fixed-length (`kErrorMsgLen`) error message.
@@ -340,29 +383,31 @@ enum {
 OT_ALWAYS_INLINE
 static void shutdown_print(shutdown_log_prefix_t prefix, uint32_t val) {
   // Print the 4 character `prefix`.
-  abs_mmio_write32(kUartBase + UART_WDATA_REG_OFFSET, prefix);
-  abs_mmio_write32(kUartBase + UART_WDATA_REG_OFFSET, prefix >> 8);
-  abs_mmio_write32(kUartBase + UART_WDATA_REG_OFFSET, prefix >> 16);
-  abs_mmio_write32(kUartBase + UART_WDATA_REG_OFFSET, prefix >> 24);
+  abs_mmio_write32(uart0_base() + UART_WDATA_REG_OFFSET, prefix);
+  abs_mmio_write32(uart0_base() + UART_WDATA_REG_OFFSET, prefix >> 8);
+  abs_mmio_write32(uart0_base() + UART_WDATA_REG_OFFSET, prefix >> 16);
+  abs_mmio_write32(uart0_base() + UART_WDATA_REG_OFFSET, prefix >> 24);
 
   // Print the hex representation of `val`.
-  const char kHexTable[16] = "0123456789abcdef";
+  OT_NONSTRING const char kHexTable[16] = "0123456789abcdef";
   // `kHexStrLen` is laundered so that it is loaded to a register at every
   // iteration.
   for (size_t i = 0; i < launder32(kHexStrLen); ++i) {
-    uint8_t nibble = bitfield_field32_read(
+    uint8_t nibble = (uint8_t)bitfield_field32_read(
         val, (bitfield_field32_t){.mask = 0xf, .index = (7 - i) * 4});
-    abs_mmio_write32(kUartBase + UART_WDATA_REG_OFFSET, kHexTable[nibble]);
+    abs_mmio_write32(uart0_base() + UART_WDATA_REG_OFFSET, kHexTable[nibble]);
   }
-  abs_mmio_write32(kUartBase + UART_WDATA_REG_OFFSET, '\r');
-  abs_mmio_write32(kUartBase + UART_WDATA_REG_OFFSET, '\n');
+
+  abs_mmio_write32(uart0_base() + UART_WDATA_REG_OFFSET, '\r');
+  abs_mmio_write32(uart0_base() + UART_WDATA_REG_OFFSET, '\n');
+  shutdown_tx_wait();
 }
 
 SHUTDOWN_FUNC(NO_MODIFIERS, shutdown_report_error(rom_error_t reason)) {
-  uint32_t raw_state =
-      bitfield_field32_read(abs_mmio_read32(TOP_EARLGREY_LC_CTRL_BASE_ADDR +
-                                            LC_CTRL_LC_STATE_REG_OFFSET),
-                            LC_CTRL_LC_STATE_STATE_FIELD);
+  const uint32_t lc_ctrl_base = dt_lc_ctrl_primary_reg_block(kDtLcCtrl);
+  uint32_t raw_state = bitfield_field32_read(
+      abs_mmio_read32(lc_ctrl_base + LC_CTRL_LC_STATE_REG_OFFSET),
+      LC_CTRL_LC_STATE_STATE_FIELD);
 
   // Call the inline variant of `shutdown_redact_policy` because we want to
   // guarantee that we won't jump to a different function.
@@ -372,80 +417,67 @@ SHUTDOWN_FUNC(NO_MODIFIERS, shutdown_report_error(rom_error_t reason)) {
   // that we won't jump to a different function.
   uint32_t redacted_error = shutdown_redact_inline(reason, policy);
 
+  // Store redacted shutdown reason in retention SRAM.
+  retention_sram_get()->creator.last_shutdown_reason = redacted_error;
+
+  // If there are any characters in the TX FIFO, wait for them to be sent.
+  shutdown_tx_wait();
+
   // Reset UART TX fifo and enable TX.
-  abs_mmio_write32(kUartBase + UART_FIFO_CTRL_REG_OFFSET,
+  abs_mmio_write32(uart0_base() + UART_FIFO_CTRL_REG_OFFSET,
                    bitfield_bit32_write(0, UART_FIFO_CTRL_TXRST_BIT, true));
-  uint32_t uart_ctrl_reg = abs_mmio_read32(kUartBase + UART_CTRL_REG_OFFSET);
+  uint32_t uart_ctrl_reg = abs_mmio_read32(uart0_base() + UART_CTRL_REG_OFFSET);
   uart_ctrl_reg = bitfield_bit32_write(uart_ctrl_reg, UART_CTRL_TX_BIT, true);
-  abs_mmio_write32(kUartBase + UART_CTRL_REG_OFFSET, uart_ctrl_reg);
+  abs_mmio_write32(uart0_base() + UART_CTRL_REG_OFFSET, uart_ctrl_reg);
 
   // Print the error message and the raw life cycle state as reported by the
   // hardware.
   shutdown_print(kShutdownLogPrefixBootFault, redacted_error);
   shutdown_print(kShutdownLogPrefixLifecycle, raw_state);
-
-#ifdef OT_PLATFORM_RV32
-  // Wait until UART TX is complete.
-  static_assert(2 * kErrorMsgLen <= kUartFifoSize,
-                "Total message length must be less than TX FIFO size.");
-  CSR_WRITE(CSR_REG_MCYCLE, 0);
-  uint32_t mcycle;
-  bool tx_idle;
-  do {
-    tx_idle =
-        bitfield_bit32_read(abs_mmio_read32(kUartBase + UART_STATUS_REG_OFFSET),
-                            UART_STATUS_TXIDLE_BIT);
-    CSR_READ(CSR_REG_MCYCLE, &mcycle);
-  } while (mcycle < kUartTxFifoCpuCycles && !tx_idle);
-#endif
+  shutdown_print(kShutdownLogPrefixVersion,
+                 kBuildInfo.scm_revision.scm_revision_high);
 }
 
 SHUTDOWN_FUNC(NO_MODIFIERS, shutdown_software_escalate(void)) {
-  enum { kBase = TOP_EARLGREY_RV_CORE_IBEX_CFG_BASE_ADDR };
+  const uint32_t ibex_core_base =
+      dt_rv_core_ibex_primary_reg_block(kDtRvCoreIbex);
   //  Setting rv_core_ibex.SW_FATAL_ERR (rw0c) to any value other than
   // `kMultiBitBool4False` will continuously cause alert events.
-  abs_mmio_write32(kBase + RV_CORE_IBEX_SW_FATAL_ERR_REG_OFFSET, 0);
-}
-
-SHUTDOWN_FUNC(NO_MODIFIERS, shutdown_keymgr_kill(void)) {
-  enum {
-    kBase = TOP_EARLGREY_KEYMGR_BASE_ADDR,
-  };
-  uint32_t reg =
-      bitfield_field32_write(0, KEYMGR_CONTROL_SHADOWED_DEST_SEL_FIELD,
-                             KEYMGR_CONTROL_SHADOWED_DEST_SEL_VALUE_NONE);
-  reg = bitfield_field32_write(reg, KEYMGR_CONTROL_SHADOWED_OPERATION_FIELD,
-                               KEYMGR_CONTROL_SHADOWED_OPERATION_VALUE_DISABLE);
-  abs_mmio_write32_shadowed(kBase + KEYMGR_CONTROL_SHADOWED_REG_OFFSET, reg);
-
-  abs_mmio_write32(kBase + KEYMGR_START_REG_OFFSET, 1);
-  abs_mmio_write32(kBase + KEYMGR_SIDELOAD_CLEAR_REG_OFFSET, 1);
+  abs_mmio_write32(ibex_core_base + RV_CORE_IBEX_SW_FATAL_ERR_REG_OFFSET, 0);
 }
 
 SHUTDOWN_FUNC(NO_MODIFIERS, shutdown_reset(void)) {
-  enum { kBase = TOP_EARLGREY_RSTMGR_AON_BASE_ADDR };
-  abs_mmio_write32(kBase + RSTMGR_RESET_REQ_REG_OFFSET, kMultiBitBool4True);
+  const uint32_t rstmgr_base = dt_rstmgr_primary_reg_block(kDtRstmgr);
+  abs_mmio_write32(rstmgr_base + RSTMGR_RESET_REQ_REG_OFFSET,
+                   kMultiBitBool4True);
 }
 
-SHUTDOWN_FUNC(NO_MODIFIERS, shutdown_flash_kill(void)) {
-  enum { kBase = TOP_EARLGREY_FLASH_CTRL_CORE_BASE_ADDR };
-  // Setting DIS (rw0c) to a value other than 5 will disable flash permanently.
-  abs_mmio_write32(kBase + FLASH_CTRL_DIS_REG_OFFSET, 0);
+SHUTDOWN_FUNC(NO_MODIFIERS, shutdown_nvm_kill(void)) {
+#if defined(USE_FLASH)
+  flash_ctrl_disable();
+#elif defined(USE_RRAM)
+  rram_ctrl_disable();
+#endif
+}
+
+SHUTDOWN_FUNC(NO_MODIFIERS, shutdown_keymgr_dpe_kill(void)) {
+#ifdef HAS_KEYMGR_DPE
+  OT_DISCARD(sc_keymgr_dpe_disable());
+#endif
 }
 
 SHUTDOWN_FUNC(noreturn, shutdown_hang(void)) {
-  enum {
-    kSramCtrlBase = TOP_EARLGREY_SRAM_CTRL_MAIN_REGS_BASE_ADDR,
-    kRstmgrBase = TOP_EARLGREY_RSTMGR_AON_BASE_ADDR,
-  };
+  const uint32_t sram_ctrl_base =
+      dt_sram_ctrl_primary_reg_block(kDtSramCtrlMain);
+  const uint32_t rstmgr_base = dt_rstmgr_primary_reg_block(kDtRstmgr);
 
   // Disable SRAM execution and lock the register.
   // Note: In addition to this register, which is disabled by default at reset,
   // SRAM execution is gated by the lifecycle state
-  // (SRAM_CTRL.INSTR.BUS.LC_GATED) and EN_SRAM_IFETCH item in the HW_CFG OTP
+  // (SRAM_CTRL.INSTR.BUS.LC_GATED) and EN_SRAM_IFETCH item in the HW_CFG1 OTP
   // partition.
-  abs_mmio_write32(kSramCtrlBase + SRAM_CTRL_EXEC_EN_OFFSET, 0);
-  abs_mmio_write32(kSramCtrlBase + SRAM_CTRL_EXEC_REGWEN_REG_OFFSET, 0);
+  abs_mmio_write32(sram_ctrl_base + SRAM_CTRL_EXEC_EN_OFFSET, 0);
+  abs_mmio_write32(sram_ctrl_base + SRAM_CTRL_EXEC_REGWEN_REG_OFFSET, 0);
 
   // Switch to assembly as RAM (incl. stack) is about to get scrambled.
 #ifdef OT_PLATFORM_RV32
@@ -482,10 +514,10 @@ SHUTDOWN_FUNC(noreturn, shutdown_hang(void)) {
       :
       : [kSramRenewKey] "r"(1 << SRAM_CTRL_CTRL_RENEW_SCR_KEY_BIT),
         [kSramCtrlCtrlReg] "I"(SRAM_CTRL_CTRL_REG_OFFSET),
-        [kSramCtrlBase] "r"(kSramCtrlBase),
+        [kSramCtrlBase] "r"(sram_ctrl_base),
         [kMultiBitBool4True] "r"(kMultiBitBool4True),
         [kRstmgrResetReqReg] "I"(RSTMGR_RESET_REQ_REG_OFFSET),
-        [kRstmgrBase] "r"(kRstmgrBase),
+        [kRstmgrBase] "r"(rstmgr_base),
         [kNapotEntireAddressSpace] "r"(0x7fffffff),
         [kPmpCfg0] "r"((EPMP_CFG_A_TOR | EPMP_CFG_LRX) << 8 |
                        (EPMP_CFG_A_NAPOT | EPMP_CFG_L) << 16),
@@ -502,12 +534,18 @@ SHUTDOWN_FUNC(noreturn, shutdown_hang(void)) {
 __attribute__((section(".shutdown")))
 #endif
 void shutdown_finalize(rom_error_t reason) {
+  // Report coverage before error reporting for tests expecting BFV.
+  coverage_report();
   shutdown_report_error(reason);
+  // In a normal build, this function inlines to nothing.
+  stack_utilization_print();
   shutdown_software_escalate();
-  shutdown_keymgr_kill();
-  // Reset before killing the flash to be able to use this also in flash.
+  shutdown_keymgr_dpe_kill();
+  // Report coverage again to ensure the calls above are reported.
+  coverage_report();
+  // Reset before killing NVM to be able to use this also in NVM.
   shutdown_reset();
-  shutdown_flash_kill();
+  shutdown_nvm_kill();
   // If we get here, we'll wait for the watchdog to reset the chip.
   shutdown_hang();
 }

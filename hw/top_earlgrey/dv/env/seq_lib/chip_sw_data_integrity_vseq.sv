@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,26 +31,29 @@ class chip_sw_data_integrity_vseq extends chip_sw_base_vseq;
     // Memory blocks are always aligned to powers of 2, hence we can
     // use the get_addr_mask() function of the RAL model to automatically infer the size.
     if (fault_target == FaultTargetMainSramData) begin
+      // Choose a random address +-10 words around the midpoint of the SRAM so that
+      // we do not accidentally clobber data on the stack / heap.
       `uvm_info(`gfn, "Injecting data error in main SRAM.", UVM_MEDIUM)
       error_ram_size = ral.sram_ctrl_main_ram.get_addr_mask() + 1;
       error_ram_base = ral.sram_ctrl_main_ram.default_map.get_base_addr();
+      error_ram_address = error_ram_base +
+                          error_ram_size/2 +
+                          (($urandom_range(0, 20) - 10) << $clog2(bus_params_pkg::BUS_DBW));
     end else if (fault_target == FaultTargetRetSramData) begin
+      // Choose a random address in the last quarter so we don't clobber counters.
+      // The exact range of memory that can be corrupted with no trouble can be
+      // deduced from sw/device/lib/testing/ret_sram_testutils.c, near line 36.
       `uvm_info(`gfn, "Injecting data error in retention SRAM.", UVM_MEDIUM)
-      error_ram_size = ral.sram_ctrl_ret_aon_ram.get_addr_mask() + 1;
-      error_ram_base = ral.sram_ctrl_ret_aon_ram.default_map.get_base_addr();
+      error_ram_size = ral.sram_ctrl_ret_ram.get_addr_mask() + 1;
+      error_ram_base = ral.sram_ctrl_ret_ram.default_map.get_base_addr();
+      error_ram_address = error_ram_base + $urandom_range(error_ram_size * 3 / 4,
+                                                          error_ram_size - 1);
+      error_ram_address &= ~(bus_params_pkg::BUS_DBW - 1);
     end else begin
       `uvm_info(`gfn, "Injecting instruction error in main SRAM.", UVM_MEDIUM)
       // Get the address of the first instruction of the test program in SRAM.
       sw_symbol_backdoor_read("kSramFunctionTestAddress", sw_error_ram_base);
       error_ram_address = {<<byte{sw_error_ram_base}};
-    end
-
-    if (fault_target != FaultTargetMainSramInstr) begin
-      // Choose a random address +-10 words around the midpoint of the SRAM so that
-      // we do not accidentally clobber data on the stack / heap.
-      error_ram_address = error_ram_base +
-                          error_ram_size/2 +
-                          (($urandom_range(0, 20) - 10) << $clog2(bus_params_pkg::BUS_DBW));
     end
 
     // Disable scoreboard tl error checks since we will trigger faults which cannot be predicted.
@@ -77,18 +80,18 @@ class chip_sw_data_integrity_vseq extends chip_sw_base_vseq;
               TopEarlgreyAlertIdRvCoreIbexFatalHwErr), UVM_MEDIUM)
     if (fault_target == FaultTargetRetSramData) begin
       // Double check again that the address range is correct.
-      error_ram_size = ral.sram_ctrl_ret_aon_ram.get_addr_mask() + 1;
-      error_ram_base = ral.sram_ctrl_ret_aon_ram.default_map.get_base_addr();
+      error_ram_size = ral.sram_ctrl_ret_ram.get_addr_mask() + 1;
+      error_ram_base = ral.sram_ctrl_ret_ram.default_map.get_base_addr();
       `DV_CHECK(error_ram_address >= error_ram_base)
       `DV_CHECK(error_ram_address < error_ram_base + error_ram_size)
-      ret_sram_bkdr_write32(.addr(error_ram_address), .data('0), .flip_bits(39'h1001));
+      ret_sram_inject_ecc_error(.addr(error_ram_address));
     end else begin
       // Double check again that the address range is correct.
       error_ram_size = ral.sram_ctrl_main_ram.get_addr_mask() + 1;
       error_ram_base = ral.sram_ctrl_main_ram.default_map.get_base_addr();
       `DV_CHECK(error_ram_address >= error_ram_base)
       `DV_CHECK(error_ram_address < error_ram_base + error_ram_size)
-      main_sram_bkdr_write32(.addr(error_ram_address), .data('0), .flip_bits(39'h1001));
+      main_sram_inject_ecc_error(.addr(error_ram_address));
     end
   endtask
 endclass

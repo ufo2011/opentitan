@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 module aes_err_injection_bind;
@@ -67,6 +67,17 @@ module aes_err_injection_bind;
       .rst_ni     (rst_ni),
       .aes_ctrl_cs(u_aes_control.gen_fsm[0].gen_fsm_p.u_aes_control_fsm_i.u_aes_control_fsm.
                    aes_ctrl_cs)
+    );
+
+  // fault injection IF for GHASH signals - see aes_fi_vseq.sv
+  bind aes_ghash fi_ghash_wrapper
+    #(.IfName("aes_ghash_fi_vif")
+     )
+  u_ghash_fi
+    (
+     .clk_i       (clk_i),
+     .rst_ni      (rst_ni),
+     .aes_ghash_cs(u_aes_ghash.aes_ghash_cs)
     );
 
 endmodule

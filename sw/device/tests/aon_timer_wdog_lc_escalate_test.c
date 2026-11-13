@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "hw/top/dt/alert_handler.h"
+#include "hw/top/dt/aon_timer.h"
+#include "hw/top/dt/pwrmgr.h"
+#include "hw/top/dt/rstmgr.h"
+#include "hw/top/dt/rv_plic.h"
+#include "sw/device/lib/base/macros.h"
 #include "sw/device/lib/base/math.h"
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_alert_handler.h"
@@ -20,12 +26,9 @@
 #include "sw/device/lib/testing/alert_handler_testutils.h"
 #include "sw/device/lib/testing/aon_timer_testutils.h"
 #include "sw/device/lib/testing/rstmgr_testutils.h"
-#include "sw/device/lib/testing/rv_plic_testutils.h"
 #include "sw/device/lib/testing/test_framework/FreeRTOSConfig.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
-
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -56,7 +59,13 @@ static_assert(
 /**
  * Objects to access the peripherals used in this test via dif API.
  */
-static const uint32_t kPlicTarget = kTopEarlgreyPlicTargetIbex0;
+enum {
+  /**
+   * PLIC target for the Ibex core.
+   */
+  kDtRvPlicTargetIbex0 = 0,
+};
+
 static dif_aon_timer_t aon_timer;
 static dif_rv_plic_t plic;
 static dif_pwrmgr_t pwrmgr;
@@ -70,33 +79,32 @@ static dif_alert_handler_t alert_handler;
  * line to the CPU, which results in a call to this OTTF ISR. This ISR
  * overrides the default OTTF implementation.
  */
-void ottf_external_isr(void) {
-  dif_rv_plic_irq_id_t irq_id;
-  CHECK_DIF_OK(dif_rv_plic_irq_claim(&plic, kPlicTarget, &irq_id));
-
-  top_earlgrey_plic_peripheral_t peripheral = (top_earlgrey_plic_peripheral_t)
-      top_earlgrey_plic_interrupt_for_peripheral[irq_id];
-
-  if (peripheral == kTopEarlgreyPlicPeripheralAonTimerAon) {
-    uint32_t irq =
-        (irq_id - (dif_rv_plic_irq_id_t)
-                      kTopEarlgreyPlicIrqIdAonTimerAonWkupTimerExpired);
-
+bool ottf_handle_irq(uint32_t *exc_info, dt_instance_id_t inst_id,
+                     dif_rv_plic_irq_id_t plic_irq_id) {
+  // Check if this is the AON timer peripheral
+  if (inst_id == dt_aon_timer_instance_id(kDtAonTimer)) {
     // We should not get aon timer interrupts since escalation suppresses them.
+    dt_aon_timer_irq_t irq =
+        dt_aon_timer_irq_from_plic_id(kDtAonTimer, plic_irq_id);
     LOG_ERROR("Unexpected aon timer interrupt %d", irq);
-  } else if (peripheral == kTopEarlgreyPlicPeripheralAlertHandler) {
+    return true;
+  }
+
+  // Check if this is the alert handler peripheral
+  if (inst_id == dt_alert_handler_instance_id(kDtAlertHandler)) {
+    // Convert PLIC IRQ ID to alert handler IRQ
+    dt_alert_handler_irq_t irq =
+        dt_alert_handler_irq_from_plic_id(kDtAlertHandler, plic_irq_id);
+
     // Check the class.
     dif_alert_handler_class_state_t state;
     CHECK_DIF_OK(dif_alert_handler_get_class_state(
         &alert_handler, kDifAlertHandlerClassA, &state));
     CHECK(state == kDifAlertHandlerClassStatePhase0, "Wrong phase %d", state);
 
-    uint32_t irq =
-        (irq_id -
-         (dif_rv_plic_irq_id_t)kTopEarlgreyPlicIrqIdAlertHandlerClassa);
-
     // Deals with the alert cause: we expect it to be from the pwrmgr.
-    dif_alert_handler_alert_t alert = kTopEarlgreyAlertIdPwrmgrAonFatalFault;
+    dif_alert_handler_alert_t alert =
+        dt_pwrmgr_alert_to_alert_id(kDtPwrmgr, kDtPwrmgrAlertFatalFault);
     bool is_cause = false;
     CHECK_DIF_OK(
         dif_alert_handler_alert_is_cause(&alert_handler, alert, &is_cause));
@@ -109,36 +117,45 @@ void ottf_external_isr(void) {
     CHECK(!is_cause);
 
     CHECK_DIF_OK(dif_alert_handler_irq_acknowledge(&alert_handler, irq));
+    return true;
   }
 
-  // Complete the IRQ by writing the IRQ source to the Ibex specific CC
-  // register.
-  CHECK_DIF_OK(dif_rv_plic_irq_complete(&plic, kPlicTarget, irq_id));
+  return false;
 }
 
 /**
  * Initialize the peripherals used in this test.
  */
 void init_peripherals(void) {
-  mmio_region_t base_addr =
-      mmio_region_from_addr(TOP_EARLGREY_PWRMGR_AON_BASE_ADDR);
-  CHECK_DIF_OK(dif_pwrmgr_init(base_addr, &pwrmgr));
+  CHECK_DIF_OK(dif_pwrmgr_init_from_dt(kDtPwrmgr, &pwrmgr));
+  CHECK_DIF_OK(dif_rstmgr_init_from_dt(kDtRstmgr, &rstmgr));
+  CHECK_DIF_OK(dif_aon_timer_init_from_dt(kDtAonTimer, &aon_timer));
+  CHECK_DIF_OK(dif_rv_plic_init_from_dt(kDtRvPlic, &plic));
+  CHECK_DIF_OK(dif_alert_handler_init_from_dt(kDtAlertHandler, &alert_handler));
 
-  base_addr = mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR);
-  CHECK_DIF_OK(dif_rstmgr_init(base_addr, &rstmgr));
+  // Enable AON timer interrupts in PLIC
+  dt_plic_irq_id_t wkup_irq =
+      dt_aon_timer_irq_to_plic_id(kDtAonTimer, kDtAonTimerIrqWkupTimerExpired);
+  dt_plic_irq_id_t bark_irq =
+      dt_aon_timer_irq_to_plic_id(kDtAonTimer, kDtAonTimerIrqWdogTimerBark);
 
-  base_addr = mmio_region_from_addr(TOP_EARLGREY_AON_TIMER_AON_BASE_ADDR);
-  CHECK_DIF_OK(dif_aon_timer_init(base_addr, &aon_timer));
+  dt_plic_irq_id_t aon_irq_ids[] = {wkup_irq, bark_irq};
+  for (size_t i = 0; i < ARRAYSIZE(aon_irq_ids); ++i) {
+    CHECK_DIF_OK(dif_rv_plic_irq_set_priority(&plic, aon_irq_ids[i],
+                                              /*priority=*/1u));
+    CHECK_DIF_OK(dif_rv_plic_irq_set_enabled(
+        &plic, aon_irq_ids[i], kDtRvPlicTargetIbex0, kDifToggleEnabled));
+  }
 
-  base_addr = mmio_region_from_addr(TOP_EARLGREY_RV_PLIC_BASE_ADDR);
-  CHECK_DIF_OK(dif_rv_plic_init(base_addr, &plic));
+  CHECK_DIF_OK(dif_rv_plic_target_set_threshold(&plic, kDtRvPlicTargetIbex0,
+                                                /*threshold=*/0u));
+}
 
-  rv_plic_testutils_irq_range_enable(
-      &plic, kPlicTarget, kTopEarlgreyPlicIrqIdAonTimerAonWkupTimerExpired,
-      kTopEarlgreyPlicIrqIdAonTimerAonWdogTimerBark);
-
-  base_addr = mmio_region_from_addr(TOP_EARLGREY_ALERT_HANDLER_BASE_ADDR);
-  CHECK_DIF_OK(dif_alert_handler_init(base_addr, &alert_handler));
+static uint32_t udiv64_slow_into_u32(uint64_t a, uint64_t b,
+                                     uint64_t *rem_out) {
+  const uint64_t result = udiv64_slow(a, b, rem_out);
+  CHECK(result <= UINT32_MAX, "Result of division must fit in uint32_t");
+  return (uint32_t)result;
 }
 
 /**
@@ -147,28 +164,29 @@ void init_peripherals(void) {
  * wdog is programed to bark.
  */
 static void alert_handler_config(void) {
-  dif_alert_handler_alert_t alerts[] = {kTopEarlgreyAlertIdPwrmgrAonFatalFault};
+  dif_alert_handler_alert_t alerts[] = {
+      dt_pwrmgr_alert_to_alert_id(kDtPwrmgr, kDtPwrmgrAlertFatalFault)};
   dif_alert_handler_class_t alert_classes[] = {kDifAlertHandlerClassA};
 
   dif_alert_handler_escalation_phase_t esc_phases[] = {
       {.phase = kDifAlertHandlerClassStatePhase0,
        .signal = 0,
-       .duration_cycles = udiv64_slow(
+       .duration_cycles = udiv64_slow_into_u32(
            kEscalationPhase0Micros * kClockFreqPeripheralHz, 1000000, NULL)},
       {.phase = kDifAlertHandlerClassStatePhase1,
        .signal = 1,
-       .duration_cycles = udiv64_slow(
+       .duration_cycles = udiv64_slow_into_u32(
            kEscalationPhase1Micros * kClockFreqPeripheralHz, 1000000, NULL)},
       {.phase = kDifAlertHandlerClassStatePhase2,
        .signal = 3,
-       .duration_cycles = udiv64_slow(
+       .duration_cycles = udiv64_slow_into_u32(
            kEscalationPhase2Micros * kClockFreqPeripheralHz, 1000000, NULL)}};
 
   dif_alert_handler_class_config_t class_config[] = {{
       .auto_lock_accumulation_counter = kDifToggleDisabled,
       .accumulator_threshold = 0,
       .irq_deadline_cycles =
-          udiv64_slow(10 * kClockFreqPeripheralHz, 1000000, NULL),
+          udiv64_slow_into_u32(10 * kClockFreqPeripheralHz, 1000000, NULL),
       .escalation_phases = esc_phases,
       .escalation_phases_len = ARRAYSIZE(esc_phases),
       .crashdump_escalation_phase = kDifAlertHandlerClassStatePhase3,
@@ -182,11 +200,11 @@ static void alert_handler_config(void) {
       .classes = classes,
       .class_configs = class_config,
       .classes_len = ARRAYSIZE(class_config),
-      .ping_timeout = 0,
+      .ping_timeout = kAlertHandlerTestutilsDefaultPingTimeout,
   };
 
-  alert_handler_testutils_configure_all(&alert_handler, config,
-                                        kDifToggleEnabled);
+  CHECK_STATUS_OK(alert_handler_testutils_configure_all(&alert_handler, config,
+                                                        kDifToggleEnabled));
   // Enables alert handler irq.
   CHECK_DIF_OK(dif_alert_handler_irq_set_enabled(
       &alert_handler, kDifAlertHandlerIrqClassa, kDifToggleEnabled));
@@ -196,10 +214,12 @@ static void alert_handler_config(void) {
  * Execute the aon timer interrupt test.
  */
 static void execute_test(dif_aon_timer_t *aon_timer) {
-  uint32_t bark_cycles =
-      aon_timer_testutils_get_aon_cycles_from_us(kWdogBarkMicros);
-  uint32_t bite_cycles =
-      aon_timer_testutils_get_aon_cycles_from_us(kWdogBiteMicros);
+  uint32_t bark_cycles = 0;
+  CHECK_STATUS_OK(aon_timer_testutils_get_aon_cycles_32_from_us(kWdogBarkMicros,
+                                                                &bark_cycles));
+  uint32_t bite_cycles = 0;
+  CHECK_STATUS_OK(aon_timer_testutils_get_aon_cycles_32_from_us(kWdogBiteMicros,
+                                                                &bite_cycles));
 
   LOG_INFO(
       "Wdog will bark after %u/%u us/cycles and bite after %u/%u us/cycles",
@@ -207,8 +227,9 @@ static void execute_test(dif_aon_timer_t *aon_timer) {
       bite_cycles);
 
   // Setup the wdog bark and bite timeouts.
-  aon_timer_testutils_watchdog_config(aon_timer, bark_cycles, bite_cycles,
-                                      /*pause_in_sleep=*/false);
+  CHECK_STATUS_OK(
+      aon_timer_testutils_watchdog_config(aon_timer, bark_cycles, bite_cycles,
+                                          /*pause_in_sleep=*/false));
 
   // Trigger the alert handler to escalate.
   dif_pwrmgr_alert_t alert = kDifPwrmgrAlertFatalFault;
@@ -226,10 +247,24 @@ bool test_main(void) {
 
   init_peripherals();
 
-  // Enable all the AON interrupts used in this test.
-  rv_plic_testutils_irq_range_enable(&plic, kPlicTarget,
-                                     kTopEarlgreyPlicIrqIdAlertHandlerClassa,
-                                     kTopEarlgreyPlicIrqIdAlertHandlerClassd);
+  // Enable all the alert handler interrupts used in this test.
+  dt_plic_irq_id_t classa_irq = dt_alert_handler_irq_to_plic_id(
+      kDtAlertHandler, kDtAlertHandlerIrqClassa);
+  dt_plic_irq_id_t classb_irq = dt_alert_handler_irq_to_plic_id(
+      kDtAlertHandler, kDtAlertHandlerIrqClassb);
+  dt_plic_irq_id_t classc_irq = dt_alert_handler_irq_to_plic_id(
+      kDtAlertHandler, kDtAlertHandlerIrqClassc);
+  dt_plic_irq_id_t classd_irq = dt_alert_handler_irq_to_plic_id(
+      kDtAlertHandler, kDtAlertHandlerIrqClassd);
+
+  dt_plic_irq_id_t alert_irq_ids[] = {classa_irq, classb_irq, classc_irq,
+                                      classd_irq};
+  for (size_t i = 0; i < ARRAYSIZE(alert_irq_ids); ++i) {
+    CHECK_DIF_OK(dif_rv_plic_irq_set_priority(&plic, alert_irq_ids[i],
+                                              /*priority=*/1u));
+    CHECK_DIF_OK(dif_rv_plic_irq_set_enabled(
+        &plic, alert_irq_ids[i], kDtRvPlicTargetIbex0, kDifToggleEnabled));
+  }
 
   alert_handler_config();
 

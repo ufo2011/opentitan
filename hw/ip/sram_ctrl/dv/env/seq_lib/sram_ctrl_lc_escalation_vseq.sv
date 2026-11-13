@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,9 @@ class sram_ctrl_lc_escalation_vseq extends sram_ctrl_multiple_keys_vseq;
 
   virtual task body();
     repeat (num_trans) begin
+      if (cfg.stop_transaction_generators()) break;
+
+      `uvm_info(`gfn, "New round of lc_escalation", UVM_HIGH)
       if ($urandom_range(0, 1)) begin
         req_mem_init();
       end else begin
@@ -44,7 +47,7 @@ class sram_ctrl_lc_escalation_vseq extends sram_ctrl_multiple_keys_vseq;
         begin
           // lc_esc happens in parallel, some rsp may fail, skipping check it in vseq.
           do_rand_ops(.num_ops($urandom_range(10, 100)), .blocking(0), .abort(0),
-                      .wait_complete(1), .check_rsp(0));
+                      .wait_complete(1), .check_err_rsp(0));
         end
         begin
           cfg.clk_rst_vif.wait_clks($urandom_range(1, 100));
@@ -74,10 +77,10 @@ class sram_ctrl_lc_escalation_vseq extends sram_ctrl_multiple_keys_vseq;
               1: req_scr_key(.wait_valid(0));
               1: req_mem_init(.wait_done(0));
             endcase
-            // a regular init for sram_ret (4kb) takes 1024 cycles
-            // add some big delay before checking status, so that we know the status
+            // A regular init takes SRAM_SIZE_WORDS cycles.
+            // Add some big delay before checking status, so that we know the status
             // always fails.
-            cfg.clk_rst_vif.wait_clks($urandom_range(0, 2 ** (`SRAM_ADDR_WIDTH + 1)));
+            cfg.clk_rst_vif.wait_clks($urandom_range(0, 2 * `SRAM_SIZE_WORDS));
           end
           // read out STATUS csr, scoreboard will check that proper updates have been made
           csr_rd(.ptr(ral.status), .value(status));

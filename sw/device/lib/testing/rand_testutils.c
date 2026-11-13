@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,8 +13,6 @@
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/rv_core_ibex_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
-
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
 
 /**
  * The polynomial co-efficients used in the 32-bit LFSR implementation.
@@ -49,9 +47,10 @@ rand_testutils_rng_t rand_testutils_init(dif_rv_core_ibex_t *rv_core_ibex) {
 }
 
 static inline void reseed_lfsr(void) {
-  rand_testutils_rng_ctx.lfsr = rv_core_ibex_testutils_get_rnd_data(
+  CHECK_STATUS_OK(rv_core_ibex_testutils_get_rnd_data(
       rand_testutils_rng_ctx.rv_core_ibex,
-      rand_testutils_rng_ctx.entropy_fetch_timeout_usec);
+      rand_testutils_rng_ctx.entropy_fetch_timeout_usec,
+      &rand_testutils_rng_ctx.lfsr));
   rand_testutils_rng_ctx.op_counter = 0;
 }
 

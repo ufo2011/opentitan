@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@
 #include "sw/device/lib/base/mock_mmio.h"
 #include "sw/device/lib/dif/dif_test_base.h"
 
-#include "i2c_regs.h"  // Generated.
+#include "hw/top/i2c_regs.h"  // Generated.
 
 // We define global namespace == and << to make `dif_i2c_timing_params_t` work
 // nicely with EXPECT_EQ.
@@ -162,6 +162,32 @@ TEST(ComputeTimingTest, StandardSpeed) {
   };
   EXPECT_DIF_OK(dif_i2c_compute_timing(config, &params));
   EXPECT_EQ(params, expected);
+
+  // Test that the SCL high and low times are bounded at a minimum
+  // of 4 cycles. for these branches to execute we need to have
+  // scl_time_high_cycles < 4 and scl_time_low_cycles < 4
+  // and lengthened_high_cycles (calculated in the DIF) < 4.
+  // Based on our config and the DIFs calculations we choose the
+  // smallest valid multiple of 100, which is 1600.
+  static_assert(kDifI2cInputDelayCycles == 4,
+                "I2C DIF unit tests are hardcoded for 4 input delay cycles.");
+  config = kBaseConfigSlow;
+  config.lowest_target_device_speed = kDifI2cSpeedStandard;
+  config.clock_period_nanos = 1600;
+  expected = {
+      .scl_time_high_cycles = 4,
+      .scl_time_low_cycles = 4,
+      .rise_cycles = 1,
+      .fall_cycles = 1,
+      .start_signal_setup_cycles = 3,
+      .start_signal_hold_cycles = 3,
+      .data_signal_setup_cycles = 1,
+      .data_signal_hold_cycles = 1,
+      .stop_signal_setup_cycles = 3,
+      .stop_signal_hold_cycles = 3,
+  };
+  EXPECT_DIF_OK(dif_i2c_compute_timing(config, &params));
+  EXPECT_EQ(params, expected);
 }
 
 TEST(ComputeTimingTest, FastSpeed) {
@@ -219,6 +245,32 @@ TEST(ComputeTimingTest, FastSpeed) {
   };
   EXPECT_DIF_OK(dif_i2c_compute_timing(config, &params));
   EXPECT_EQ(params, expected);
+
+  // Test that the SCL high and low times are bounded at a minimum
+  // of 4 cycles. for these branches to execute we need to have
+  // scl_time_high_cycles < 4 and scl_time_low_cycles < 4
+  // and lengthened_high_cycles (calculated in the DIF) < 4.
+  // Based on our config and the DIFs calculations we choose the
+  // smallest valid multiple of 100, which is 500.
+  static_assert(kDifI2cInputDelayCycles == 4,
+                "I2C DIF unit tests are hardcoded for 4 input delay cycles.");
+  config = kBaseConfigSlow;
+  config.lowest_target_device_speed = kDifI2cSpeedFast;
+  config.clock_period_nanos = 500;
+  expected = {
+      .scl_time_high_cycles = 4,
+      .scl_time_low_cycles = 4,
+      .rise_cycles = 1,
+      .fall_cycles = 1,
+      .start_signal_setup_cycles = 2,
+      .start_signal_hold_cycles = 2,
+      .data_signal_setup_cycles = 1,
+      .data_signal_hold_cycles = 1,
+      .stop_signal_setup_cycles = 2,
+      .stop_signal_hold_cycles = 3,
+  };
+  EXPECT_DIF_OK(dif_i2c_compute_timing(config, &params));
+  EXPECT_EQ(params, expected);
 }
 
 TEST(ComputeTimingTest, FastPlusSpeed) {
@@ -256,6 +308,32 @@ TEST(ComputeTimingTest, FastPlusSpeed) {
       .data_signal_hold_cycles = 1,
       .stop_signal_setup_cycles = 13,
       .stop_signal_hold_cycles = 25,
+  };
+  EXPECT_DIF_OK(dif_i2c_compute_timing(config, &params));
+  EXPECT_EQ(params, expected);
+
+  // Test that the SCL high and low times are bounded at a minimum
+  // of 4 cycles. for these branches to execute we need to have
+  // scl_time_high_cycles < 4 and scl_time_low_cycles < 4
+  // and lengthened_high_cycles (calculated in the DIF) < 4.
+  // Based on our config and the DIFs calculations we choose the
+  // smallest valid multiple of 100, which is 200.
+  static_assert(kDifI2cInputDelayCycles == 4,
+                "I2C DIF unit tests are hardcoded for 4 input delay cycles.");
+  config = kBaseConfigFast;
+  config.lowest_target_device_speed = kDifI2cSpeedFastPlus;
+  config.clock_period_nanos = 200;
+  expected = {
+      .scl_time_high_cycles = 4,
+      .scl_time_low_cycles = 4,
+      .rise_cycles = 1,
+      .fall_cycles = 1,
+      .start_signal_setup_cycles = 2,
+      .start_signal_hold_cycles = 2,
+      .data_signal_setup_cycles = 1,
+      .data_signal_hold_cycles = 1,
+      .stop_signal_setup_cycles = 2,
+      .stop_signal_hold_cycles = 3,
   };
   EXPECT_DIF_OK(dif_i2c_compute_timing(config, &params));
   EXPECT_EQ(params, expected);
@@ -313,18 +391,20 @@ TEST_F(ConfigTest, NormalInit) {
   EXPECT_DIF_OK(dif_i2c_configure(&i2c_, config));
 
   dif_i2c_status status, expectedStatus;
-  EXPECT_READ32(I2C_CTRL_REG_OFFSET, 0x00000003);    // Host and Target active
-  EXPECT_READ32(I2C_STATUS_REG_OFFSET, 0x0000033c);  // All empty and idle
+  EXPECT_READ32(I2C_CTRL_REG_OFFSET, 0x0000000b);    // Host and Target active
+  EXPECT_READ32(I2C_STATUS_REG_OFFSET, 0x0000073c);  // All empty and idle
   EXPECT_DIF_OK(dif_i2c_get_status(&i2c_, &status));
   expectedStatus = {
       .enable_host = true,
       .enable_target = true,
+      .ack_control_en = true,
       .fmt_fifo_empty = true,
       .rx_fifo_empty = true,
       .host_idle = true,
       .target_idle = true,
       .tx_fifo_empty = true,
       .acq_fifo_empty = true,
+      .ack_ctrl_stretch = true,
   };
   EXPECT_EQ(status, expectedStatus);
 }
@@ -378,62 +458,118 @@ TEST_F(FifoCtrlTest, TxNullArgs) {
   EXPECT_DIF_BADARG(dif_i2c_reset_tx_fifo(nullptr));
 }
 
-TEST_F(FifoCtrlTest, SetLevels) {
-  EXPECT_MASK32(I2C_FIFO_CTRL_REG_OFFSET,
+class HostFifoConfigTest : public I2cTest {};
+
+TEST_F(HostFifoConfigTest, SetLevels) {
+  EXPECT_MASK32(I2C_HOST_FIFO_CONFIG_REG_OFFSET,
                 {
                     {
-                        I2C_FIFO_CTRL_RXILVL_OFFSET,
-                        I2C_FIFO_CTRL_RXILVL_MASK,
-                        I2C_FIFO_CTRL_RXILVL_VALUE_RXLVL1,
+                        I2C_HOST_FIFO_CONFIG_RX_THRESH_OFFSET,
+                        I2C_HOST_FIFO_CONFIG_RX_THRESH_MASK,
+                        0u,
                     },
                     {
-                        I2C_FIFO_CTRL_FMTILVL_OFFSET,
-                        I2C_FIFO_CTRL_FMTILVL_MASK,
-                        I2C_FIFO_CTRL_FMTILVL_VALUE_FMTLVL1,
+                        I2C_HOST_FIFO_CONFIG_FMT_THRESH_OFFSET,
+                        I2C_HOST_FIFO_CONFIG_FMT_THRESH_MASK,
+                        2u,
                     },
                 });
-  EXPECT_DIF_OK(
-      dif_i2c_set_watermarks(&i2c_, kDifI2cLevel1Byte, kDifI2cLevel1Byte));
+  EXPECT_DIF_OK(dif_i2c_set_host_watermarks(&i2c_, /*rx_level > */ 0u,
+                                            /*fmt_level < */ 2u));
 
-  EXPECT_MASK32(I2C_FIFO_CTRL_REG_OFFSET,
+  EXPECT_MASK32(I2C_HOST_FIFO_CONFIG_REG_OFFSET,
                 {
                     {
-                        I2C_FIFO_CTRL_RXILVL_OFFSET,
-                        I2C_FIFO_CTRL_RXILVL_MASK,
-                        I2C_FIFO_CTRL_RXILVL_VALUE_RXLVL4,
+                        I2C_HOST_FIFO_CONFIG_RX_THRESH_OFFSET,
+                        I2C_HOST_FIFO_CONFIG_RX_THRESH_MASK,
+                        3u,
                     },
                     {
-                        I2C_FIFO_CTRL_FMTILVL_OFFSET,
-                        I2C_FIFO_CTRL_FMTILVL_MASK,
-                        I2C_FIFO_CTRL_FMTILVL_VALUE_FMTLVL16,
+                        I2C_HOST_FIFO_CONFIG_FMT_THRESH_OFFSET,
+                        I2C_HOST_FIFO_CONFIG_FMT_THRESH_MASK,
+                        17u,
                     },
                 });
-  EXPECT_DIF_OK(
-      dif_i2c_set_watermarks(&i2c_, kDifI2cLevel4Byte, kDifI2cLevel16Byte));
+  EXPECT_DIF_OK(dif_i2c_set_host_watermarks(&i2c_, /*rx_level > */ 3u,
+                                            /*fmt_level < */ 17u));
 
-  EXPECT_MASK32(I2C_FIFO_CTRL_REG_OFFSET,
+  EXPECT_MASK32(I2C_HOST_FIFO_CONFIG_REG_OFFSET,
                 {
                     {
-                        I2C_FIFO_CTRL_RXILVL_OFFSET,
-                        I2C_FIFO_CTRL_RXILVL_MASK,
-                        I2C_FIFO_CTRL_RXILVL_VALUE_RXLVL30,
+                        I2C_HOST_FIFO_CONFIG_RX_THRESH_OFFSET,
+                        I2C_HOST_FIFO_CONFIG_RX_THRESH_MASK,
+                        29u,
                     },
                     {
-                        I2C_FIFO_CTRL_FMTILVL_OFFSET,
-                        I2C_FIFO_CTRL_FMTILVL_MASK,
-                        I2C_FIFO_CTRL_FMTILVL_VALUE_FMTLVL8,
+                        I2C_HOST_FIFO_CONFIG_FMT_THRESH_OFFSET,
+                        I2C_HOST_FIFO_CONFIG_FMT_THRESH_MASK,
+                        9u,
                     },
                 });
-  EXPECT_DIF_OK(
-      dif_i2c_set_watermarks(&i2c_, kDifI2cLevel30Byte, kDifI2cLevel8Byte));
-
-  EXPECT_DIF_BADARG(
-      dif_i2c_set_watermarks(&i2c_, kDifI2cLevel30Byte, kDifI2cLevel30Byte));
+  EXPECT_DIF_OK(dif_i2c_set_host_watermarks(&i2c_, /*rx_level > */ 29u,
+                                            /*fmt_level < */ 9u));
 }
 
-TEST_F(FifoCtrlTest, SetLevelsNullArgs) {
-  EXPECT_DIF_BADARG(
-      dif_i2c_set_watermarks(nullptr, kDifI2cLevel4Byte, kDifI2cLevel16Byte));
+TEST_F(HostFifoConfigTest, SetLevelsNullArgs) {
+  EXPECT_DIF_BADARG(dif_i2c_set_host_watermarks(nullptr, /*rx_level > */ 3u,
+                                                /*fmt_level < */ 17u));
+}
+
+class TargetFifoConfigTest : public I2cTest {};
+
+TEST_F(TargetFifoConfigTest, SetLevels) {
+  EXPECT_MASK32(I2C_TARGET_FIFO_CONFIG_REG_OFFSET,
+                {
+                    {
+                        I2C_TARGET_FIFO_CONFIG_TX_THRESH_OFFSET,
+                        I2C_TARGET_FIFO_CONFIG_TX_THRESH_MASK,
+                        2u,
+                    },
+                    {
+                        I2C_TARGET_FIFO_CONFIG_ACQ_THRESH_OFFSET,
+                        I2C_TARGET_FIFO_CONFIG_ACQ_THRESH_MASK,
+                        0u,
+                    },
+                });
+  EXPECT_DIF_OK(dif_i2c_set_target_watermarks(&i2c_, /*tx_level < */ 2u,
+                                              /*acq_level > */ 0u));
+
+  EXPECT_MASK32(I2C_TARGET_FIFO_CONFIG_REG_OFFSET,
+                {
+                    {
+                        I2C_TARGET_FIFO_CONFIG_TX_THRESH_OFFSET,
+                        I2C_TARGET_FIFO_CONFIG_TX_THRESH_MASK,
+                        17u,
+                    },
+                    {
+                        I2C_TARGET_FIFO_CONFIG_ACQ_THRESH_OFFSET,
+                        I2C_TARGET_FIFO_CONFIG_ACQ_THRESH_MASK,
+                        3u,
+                    },
+                });
+  EXPECT_DIF_OK(dif_i2c_set_target_watermarks(&i2c_, /*tx_level < */ 17u,
+                                              /*acq_level > */ 3u));
+
+  EXPECT_MASK32(I2C_TARGET_FIFO_CONFIG_REG_OFFSET,
+                {
+                    {
+                        I2C_TARGET_FIFO_CONFIG_TX_THRESH_OFFSET,
+                        I2C_TARGET_FIFO_CONFIG_TX_THRESH_MASK,
+                        29u,
+                    },
+                    {
+                        I2C_TARGET_FIFO_CONFIG_ACQ_THRESH_OFFSET,
+                        I2C_TARGET_FIFO_CONFIG_ACQ_THRESH_MASK,
+                        9u,
+                    },
+                });
+  EXPECT_DIF_OK(dif_i2c_set_target_watermarks(&i2c_, /*tx_level < */ 29u,
+                                              /*acq_level > */ 9u));
+}
+
+TEST_F(TargetFifoConfigTest, SetLevelsNullArgs) {
+  EXPECT_DIF_BADARG(dif_i2c_set_target_watermarks(nullptr, /*tx_level < */ 17u,
+                                                  /*acq_level > */ 3u));
 }
 
 class ControlTest : public I2cTest {};
@@ -444,10 +580,76 @@ TEST_F(ControlTest, HostEnable) {
 
   EXPECT_MASK32(I2C_CTRL_REG_OFFSET, {{I2C_CTRL_ENABLEHOST_BIT, 0x1, 0x0}});
   EXPECT_DIF_OK(dif_i2c_host_set_enabled(&i2c_, kDifToggleDisabled));
+
+  EXPECT_MASK32(I2C_CTRL_REG_OFFSET,
+                {{I2C_CTRL_MULTI_CONTROLLER_MONITOR_EN_BIT, 0x1, 0x1}});
+  EXPECT_DIF_OK(
+      dif_i2c_multi_controller_monitor_set_enabled(&i2c_, kDifToggleEnabled));
+
+  EXPECT_MASK32(I2C_CTRL_REG_OFFSET,
+                {{I2C_CTRL_MULTI_CONTROLLER_MONITOR_EN_BIT, 0x1, 0x0}});
+  EXPECT_DIF_OK(
+      dif_i2c_multi_controller_monitor_set_enabled(&i2c_, kDifToggleDisabled));
 }
 
 TEST_F(ControlTest, HostEnableNullArgs) {
   EXPECT_DIF_BADARG(dif_i2c_host_set_enabled(nullptr, kDifToggleEnabled));
+  EXPECT_DIF_BADARG(
+      dif_i2c_multi_controller_monitor_set_enabled(nullptr, kDifToggleEnabled));
+
+  dif_i2c_controller_halt_events_t events_arg = {0};
+  EXPECT_DIF_BADARG(dif_i2c_get_controller_halt_events(nullptr, &events_arg));
+  EXPECT_DIF_BADARG(dif_i2c_get_controller_halt_events(&i2c_, nullptr));
+  EXPECT_DIF_BADARG(dif_i2c_clear_controller_halt_events(nullptr, events_arg));
+}
+
+TEST_F(ControlTest, ControllerHaltEvents) {
+  dif_i2c_controller_halt_events_t events_arg = {0};
+  EXPECT_READ32(I2C_CONTROLLER_EVENTS_REG_OFFSET,
+                {
+                    {I2C_CONTROLLER_EVENTS_NACK_BIT, 1},
+                    {I2C_CONTROLLER_EVENTS_ARBITRATION_LOST_BIT, 1},
+                });
+  EXPECT_DIF_OK(dif_i2c_get_controller_halt_events(&i2c_, &events_arg));
+  EXPECT_TRUE(events_arg.nack_received);
+  EXPECT_FALSE(events_arg.unhandled_nack_timeout);
+  EXPECT_FALSE(events_arg.bus_timeout);
+  EXPECT_TRUE(events_arg.arbitration_lost);
+
+  EXPECT_READ32(I2C_CONTROLLER_EVENTS_REG_OFFSET,
+                {
+                    {I2C_CONTROLLER_EVENTS_UNHANDLED_NACK_TIMEOUT_BIT, 1},
+                    {I2C_CONTROLLER_EVENTS_BUS_TIMEOUT_BIT, 1},
+                });
+  EXPECT_DIF_OK(dif_i2c_get_controller_halt_events(&i2c_, &events_arg));
+  EXPECT_FALSE(events_arg.nack_received);
+  EXPECT_TRUE(events_arg.unhandled_nack_timeout);
+  EXPECT_TRUE(events_arg.bus_timeout);
+  EXPECT_FALSE(events_arg.arbitration_lost);
+
+  events_arg.nack_received = false;
+  events_arg.unhandled_nack_timeout = true;
+  events_arg.bus_timeout = false;
+  EXPECT_WRITE32(I2C_CONTROLLER_EVENTS_REG_OFFSET,
+                 {
+                     {I2C_CONTROLLER_EVENTS_NACK_BIT, 0},
+                     {I2C_CONTROLLER_EVENTS_UNHANDLED_NACK_TIMEOUT_BIT, 1},
+                     {I2C_CONTROLLER_EVENTS_BUS_TIMEOUT_BIT, 0},
+                 });
+  EXPECT_DIF_OK(dif_i2c_clear_controller_halt_events(&i2c_, events_arg));
+
+  events_arg.nack_received = true;
+  events_arg.unhandled_nack_timeout = false;
+  events_arg.bus_timeout = true;
+  events_arg.arbitration_lost = false;
+  EXPECT_WRITE32(I2C_CONTROLLER_EVENTS_REG_OFFSET,
+                 {
+                     {I2C_CONTROLLER_EVENTS_NACK_BIT, 1},
+                     {I2C_CONTROLLER_EVENTS_UNHANDLED_NACK_TIMEOUT_BIT, 0},
+                     {I2C_CONTROLLER_EVENTS_BUS_TIMEOUT_BIT, 1},
+                     {I2C_CONTROLLER_EVENTS_ARBITRATION_LOST_BIT, 0},
+                 });
+  EXPECT_DIF_OK(dif_i2c_clear_controller_halt_events(&i2c_, events_arg));
 }
 
 TEST_F(ControlTest, DeviceEnable) {
@@ -456,10 +658,80 @@ TEST_F(ControlTest, DeviceEnable) {
 
   EXPECT_MASK32(I2C_CTRL_REG_OFFSET, {{I2C_CTRL_ENABLETARGET_BIT, 0x1, 0x0}});
   EXPECT_DIF_OK(dif_i2c_device_set_enabled(&i2c_, kDifToggleDisabled));
+
+  EXPECT_MASK32(I2C_CTRL_REG_OFFSET,
+                {{I2C_CTRL_NACK_ADDR_AFTER_TIMEOUT_BIT, 0x1, 0x1}});
+  EXPECT_DIF_OK(dif_i2c_addr_nack_set_enabled(&i2c_, kDifToggleEnabled));
+
+  EXPECT_MASK32(I2C_CTRL_REG_OFFSET,
+                {{I2C_CTRL_NACK_ADDR_AFTER_TIMEOUT_BIT, 0x1, 0x0}});
+  EXPECT_DIF_OK(dif_i2c_addr_nack_set_enabled(&i2c_, kDifToggleDisabled));
+
+  EXPECT_MASK32(I2C_CTRL_REG_OFFSET,
+                {{I2C_CTRL_TX_STRETCH_CTRL_EN_BIT, 0x1, 0x1}});
+  EXPECT_DIF_OK(
+      dif_i2c_target_tx_stretch_ctrl_set_enabled(&i2c_, kDifToggleEnabled));
+
+  EXPECT_MASK32(I2C_CTRL_REG_OFFSET,
+                {{I2C_CTRL_TX_STRETCH_CTRL_EN_BIT, 0x1, 0x0}});
+  EXPECT_DIF_OK(
+      dif_i2c_target_tx_stretch_ctrl_set_enabled(&i2c_, kDifToggleDisabled));
 }
 
 TEST_F(ControlTest, DeviceEnableNullArgs) {
   EXPECT_DIF_BADARG(dif_i2c_device_set_enabled(nullptr, kDifToggleEnabled));
+  EXPECT_DIF_BADARG(dif_i2c_addr_nack_set_enabled(nullptr, kDifToggleEnabled));
+  EXPECT_DIF_BADARG(
+      dif_i2c_target_tx_stretch_ctrl_set_enabled(nullptr, kDifToggleEnabled));
+
+  dif_i2c_target_tx_halt_events_t events_arg = {0};
+  EXPECT_DIF_BADARG(dif_i2c_get_target_tx_halt_events(nullptr, &events_arg));
+  EXPECT_DIF_BADARG(dif_i2c_get_target_tx_halt_events(&i2c_, nullptr));
+  EXPECT_DIF_BADARG(dif_i2c_clear_target_tx_halt_events(nullptr, events_arg));
+}
+
+TEST_F(ControlTest, DeviceHaltEvents) {
+  dif_i2c_target_tx_halt_events_t events_arg = {0};
+  EXPECT_READ32(I2C_TARGET_EVENTS_REG_OFFSET,
+                {
+                    {I2C_TARGET_EVENTS_TX_PENDING_BIT, 1},
+                });
+  EXPECT_DIF_OK(dif_i2c_get_target_tx_halt_events(&i2c_, &events_arg));
+  EXPECT_TRUE(events_arg.tx_pending);
+  EXPECT_FALSE(events_arg.bus_timeout);
+  EXPECT_FALSE(events_arg.arbitration_lost);
+
+  EXPECT_READ32(I2C_TARGET_EVENTS_REG_OFFSET,
+                {
+                    {I2C_TARGET_EVENTS_BUS_TIMEOUT_BIT, 1},
+                    {I2C_TARGET_EVENTS_ARBITRATION_LOST_BIT, 1},
+                });
+  EXPECT_DIF_OK(dif_i2c_get_target_tx_halt_events(&i2c_, &events_arg));
+  EXPECT_FALSE(events_arg.tx_pending);
+  EXPECT_TRUE(events_arg.bus_timeout);
+  EXPECT_TRUE(events_arg.arbitration_lost);
+
+  events_arg.tx_pending = false;
+  events_arg.bus_timeout = true;
+  events_arg.arbitration_lost = false;
+  EXPECT_WRITE32(I2C_TARGET_EVENTS_REG_OFFSET,
+                 {
+                     {I2C_TARGET_EVENTS_TX_PENDING_BIT, 0},
+                     {I2C_TARGET_EVENTS_BUS_TIMEOUT_BIT, 1},
+                     {I2C_TARGET_EVENTS_ARBITRATION_LOST_BIT, 0},
+                 });
+  EXPECT_DIF_OK(dif_i2c_clear_target_tx_halt_events(&i2c_, events_arg));
+
+  events_arg.tx_pending = true;
+  events_arg.bus_timeout = false;
+  events_arg.arbitration_lost = true;
+  EXPECT_WRITE32(I2C_TARGET_EVENTS_REG_OFFSET,
+                 {
+                     {I2C_TARGET_EVENTS_TX_PENDING_BIT, 1},
+                     {I2C_TARGET_EVENTS_BUS_TIMEOUT_BIT, 0},
+                     {I2C_TARGET_EVENTS_ARBITRATION_LOST_BIT, 1},
+                 });
+  EXPECT_DIF_OK(dif_i2c_clear_target_tx_halt_events(&i2c_, events_arg));
 }
 
 TEST_F(ControlTest, LLPBK) {
@@ -473,6 +745,71 @@ TEST_F(ControlTest, LLPBK) {
 TEST_F(ControlTest, LLPBKNullArgs) {
   EXPECT_DIF_BADARG(
       dif_i2c_line_loopback_set_enabled(nullptr, kDifToggleEnabled));
+}
+
+TEST_F(ControlTest, AddrNack) {
+  EXPECT_MASK32(I2C_CTRL_REG_OFFSET,
+                {{I2C_CTRL_NACK_ADDR_AFTER_TIMEOUT_BIT, 0x1, 0x1}});
+  EXPECT_DIF_OK(dif_i2c_addr_nack_set_enabled(&i2c_, kDifToggleEnabled));
+
+  EXPECT_MASK32(I2C_CTRL_REG_OFFSET,
+                {{I2C_CTRL_NACK_ADDR_AFTER_TIMEOUT_BIT, 0x1, 0x0}});
+  EXPECT_DIF_OK(dif_i2c_addr_nack_set_enabled(&i2c_, kDifToggleDisabled));
+}
+
+TEST_F(ControlTest, AddrNackNullArgs) {
+  EXPECT_DIF_BADARG(dif_i2c_addr_nack_set_enabled(nullptr, kDifToggleEnabled));
+}
+
+TEST_F(ControlTest, AckControl) {
+  EXPECT_MASK32(I2C_CTRL_REG_OFFSET, {{I2C_CTRL_ACK_CTRL_EN_BIT, 0x1, 0x1}});
+  EXPECT_DIF_OK(dif_i2c_ack_ctrl_set_enabled(&i2c_, kDifToggleEnabled));
+
+  EXPECT_MASK32(I2C_CTRL_REG_OFFSET, {{I2C_CTRL_ACK_CTRL_EN_BIT, 0x1, 0x0}});
+  EXPECT_DIF_OK(dif_i2c_ack_ctrl_set_enabled(&i2c_, kDifToggleDisabled));
+
+  uint16_t auto_ack_count = 0;
+  EXPECT_READ32(I2C_TARGET_ACK_CTRL_REG_OFFSET,
+                {
+                    {I2C_TARGET_ACK_CTRL_NBYTES_OFFSET, 0xa5},
+                });
+  EXPECT_DIF_OK(dif_i2c_get_auto_ack_count(&i2c_, &auto_ack_count));
+  EXPECT_EQ(auto_ack_count, 0xa5);
+
+  EXPECT_WRITE32(I2C_TARGET_ACK_CTRL_REG_OFFSET,
+                 {
+                     {I2C_TARGET_ACK_CTRL_NBYTES_OFFSET, 256},
+                 });
+  EXPECT_DIF_OK(dif_i2c_set_auto_ack_count(&i2c_, 256));
+
+  EXPECT_WRITE32(I2C_TARGET_ACK_CTRL_REG_OFFSET,
+                 {
+                     {I2C_TARGET_ACK_CTRL_NACK_BIT, 1},
+                 });
+  EXPECT_DIF_OK(dif_i2c_nack_transaction(&i2c_));
+
+  uint8_t pending_data;
+  EXPECT_READ32(I2C_ACQ_FIFO_NEXT_DATA_REG_OFFSET, 0x76);
+  EXPECT_DIF_OK(dif_i2c_get_pending_acq_byte(&i2c_, &pending_data));
+  EXPECT_EQ(pending_data, 0x76);
+}
+
+TEST_F(ControlTest, AckControlNullArgs) {
+  EXPECT_DIF_BADARG(dif_i2c_ack_ctrl_set_enabled(nullptr, kDifToggleEnabled));
+
+  uint16_t count_arg = 0;
+  EXPECT_DIF_BADARG(dif_i2c_get_auto_ack_count(nullptr, &count_arg));
+  EXPECT_DIF_BADARG(dif_i2c_get_auto_ack_count(&i2c_, nullptr));
+
+  EXPECT_DIF_BADARG(dif_i2c_set_auto_ack_count(nullptr, /*count=*/0));
+  // Check BadArgument for count larger than CSR.
+  count_arg = I2C_TARGET_ACK_CTRL_NBYTES_MASK + 1;
+  EXPECT_DIF_BADARG(dif_i2c_set_auto_ack_count(&i2c_, count_arg));
+  EXPECT_DIF_BADARG(dif_i2c_nack_transaction(nullptr));
+
+  uint8_t data_arg = 0;
+  EXPECT_DIF_BADARG(dif_i2c_get_pending_acq_byte(nullptr, &data_arg));
+  EXPECT_DIF_BADARG(dif_i2c_get_pending_acq_byte(&i2c_, nullptr));
 }
 
 class OverrideTest : public I2cTest {};
@@ -541,8 +878,9 @@ TEST_F(OverrideTest, SampleNullArgs) {
 class FifoTest : public I2cTest {};
 
 TEST_F(FifoTest, GetLevels) {
-  uint8_t rx, fmt, tx, acq;
-  EXPECT_READ32(I2C_FIFO_STATUS_REG_OFFSET, 0x10293847);
+  dif_i2c_level_t rx, fmt, tx, acq;
+  EXPECT_READ32(I2C_HOST_FIFO_STATUS_REG_OFFSET, 0x00290047);
+  EXPECT_READ32(I2C_TARGET_FIFO_STATUS_REG_OFFSET, 0x00100038);
   EXPECT_DIF_OK(dif_i2c_get_fifo_levels(&i2c_, &fmt, &rx, &tx, &acq));
   EXPECT_EQ(fmt, 0x47);
   EXPECT_EQ(rx, 0x29);
@@ -550,7 +888,8 @@ TEST_F(FifoTest, GetLevels) {
   EXPECT_EQ(acq, 0x10);
 
   rx = 0, fmt = 0, tx = 0, acq = 0;
-  EXPECT_READ32(I2C_FIFO_STATUS_REG_OFFSET, 0x10293847);
+  EXPECT_READ32(I2C_HOST_FIFO_STATUS_REG_OFFSET, 0x00290047);
+  EXPECT_READ32(I2C_TARGET_FIFO_STATUS_REG_OFFSET, 0x00100038);
   EXPECT_DIF_OK(dif_i2c_get_fifo_levels(&i2c_, &fmt, &rx, nullptr, nullptr));
   EXPECT_EQ(fmt, 0x47);
   EXPECT_EQ(rx, 0x29);
@@ -558,7 +897,8 @@ TEST_F(FifoTest, GetLevels) {
   EXPECT_EQ(acq, 0x0);
 
   rx = 0, fmt = 0, tx = 0, acq = 0;
-  EXPECT_READ32(I2C_FIFO_STATUS_REG_OFFSET, 0x10293847);
+  EXPECT_READ32(I2C_HOST_FIFO_STATUS_REG_OFFSET, 0x00290047);
+  EXPECT_READ32(I2C_TARGET_FIFO_STATUS_REG_OFFSET, 0x00100038);
   EXPECT_DIF_OK(
       dif_i2c_get_fifo_levels(&i2c_, &fmt, nullptr, nullptr, nullptr));
   EXPECT_EQ(rx, 0x0);
@@ -567,7 +907,8 @@ TEST_F(FifoTest, GetLevels) {
   EXPECT_EQ(acq, 0x0);
 
   rx = 0, fmt = 0, tx = 0, acq = 0;
-  EXPECT_READ32(I2C_FIFO_STATUS_REG_OFFSET, 0x10293847);
+  EXPECT_READ32(I2C_HOST_FIFO_STATUS_REG_OFFSET, 0x00290047);
+  EXPECT_READ32(I2C_TARGET_FIFO_STATUS_REG_OFFSET, 0x00100038);
   EXPECT_DIF_OK(dif_i2c_get_fifo_levels(&i2c_, nullptr, &rx, nullptr, nullptr));
   EXPECT_EQ(rx, 0x29);
   EXPECT_EQ(fmt, 0x0);
@@ -575,7 +916,8 @@ TEST_F(FifoTest, GetLevels) {
   EXPECT_EQ(acq, 0x0);
 
   rx = 0, fmt = 0, tx = 0, acq = 0;
-  EXPECT_READ32(I2C_FIFO_STATUS_REG_OFFSET, 0x10293847);
+  EXPECT_READ32(I2C_HOST_FIFO_STATUS_REG_OFFSET, 0x00290047);
+  EXPECT_READ32(I2C_TARGET_FIFO_STATUS_REG_OFFSET, 0x00100038);
   EXPECT_DIF_OK(dif_i2c_get_fifo_levels(&i2c_, nullptr, nullptr, &tx, &acq));
   EXPECT_EQ(fmt, 0x0);
   EXPECT_EQ(rx, 0x0);
@@ -583,7 +925,8 @@ TEST_F(FifoTest, GetLevels) {
   EXPECT_EQ(acq, 0x10);
 
   rx = 0, fmt = 0, tx = 0, acq = 0;
-  EXPECT_READ32(I2C_FIFO_STATUS_REG_OFFSET, 0x10293847);
+  EXPECT_READ32(I2C_HOST_FIFO_STATUS_REG_OFFSET, 0x00290047);
+  EXPECT_READ32(I2C_TARGET_FIFO_STATUS_REG_OFFSET, 0x00100038);
   EXPECT_DIF_OK(dif_i2c_get_fifo_levels(&i2c_, nullptr, nullptr, &tx, nullptr));
   EXPECT_EQ(rx, 0x0);
   EXPECT_EQ(fmt, 0x0);
@@ -591,7 +934,8 @@ TEST_F(FifoTest, GetLevels) {
   EXPECT_EQ(acq, 0x0);
 
   rx = 0, fmt = 0, tx = 0, acq = 0;
-  EXPECT_READ32(I2C_FIFO_STATUS_REG_OFFSET, 0x10293847);
+  EXPECT_READ32(I2C_HOST_FIFO_STATUS_REG_OFFSET, 0x00290047);
+  EXPECT_READ32(I2C_TARGET_FIFO_STATUS_REG_OFFSET, 0x00100038);
   EXPECT_DIF_OK(
       dif_i2c_get_fifo_levels(&i2c_, nullptr, nullptr, nullptr, &acq));
   EXPECT_EQ(rx, 0x0);
@@ -601,7 +945,7 @@ TEST_F(FifoTest, GetLevels) {
 }
 
 TEST_F(FifoTest, GetLevelsNullArgs) {
-  uint8_t rx, fmt;
+  dif_i2c_level_t rx, fmt;
   EXPECT_DIF_BADARG(
       dif_i2c_get_fifo_levels(nullptr, &rx, &fmt, nullptr, nullptr));
 }
@@ -684,7 +1028,7 @@ TEST_F(FifoTest, WriteRaw) {
 
   EXPECT_WRITE32(I2C_FDATA_REG_OFFSET, {
                                            {I2C_FDATA_FBYTE_OFFSET, 0x00},
-                                           {I2C_FDATA_READ_BIT, 0x1},
+                                           {I2C_FDATA_READB_BIT, 0x1},
                                            {I2C_FDATA_RCONT_BIT, 0x1},
                                        });
   EXPECT_DIF_OK(dif_i2c_write_byte_raw(&i2c_, 0x00,
@@ -695,7 +1039,7 @@ TEST_F(FifoTest, WriteRaw) {
 
   EXPECT_WRITE32(I2C_FDATA_REG_OFFSET, {
                                            {I2C_FDATA_FBYTE_OFFSET, 0x77},
-                                           {I2C_FDATA_READ_BIT, 0x1},
+                                           {I2C_FDATA_READB_BIT, 0x1},
                                        });
   EXPECT_DIF_OK(dif_i2c_write_byte_raw(&i2c_, 0x77,
                                        {
@@ -729,16 +1073,25 @@ TEST_F(FifoTest, TransmitBadArgs) {
 class StretchTest : public I2cTest {};
 
 TEST_F(StretchTest, ConfigTimeouts) {
-  EXPECT_WRITE32(I2C_TIMEOUT_CTRL_REG_OFFSET, 0x81234567);
-  EXPECT_DIF_OK(dif_i2c_enable_clock_stretching_timeout(
-      &i2c_, kDifToggleEnabled, 0x01234567));
+  EXPECT_WRITE32(I2C_TIMEOUT_CTRL_REG_OFFSET,
+                 {{I2C_TIMEOUT_CTRL_EN_BIT, 1},
+                  {I2C_TIMEOUT_CTRL_MODE_BIT, 0},
+                  {I2C_TIMEOUT_CTRL_VAL_OFFSET, 0x01234567}});
+  EXPECT_DIF_OK(dif_i2c_enable_clock_timeout(&i2c_, kDifI2cSclTimeoutStretch,
+                                             0x01234567));
+  EXPECT_WRITE32(I2C_TIMEOUT_CTRL_REG_OFFSET,
+                 {{I2C_TIMEOUT_CTRL_EN_BIT, 1},
+                  {I2C_TIMEOUT_CTRL_MODE_BIT, 1},
+                  {I2C_TIMEOUT_CTRL_VAL_OFFSET, 0x07654321}});
+  EXPECT_DIF_OK(
+      dif_i2c_enable_clock_timeout(&i2c_, kDifI2cSclTimeoutBus, 0x07654321));
   EXPECT_WRITE32(I2C_HOST_TIMEOUT_CTRL_REG_OFFSET, 0x81234567);
   EXPECT_DIF_OK(dif_i2c_set_host_timeout(&i2c_, 0x81234567));
 }
 
 TEST_F(StretchTest, ConfigTimeoutsBadArgs) {
-  EXPECT_DIF_BADARG(dif_i2c_enable_clock_stretching_timeout(
-      nullptr, kDifToggleEnabled, 0x01234567));
+  EXPECT_DIF_BADARG(dif_i2c_enable_clock_timeout(
+      nullptr, kDifI2cSclTimeoutStretch, 0x01234567));
   EXPECT_DIF_BADARG(dif_i2c_set_host_timeout(nullptr, 0x81234567));
 }
 
@@ -784,7 +1137,7 @@ TEST_F(AddressTest, SetDeviceAddress) {
 }
 
 TEST_F(AddressTest, SetAddressBadArgs) {
-  dif_i2c_id_t id0, id1;
+  dif_i2c_id_t id0 = {}, id1 = {};
   EXPECT_DIF_BADARG(dif_i2c_set_device_id(nullptr, &id0, &id1));
 }
 

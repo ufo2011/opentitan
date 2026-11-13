@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 r"""This script generates random seeds and state permutations for LFSRs
@@ -15,7 +15,7 @@ from lib import common as common
 SV_INSTRUCTIONS = """
 ------------------------------------------------
 | COPY PASTE THE CODE TEMPLATE BELOW INTO YOUR |
-| RTL CODE, INLUDING THE COMMENT IN ORDER TO   |
+| RTL CODE, INCLUDING THE COMMENT IN ORDER TO  |
 | EASE AUDITABILITY AND REPRODUCIBILITY.       |
 ------------------------------------------------
 """

@@ -1,16 +1,16 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
 package(default_visibility = ["//visibility:public"])
 
-# Configure opentitantool for execution in the CI's CW310 container.
+# Configure opentitantool for execution in the CI's FPGA container.
 #
 # Example:
-#   bazel test //sw/device/silicon_creator/lib/drivers:hmac_functest_fpga_cw310 --define cw310=lowrisc
+#   bazel test //sw/device/silicon_creator/lib/drivers:hmac_functest_fpga_cw340 --define cw340=lowrisc
 config_setting(
-    name = "lowrisc_fpga_cw310",
+    name = "lowrisc_fpga_cw340",
     define_values = {
-        "cw310": "lowrisc",
+        "cw340": "lowrisc",
     },
 )

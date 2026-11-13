@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -11,7 +11,15 @@
 module spi_host
   import spi_host_reg_pkg::*;
 #(
-  parameter logic [NumAlerts-1:0] AlertAsyncOn = {NumAlerts{1'b1}}
+  parameter logic [NumAlerts-1:0]           AlertAsyncOn              = {NumAlerts{1'b1}},
+  // Number of cycles a differential skew is tolerated on the alert signal
+  parameter int unsigned                    AlertSkewCycles           = 1,
+  parameter int unsigned                    NumCS                     = 1,
+  parameter bit                             EnableRacl                = 1'b0,
+  parameter bit                             RaclErrorRsp              = EnableRacl,
+  parameter top_racl_pkg::racl_policy_sel_t RaclPolicySelVec[NumRegs] = '{NumRegs{0}},
+  parameter top_racl_pkg::racl_policy_sel_t RaclPolicySelWinRXDATA    = 0,
+  parameter top_racl_pkg::racl_policy_sel_t RaclPolicySelWinTXDATA    = 0
 ) (
   input              clk_i,
   input              rst_ni,
@@ -23,6 +31,10 @@ module spi_host
   // Alerts
   input  prim_alert_pkg::alert_rx_t [NumAlerts-1:0] alert_rx_i,
   output prim_alert_pkg::alert_tx_t [NumAlerts-1:0] alert_tx_o,
+
+  // RACL interface
+  input  top_racl_pkg::racl_policy_vec_t racl_policies_i,
+  output top_racl_pkg::racl_error_log_t  racl_error_o,
 
   // SPI Interface
   output logic             cio_sck_o,
@@ -37,32 +49,60 @@ module spi_host
   input  spi_device_pkg::passthrough_req_t passthrough_i,
   output spi_device_pkg::passthrough_rsp_t passthrough_o,
 
+  output logic             lsio_trigger_o,
+
   output logic             intr_error_o,
   output logic             intr_spi_event_o
 );
 
   import spi_host_cmd_pkg::*;
 
+  localparam int CSW = prim_util_pkg::vbits(NumCS);
+
   spi_host_reg2hw_t reg2hw;
   spi_host_hw2reg_t hw2reg;
+
+  top_racl_pkg::racl_error_log_t racl_error[3];
+  if (EnableRacl) begin : gen_racl_error_arb
+    // Arbitrate between all simultaneously valid error log requests.
+    prim_racl_error_arb #(
+      .N ( 3 )
+    ) u_prim_err_arb (
+      .clk_i,
+      .rst_ni,
+      .error_log_i ( racl_error   ),
+      .error_log_o ( racl_error_o )
+    );
+  end else begin : gen_no_racl_error_arb
+    logic unused_signals;
+    always_comb begin
+      unused_signals = ^{racl_error[0] ^ racl_error[1] ^ racl_error[2]};
+      racl_error_o   = '0;
+    end
+  end
 
   tlul_pkg::tl_h2d_t fifo_win_h2d [2];
   tlul_pkg::tl_d2h_t fifo_win_d2h [2];
 
   // Register module
   logic [NumAlerts-1:0] alert_test, alerts;
-  spi_host_reg_top u_reg (
+  spi_host_reg_top #(
+    .EnableRacl       ( EnableRacl       ),
+    .RaclErrorRsp     ( RaclErrorRsp     ),
+    .RaclPolicySelVec ( RaclPolicySelVec )
+  ) u_reg (
     .clk_i,
     .rst_ni,
-    .tl_i       (tl_i),
-    .tl_o       (tl_o),
-    .tl_win_o   (fifo_win_h2d),
-    .tl_win_i   (fifo_win_d2h),
+    .tl_i             ( tl_i                   ),
+    .tl_o             ( tl_o                   ),
+    .tl_win_o         ( fifo_win_h2d           ),
+    .tl_win_i         ( fifo_win_d2h           ),
     .reg2hw,
     .hw2reg,
     // SEC_CM: BUS.INTEGRITY
-    .intg_err_o (alerts[0]),
-    .devmode_i  (1'b1)
+    .intg_err_o       ( alerts[0]              ),
+    .racl_policies_i  ( racl_policies_i        ),
+    .racl_error_o     ( racl_error[0]          )
   );
 
   // Alerts
@@ -74,6 +114,7 @@ module spi_host
   for (genvar i = 0; i < NumAlerts; i++) begin : gen_alert_tx
     prim_alert_sender #(
       .AsyncOn(AlertAsyncOn[i]),
+      .SkewCycles(AlertSkewCycles),
       .IsFatal(1'b1)
     ) u_prim_alert_sender (
       .clk_i,
@@ -98,60 +139,37 @@ module spi_host
 
   assign sd_en     = output_en ? sd_en_core : 4'h0;
 
-  if (NumCS == 1) begin : gen_passthrough_implementation
-    logic passthrough_en;
-    assign passthrough_en  = passthrough_i.passthrough_en;
+  logic passthrough_en;
+  assign passthrough_en  = passthrough_i.passthrough_en;
 
-    logic        pt_sck;
-    logic        pt_sck_en;
-    logic [0:0]  pt_csb;
-    logic [0:0]  pt_csb_en;
-    logic [3:0]  pt_sd_out;
-    logic [3:0]  pt_sd_en;
+  logic             pt_sck;
+  logic             pt_sck_en;
+  logic [NumCS-1:0] pt_csb;
+  logic [NumCS-1:0] pt_csb_en;
+  logic [3:0]       pt_sd_out;
+  logic [3:0]       pt_sd_en;
 
-    assign pt_sck       = passthrough_i.sck;
-    assign pt_sck_en    = passthrough_i.sck_en;
-    assign pt_csb[0]    = passthrough_i.csb;
-    assign pt_csb_en[0] = passthrough_i.csb_en;
-    assign pt_sd_out    = passthrough_i.s;
-    assign pt_sd_en     = passthrough_i.s_en;
+  assign pt_sck       = passthrough_i.sck;
+  assign pt_sck_en    = passthrough_i.sck_en;
+  assign pt_sd_out    = passthrough_i.s;
+  assign pt_sd_en     = passthrough_i.s_en;
 
-    assign cio_sck_o    = passthrough_en ? pt_sck    : sck;
-    assign cio_sck_en_o = passthrough_en ? pt_sck_en : output_en;
-    assign cio_csb_o    = passthrough_en ? pt_csb    : csb;
-    assign cio_csb_en_o = passthrough_en ? pt_csb_en : output_en;
-    assign cio_sd_o     = passthrough_en ? pt_sd_out : sd_out;
-    assign cio_sd_en_o  = passthrough_en ? pt_sd_en  : sd_en;
+  // Passthrough uses CSB[0].  All other CSB lines are held inactive so that no other device on the
+  // shared SCK and SD lines is selected.  Their output enables stay under the control of
+  // CONTROL.OUTPUT_EN.
+  always_comb begin
+    pt_csb       = '1;
+    pt_csb[0]    = passthrough_i.csb;
+    pt_csb_en    = {NumCS{output_en}};
+    pt_csb_en[0] = passthrough_i.csb_en;
+  end
 
-  end                   : gen_passthrough_implementation
-  else begin            : gen_passthrough_ignore
-     // Passthrough only supported for instances with one CSb line
-    `ASSERT(PassthroughNumCSCompat_A, !passthrough_i.passthrough_en, clk_i, rst_ni)
-
-    assign cio_sck_o    = sck;
-    assign cio_sck_en_o = output_en;
-    assign cio_csb_o    = csb;
-    assign cio_csb_en_o = {NumCS{output_en}};
-    assign cio_sd_o     = sd_out;
-    assign cio_sd_en_o  = sd_en;
-
-    logic       unused_pt_en;
-    logic       unused_pt_sck;
-    logic       unused_pt_sck_en;
-    logic       unused_pt_csb;
-    logic       unused_pt_csb_en;
-    logic [3:0] unused_pt_sd_out;
-    logic [3:0] unused_pt_sd_en;
-
-    assign unused_pt_en     = passthrough_i.passthrough_en;
-    assign unused_pt_sck    = passthrough_i.sck;
-    assign unused_pt_sck_en = passthrough_i.sck_en;
-    assign unused_pt_csb    = passthrough_i.csb;
-    assign unused_pt_csb_en = passthrough_i.csb_en;
-    assign unused_pt_sd_out = passthrough_i.s;
-    assign unused_pt_sd_en  = passthrough_i.s_en;
-
-  end                   : gen_passthrough_ignore
+  assign cio_sck_o    = passthrough_en ? pt_sck    : sck;
+  assign cio_sck_en_o = passthrough_en ? pt_sck_en : output_en;
+  assign cio_csb_o    = passthrough_en ? pt_csb    : csb;
+  assign cio_csb_en_o = passthrough_en ? pt_csb_en : {NumCS{output_en}};
+  assign cio_sd_o     = passthrough_en ? pt_sd_out : sd_out;
+  assign cio_sd_en_o  = passthrough_en ? pt_sd_en  : sd_en;
 
   assign passthrough_o.s = cio_sd_i;
   assign sd_i            = cio_sd_i;
@@ -165,6 +183,7 @@ module spi_host
   logic core_command_ready;
 
   command_t core_command, command;
+  logic [CSW-1:0] core_command_csid, command_csid;
   logic error_csid_inval;
   logic error_cmd_inval;
   logic error_busy;
@@ -215,25 +234,15 @@ module spi_host
   assign error_cmd_inval  = command_valid & ~command_busy &
                             (test_speed_inval | test_dir_inval);
 
-  spi_host_reg_pkg::spi_host_reg2hw_configopts_mreg_t configopts;
+  assign command_csid = (test_csid_inval) ? '0 : reg2hw.csid.q[CSW-1:0];
 
-  if (NumCS == 1) begin : gen_single_device
-    assign configopts   = reg2hw.configopts[0];
-    assign command.csid = '0;
-  end else begin : gen_multiple_devices
-    logic [CSW-1:0] csid;
-    assign csid         = (test_csid_inval) ? '0 : reg2hw.csid.q[CSW-1:0];
-    assign configopts   = reg2hw.configopts[csid];
-    assign command.csid = csid;
-  end : gen_multiple_devices
-
-  assign command.configopts.clkdiv   = configopts.clkdiv.q;
-  assign command.configopts.csnidle  = configopts.csnidle.q;
-  assign command.configopts.csnlead  = configopts.csnlead.q;
-  assign command.configopts.csntrail = configopts.csntrail.q;
-  assign command.configopts.full_cyc = configopts.fullcyc.q;
-  assign command.configopts.cpha     = configopts.cpha.q;
-  assign command.configopts.cpol     = configopts.cpol.q;
+  assign command.configopts.clkdiv   = reg2hw.configopts.clkdiv.q;
+  assign command.configopts.csnidle  = reg2hw.configopts.csnidle.q;
+  assign command.configopts.csnlead  = reg2hw.configopts.csnlead.q;
+  assign command.configopts.csntrail = reg2hw.configopts.csntrail.q;
+  assign command.configopts.full_cyc = reg2hw.configopts.fullcyc.q;
+  assign command.configopts.cpha     = reg2hw.configopts.cpha.q;
+  assign command.configopts.cpol     = reg2hw.configopts.cpol.q;
 
   assign command.segment.len         = reg2hw.command.len.q;
   assign command.segment.csaat       = reg2hw.command.csaat.q;
@@ -271,14 +280,17 @@ module spi_host
   logic [3:0]  cmd_qd;
 
   spi_host_command_queue #(
-    .CmdDepth(CmdDepth)
+    .CmdDepth(CmdDepth),
+    .NumCS(NumCS)
   ) u_cmd_queue (
     .clk_i,
     .rst_ni,
     .command_i            (command),
+    .command_csid_i       (command_csid),
     .command_valid_i      (command_valid),
     .command_busy_o       (command_busy),
     .core_command_o       (core_command),
+    .core_command_csid_o  (core_command_csid),
     .core_command_valid_o (core_command_valid),
     .core_command_ready_i (core_command_ready),
     .error_busy_o         (error_busy),
@@ -295,24 +307,33 @@ module spi_host
   logic        rx_valid;
   logic        rx_ready;
 
-  spi_host_window u_window (
+  spi_host_window #(
+    .EnableRacl             ( EnableRacl             ),
+    .RaclErrorRsp           ( RaclErrorRsp           ),
+    .RaclPolicySelWinRXDATA ( RaclPolicySelWinRXDATA ),
+    .RaclPolicySelWinTXDATA ( RaclPolicySelWinTXDATA )
+  ) u_window (
     .clk_i,
     .rst_ni,
-    .rx_win_i   (fifo_win_h2d[0]),
-    .rx_win_o   (fifo_win_d2h[0]),
-    .tx_win_i   (fifo_win_h2d[1]),
-    .tx_win_o   (fifo_win_d2h[1]),
-    .tx_data_o  (tx_data),
-    .tx_be_o    (tx_be),
-    .tx_valid_o (tx_valid),
-    .rx_data_i  (rx_data),
-    .rx_ready_o (rx_ready)
+    .rx_win_i         ( fifo_win_h2d[0]             ),
+    .rx_win_o         ( fifo_win_d2h[0]             ),
+    .tx_win_i         ( fifo_win_h2d[1]             ),
+    .tx_win_o         ( fifo_win_d2h[1]             ),
+    .tx_data_o        ( tx_data                     ),
+    .tx_be_o          ( tx_be                       ),
+    .tx_valid_o       ( tx_valid                    ),
+    .rx_data_i        ( rx_data                     ),
+    .rx_ready_o       ( rx_ready                    ),
+    .racl_policies_i  ( racl_policies_i             ),
+    .racl_error_tx_o  ( racl_error[1]               ),
+    .racl_error_rx_o  ( racl_error[2]               )
   );
 
   logic [31:0] core_tx_data;
   logic [3:0]  core_tx_be;
   logic        core_tx_valid;
   logic        core_tx_ready;
+  logic        core_tx_byte_select_full;
 
   logic [31:0] core_rx_data;
   logic        core_rx_valid;
@@ -381,7 +402,7 @@ module spi_host
   assign tx_valid_checked = tx_valid & ~error_overflow & ~error_access_inval;
 
   // Note on ByteOrder and ByteSwapping.
-  // ByteOrder == 1 is for Little-Endian transmission (i.e. LSB first), which is acheived by
+  // ByteOrder == 1 is for Little-Endian transmission (i.e. LSB first), which is achieved by
   // default with the prim_packer_fifo implementation.  Thus we have to swap if Big-Endian
   // transmission is required (i.e. if ByteOrder == 0).
   spi_host_data_fifos #(
@@ -392,36 +413,37 @@ module spi_host
     .clk_i,
     .rst_ni,
 
-    .tx_data_i         (tx_data),
-    .tx_be_i           (tx_be),
-    .tx_valid_i        (tx_valid_checked),
-    .tx_ready_o        (tx_ready),
-    .tx_watermark_i    (tx_watermark),
+    .tx_data_i                  (tx_data),
+    .tx_be_i                    (tx_be),
+    .tx_valid_i                 (tx_valid_checked),
+    .tx_ready_o                 (tx_ready),
+    .tx_watermark_i             (tx_watermark),
 
-    .core_tx_data_o    (core_tx_data),
-    .core_tx_be_o      (core_tx_be),
-    .core_tx_valid_o   (core_tx_valid),
-    .core_tx_ready_i   (core_tx_ready),
+    .core_tx_data_o             (core_tx_data),
+    .core_tx_be_o               (core_tx_be),
+    .core_tx_valid_o            (core_tx_valid),
+    .core_tx_ready_i            (core_tx_ready),
+    .core_tx_byte_select_full_i (core_tx_byte_select_full),
 
-    .core_rx_data_i    (core_rx_data),
-    .core_rx_valid_i   (core_rx_valid),
-    .core_rx_ready_o   (core_rx_ready),
+    .core_rx_data_i             (core_rx_data),
+    .core_rx_valid_i            (core_rx_valid),
+    .core_rx_ready_o            (core_rx_ready),
 
-    .rx_data_o         (rx_data),
-    .rx_valid_o        (rx_valid),
-    .rx_ready_i        (rx_ready),
-    .rx_watermark_i    (rx_watermark),
+    .rx_data_o                  (rx_data),
+    .rx_valid_o                 (rx_valid),
+    .rx_ready_i                 (rx_ready),
+    .rx_watermark_i             (rx_watermark),
 
-    .tx_empty_o        (tx_empty),
-    .tx_full_o         (tx_full),
-    .tx_qd_o           (tx_qd),
-    .tx_wm_o           (tx_wm),
-    .rx_empty_o        (rx_empty),
-    .rx_full_o         (rx_full),
-    .rx_qd_o           (rx_qd),
-    .rx_wm_o           (rx_wm),
+    .tx_empty_o                 (tx_empty),
+    .tx_full_o                  (tx_full),
+    .tx_qd_o                    (tx_qd),
+    .tx_wm_o                    (tx_wm),
+    .rx_empty_o                 (rx_empty),
+    .rx_full_o                  (rx_full),
+    .rx_qd_o                    (rx_qd),
+    .rx_wm_o                    (rx_wm),
 
-    .sw_rst_i          (sw_rst)
+    .sw_rst_i                   (sw_rst)
 );
 
   logic en_sw;
@@ -438,26 +460,28 @@ module spi_host
     .clk_i,
     .rst_ni,
 
-    .command_i       (core_command),
-    .command_valid_i (core_command_valid),
-    .command_ready_o (core_command_ready),
-    .en_i            (en),
-    .tx_data_i       (core_tx_data),
-    .tx_be_i         (core_tx_be),
-    .tx_valid_i      (core_tx_valid),
-    .tx_ready_o      (core_tx_ready),
-    .rx_data_o       (core_rx_data),
-    .rx_valid_o      (core_rx_valid),
-    .rx_ready_i      (core_rx_ready),
-    .sck_o           (sck),
-    .csb_o           (csb),
-    .sd_o            (sd_out),
-    .sd_en_o         (sd_en_core),
+    .command_i             (core_command),
+    .command_csid_i        (core_command_csid),
+    .command_valid_i       (core_command_valid),
+    .command_ready_o       (core_command_ready),
+    .en_i                  (en),
+    .tx_data_i             (core_tx_data),
+    .tx_be_i               (core_tx_be),
+    .tx_valid_i            (core_tx_valid),
+    .tx_ready_o            (core_tx_ready),
+    .tx_byte_select_full_o (core_tx_byte_select_full),
+    .rx_data_o             (core_rx_data),
+    .rx_valid_o            (core_rx_valid),
+    .rx_ready_i            (core_rx_ready),
+    .sck_o                 (sck),
+    .csb_o                 (csb),
+    .sd_o                  (sd_out),
+    .sd_en_o               (sd_en_core),
     .sd_i,
-    .rx_stall_o      (rx_stall),
-    .tx_stall_o      (tx_stall),
-    .sw_rst_i        (sw_rst),
-    .active_o        (active)
+    .rx_stall_o            (rx_stall),
+    .tx_stall_o            (tx_stall),
+    .sw_rst_i              (sw_rst),
+    .active_o              (active)
   );
 
   logic event_error;
@@ -528,69 +552,55 @@ module spi_host
     .intr_o                 (intr_error_o)
   );
 
-  logic event_spi_event;
-  logic event_idle, event_ready, event_tx_wm, event_rx_wm, event_tx_empty, event_rx_full;
+  logic status_spi_event;
+  logic status_idle, status_ready, status_tx_wm, status_rx_wm, status_tx_empty, status_rx_full;
   logic [5:0] event_vector;
   logic [5:0] event_mask;
 
-  assign event_vector= {
-      event_idle, event_ready, event_tx_wm,
-      event_rx_wm, event_tx_empty, event_rx_full
+  assign status_idle     = ~active;
+  assign status_ready    = ~command_busy;
+  assign status_tx_wm    = tx_wm;
+  assign status_rx_wm    = rx_wm;
+  assign status_tx_empty = tx_empty;
+  assign status_rx_full  = rx_full;
+
+  assign event_vector = {
+    status_idle,
+    status_ready,
+    status_tx_wm,
+    status_rx_wm,
+    status_tx_empty,
+    status_rx_full
   };
 
   assign event_mask = {
-      reg2hw.event_enable.idle.q,
-      reg2hw.event_enable.ready.q,
-      reg2hw.event_enable.txwm.q,
-      reg2hw.event_enable.rxwm.q,
-      reg2hw.event_enable.txempty.q,
-      reg2hw.event_enable.rxfull.q
+    reg2hw.event_enable.idle.q,
+    reg2hw.event_enable.ready.q,
+    reg2hw.event_enable.txwm.q,
+    reg2hw.event_enable.rxwm.q,
+    reg2hw.event_enable.txempty.q,
+    reg2hw.event_enable.rxfull.q
   };
 
-  assign event_spi_event = |(event_vector & event_mask);
+  // Qualify interrupt sources individually with dedicated mask register CSR.EVENT_ENABLE
+  assign status_spi_event = |(event_vector & event_mask);
 
-  logic idle_d, idle_q;
-  logic ready_d, ready_q;
-  logic tx_wm_d, tx_wm_q;
-  logic rx_wm_d, rx_wm_q;
-  logic tx_empty_d, tx_empty_q;
-  logic rx_full_d, rx_full_q;
-
-  assign event_idle     = idle_d & ~idle_q;
-  assign idle_d         = ~active;
-  assign event_ready    = ready_d & ~ready_q;
-  assign ready_d        = ~command_busy;
-  assign event_tx_wm    = tx_wm_d & ~tx_wm_q;
-  assign tx_wm_d        = tx_wm;
-  assign event_rx_wm    = rx_wm_d & ~rx_wm_q;
-  assign rx_wm_d        = rx_wm;
-  assign event_tx_empty = tx_empty_d & ~tx_empty_q;
-  assign tx_empty_d     = tx_empty;
-  assign event_rx_full  = rx_full_d & ~rx_full_q;
-  assign rx_full_d      = rx_full;
-
+  // Flop trigger signal to avoid glitches on the output
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
-      idle_q     <= 1'b0;
-      ready_q    <= 1'b0;
-      tx_wm_q    <= 1'b0;
-      rx_wm_q    <= 1'b0;
-      tx_empty_q <= 1'b0;
-      rx_full_q  <= 1'b0;
+      lsio_trigger_o <= 1'b0;
     end else begin
-      idle_q     <= idle_d;
-      ready_q    <= ready_d;
-      tx_wm_q    <= tx_wm_d;
-      rx_wm_q    <= rx_wm_d;
-      tx_empty_q <= tx_empty_d;
-      rx_full_q  <= rx_full_d;
+      lsio_trigger_o <= tx_wm | rx_wm;
     end
   end
 
-  prim_intr_hw #(.Width(1)) intr_hw_spi_event (
+  prim_intr_hw #(
+    .Width(1),
+    .IntrT("Status")
+  ) intr_hw_spi_event (
     .clk_i,
     .rst_ni,
-    .event_intr_i           (event_spi_event),
+    .event_intr_i           (status_spi_event),
     .reg2hw_intr_enable_q_i (reg2hw.intr_enable.spi_event.q),
     .reg2hw_intr_test_q_i   (reg2hw.intr_test.spi_event.q),
     .reg2hw_intr_test_qe_i  (reg2hw.intr_test.spi_event.qe),
@@ -614,11 +624,19 @@ module spi_host
   `ASSERT_KNOWN(CioSdEnKnownO_A, cio_sd_en_o)
   `ASSERT_KNOWN(IntrSpiEventKnownO_A, intr_spi_event_o)
   `ASSERT_KNOWN(IntrErrorKnownO_A, intr_error_o)
+  `ASSERT_KNOWN(LsioTriggerKnown_A, lsio_trigger_o)
+  `ASSERT_KNOWN(RaclErrorValidKnown_A, racl_error_o.valid)
+
 
   // passthrough_o.s is passed through to spi_device, it may contain unknown data,
   // but the unknown data won't be used based on the SPI protocol.
   // Hence, instead of checking known data, here does a connectivity check.
   `ASSERT(PassthroughConn_A, passthrough_o.s === cio_sd_i)
+
+  // In passthrough mode, all CSB lines except CSB[0] are inactive.
+  if (NumCS > 1) begin : gen_passthrough_csb_assert
+    `ASSERT(PassthroughCsbInactive_A, passthrough_i.passthrough_en |-> &cio_csb_o[NumCS-1:1])
+  end
 
   // Alert assertions for reg_we onehot check
   `ASSERT_PRIM_REG_WE_ONEHOT_ERROR_TRIGGER_ALERT(RegWeOnehotCheck_A, u_reg, alert_tx_o[0])

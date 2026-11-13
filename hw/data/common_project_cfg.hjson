@@ -1,9 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
   project:          opentitan
   repo_server:      "github.com/lowrisc/opentitan"
+  book:             opentitan.org/book
   doc_server:       docs.opentitan.org
   results_server:   reports.opentitan.org
 
@@ -30,8 +31,8 @@
 
   // If defined, this is printed into the results md files
   revision: '''{eval_cmd}
-            COMMIT_L=`git rev-parse HEAD`; \
-            COMMIT_S=`git rev-parse --short HEAD`; \
+            COMMIT_L=`git -C {proj_root} rev-parse HEAD`; \
+            COMMIT_S=`git -C {proj_root} rev-parse --short HEAD`; \
             REV_STR="GitHub Revision: [\`$COMMIT_S\`](https://{repo_server}/tree/$COMMIT_L)"; \
             printf "$REV_STR"; \
             if [ -d "{proj_root}/hw/foundry" ]; then \
@@ -40,7 +41,4 @@
               printf "<br>$REV_STR_FOUNDRY"; \
             fi
             '''
-
-  // The current design level
-  design_level:  "ip"
 }

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,7 +30,9 @@ package usb_consts_pkg;
     UsbPidAck   = 4'b0010,
     UsbPidNak   = 4'b1010,
     UsbPidStall = 4'b1110,
-    UsbPidNyet  = 4'b0110
+    UsbPidNyet  = 4'b0110,
+    // SPECIAL
+    UsbPidPre   = 4'b1100
   } usb_pid_e;
 
 
@@ -49,7 +51,7 @@ package usb_consts_pkg;
     SetupSynchFrame       = 8'd12
   } usb_setup_request_e;
 
-  // USB Desctiptor Types (USB2.0 Table 9-5)
+  // USB Descriptor Types (USB2.0 Table 9-5)
   typedef enum logic [7:0] {
     DscrTypeDevice        = 8'd1,
     DscrTypeConfiguration = 8'd2,

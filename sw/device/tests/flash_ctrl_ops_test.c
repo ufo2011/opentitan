@@ -1,7 +1,9 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "sw/device/lib/arch/boot_stage.h"
+#include "sw/device/lib/base/abs_mmio.h"
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_flash_ctrl.h"
 #include "sw/device/lib/dif/dif_rv_plic.h"
@@ -12,14 +14,29 @@
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
+#include "hw/top/otp_ctrl_regs.h"
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
 #include "sw/device/lib/testing/autogen/isr_testutils.h"
 
 #define FLASH_CTRL_NUM_IRQS 5
 
+/**
+ * Bitfields for `CREATOR_SW_CFG_NVM_DATA_DEFAULT_CFG` and
+ * `CREATOR_SW_CFG_NVM_INFO_BOOT_DATA_CFG` OTP items.
+ *
+ * Defined here to be able to use in tests.
+ */
+#define FLASH_CTRL_OTP_FIELD_SCRAMBLING \
+  (bitfield_field32_t){.mask = UINT8_MAX, .index = CHAR_BIT * 0}
+#define FLASH_CTRL_OTP_FIELD_ECC \
+  (bitfield_field32_t){.mask = UINT8_MAX, .index = CHAR_BIT * 1}
+#define FLASH_CTRL_OTP_FIELD_HE \
+  (bitfield_field32_t){.mask = UINT8_MAX, .index = CHAR_BIT * 2}
+
 OTTF_DEFINE_TEST_CONFIG();
 
 static dif_rv_plic_t plic0;
+static dif_flash_ctrl_device_info_t flash_info;
 static dif_flash_ctrl_state_t flash_state;
 static dif_flash_ctrl_t flash_ctrl;
 
@@ -34,16 +51,18 @@ static flash_ctrl_isr_ctx_t flash_ctx = {
     .is_only_irq = false,
 };
 
+static uint32_t flash_bank_0_data_region;
+static uint32_t flash_bank_1_data_region;
+static uint32_t flash_bank_1_data_region_scr;
+static uint32_t flash_bank_1_page_index;
+static uint32_t flash_bank_1_page_index_scr;
+
 enum {
   kFlashInfoPageIdCreatorSecret = 1,
   kFlashInfoPageIdOwnerSecret = 2,
   kFlashInfoPageIdIsoPart = 3,
   kFlashInfoBank = 0,
   kRegionBaseBank0Page0Index = 0,
-  kRegionBaseBank1Page0Index = 256,
-  kRegionBaseBank1Page255Index = 511,
-  kFlashBank0DataRegion = 0,
-  kFlashBank1DataRegion = 1,
   kPartitionId = 0,
   kRegionSize = 1,
   kInfoSize = 16,
@@ -95,10 +114,11 @@ static volatile bool fired_irqs[FLASH_CTRL_NUM_IRQS];
  *
  * This function overrides the default OTTF external ISR.
  */
-void ottf_external_isr(void) {
+void ottf_external_isr(uint32_t *exc_info) {
   top_earlgrey_plic_peripheral_t peripheral_serviced;
   dif_flash_ctrl_irq_t irq_serviced;
-  isr_testutils_flash_ctrl_isr(plic_ctx, flash_ctx, &peripheral_serviced,
+  // Instruct the ISR to mute any status interrupt that is firing.
+  isr_testutils_flash_ctrl_isr(plic_ctx, flash_ctx, true, &peripheral_serviced,
                                &irq_serviced);
   CHECK(peripheral_serviced == kTopEarlgreyPlicPeripheralFlashCtrl,
         "Interurpt from unexpected peripheral: %d", peripheral_serviced);
@@ -118,15 +138,20 @@ static void clear_irq_variables(void) {
 /**
  * Initializes FLASH_CTRL and enables the relevant interrupts.
  */
-static void flash_ctrl_init_with_irqs(mmio_region_t base_addr,
-                                      dif_flash_ctrl_state_t *flash_state,
-                                      dif_flash_ctrl_t *flash_ctrl) {
+static void flash_ctrl_init_with_event_irqs(mmio_region_t base_addr,
+                                            dif_flash_ctrl_state_t *flash_state,
+                                            dif_flash_ctrl_t *flash_ctrl) {
   CHECK_DIF_OK(dif_flash_ctrl_init(base_addr, flash_ctrl));
   CHECK_DIF_OK(dif_flash_ctrl_init_state(flash_state, base_addr));
 
-  for (int i = 0; i < FLASH_CTRL_NUM_IRQS; ++i) {
-    CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
-        flash_ctrl, kDifFlashCtrlIrqProgEmpty + i, kDifToggleEnabled));
+  for (dif_flash_ctrl_irq_t i = 0; i < FLASH_CTRL_NUM_IRQS; ++i) {
+    dif_irq_type_t type;
+    CHECK_DIF_OK(dif_flash_ctrl_irq_get_type(
+        flash_ctrl, kDifFlashCtrlIrqProgEmpty + i, &type));
+    if (type == kDifIrqTypeEvent) {
+      CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+          flash_ctrl, kDifFlashCtrlIrqProgEmpty + i, kDifToggleEnabled));
+    }
   }
   clear_irq_variables();
 }
@@ -146,10 +171,11 @@ static void compare_and_clear_irq_variables(void) {
  */
 static void read_and_check_host_if(uint32_t addr, const uint32_t *check_data) {
   mmio_region_t flash_addr =
-      mmio_region_from_addr(TOP_EARLGREY_EFLASH_BASE_ADDR + addr);
+      mmio_region_from_addr(TOP_EARLGREY_FLASH_CTRL_MEM_BASE_ADDR + addr);
   uint32_t host_data[kDataSize];
   for (int i = 0; i < kDataSize; ++i) {
-    host_data[i] = mmio_region_read32(flash_addr, i * sizeof(uint32_t));
+    host_data[i] =
+        mmio_region_read32(flash_addr, i * (ptrdiff_t)sizeof(uint32_t));
   }
   CHECK_ARRAYS_EQ(host_data, check_data, kDataSize);
 }
@@ -161,8 +187,9 @@ static void read_and_check_host_if(uint32_t addr, const uint32_t *check_data) {
  */
 static void do_info_partition_test(uint32_t partition_number,
                                    const uint32_t *test_data) {
-  uint32_t address = flash_ctrl_testutils_info_region_setup(
-      &flash_state, partition_number, kFlashInfoBank, kPartitionId);
+  uint32_t address = 0;
+  CHECK_STATUS_OK(flash_ctrl_testutils_info_region_setup(
+      &flash_state, partition_number, kFlashInfoBank, kPartitionId, &address));
 
   CHECK_DIF_OK(dif_flash_ctrl_set_prog_fifo_watermark(&flash_state, 0));
   CHECK_DIF_OK(dif_flash_ctrl_set_read_fifo_watermark(&flash_state, 8));
@@ -170,16 +197,24 @@ static void do_info_partition_test(uint32_t partition_number,
   clear_irq_variables();
 
   expected_irqs[kDifFlashCtrlIrqOpDone] = true;
-  CHECK(flash_ctrl_testutils_erase_page(&flash_state, address, kPartitionId,
-                                        kDifFlashCtrlPartitionTypeInfo));
+  CHECK_STATUS_OK(flash_ctrl_testutils_erase_page(
+      &flash_state, address, kPartitionId, kDifFlashCtrlPartitionTypeInfo));
   compare_and_clear_irq_variables();
 
   expected_irqs[kDifFlashCtrlIrqOpDone] = true;
   expected_irqs[kDifFlashCtrlIrqProgEmpty] = true;
   expected_irqs[kDifFlashCtrlIrqProgLvl] = true;
-  CHECK(flash_ctrl_testutils_write(&flash_state, address, kPartitionId,
-                                   test_data, kDifFlashCtrlPartitionTypeInfo,
-                                   kInfoSize));
+  // Note: ProgEmpty and ProgLvl interrupts are enabled here and since the
+  // assert by default, they will be serviced and silenced right away. In order
+  // to test them more thoroughly, in this test, we would have to rework the
+  // write operation test utility.
+  CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+      &flash_ctrl, kDifFlashCtrlIrqProgEmpty, kDifToggleEnabled));
+  CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+      &flash_ctrl, kDifFlashCtrlIrqProgLvl, kDifToggleEnabled));
+  CHECK_STATUS_OK(
+      flash_ctrl_testutils_write(&flash_state, address, kPartitionId, test_data,
+                                 kDifFlashCtrlPartitionTypeInfo, kInfoSize));
 
   compare_and_clear_irq_variables();
 
@@ -187,9 +222,16 @@ static void do_info_partition_test(uint32_t partition_number,
   expected_irqs[kDifFlashCtrlIrqOpDone] = true;
   expected_irqs[kDifFlashCtrlIrqRdLvl] = true;
   expected_irqs[kDifFlashCtrlIrqRdFull] = true;
-  CHECK(flash_ctrl_testutils_read(&flash_state, address, kPartitionId,
-                                  readback_data, kDifFlashCtrlPartitionTypeInfo,
-                                  kInfoSize, 1));
+  // Note: RdLvl and RdFull interrupts are enabled here and as opposed to
+  // ProgEmpty and ProgLvl above, they will be tested correctly, since they only
+  // assert once the FIFO reaches the respective fill levels.
+  CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+      &flash_ctrl, kDifFlashCtrlIrqRdLvl, kDifToggleEnabled));
+  CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+      &flash_ctrl, kDifFlashCtrlIrqRdFull, kDifToggleEnabled));
+  CHECK_STATUS_OK(flash_ctrl_testutils_read(
+      &flash_state, address, kPartitionId, readback_data,
+      kDifFlashCtrlPartitionTypeInfo, kInfoSize, 1));
 
   compare_and_clear_irq_variables();
 
@@ -200,25 +242,50 @@ static void do_info_partition_test(uint32_t partition_number,
  * Tests the interrupts for read of bank0 data partition.
  * Only read is tested as this partition contains the program
  * code so should not be erased or written.
+ * bootstrap uses programmed otp value to set default regions
+ * (https://github.com/lowRISC/opentitan/blob/2f58b40b9ce2f44b8e1f65cf87043eff97b0ad6c/
+ *  sw/device/silicon_creator/lib/drivers/flash_ctrl.c#L270-L275)
+ *
+ * So set the region 0 as the same as bootstrap did.
  * The data read via the flash_ctrl interface is checked against the
  * data read via the host interface.
  */
 static void do_bank0_data_partition_test(void) {
-  uint32_t address = flash_ctrl_testutils_data_region_setup(
-      &flash_state, kRegionBaseBank0Page0Index, kFlashBank0DataRegion,
-      kRegionSize);
+  uint32_t address = 0;
+  uint32_t otp_val = abs_mmio_read32(
+      TOP_EARLGREY_OTP_CTRL_CORE_BASE_ADDR + OTP_CTRL_SW_CFG_WINDOW_REG_OFFSET +
+      OTP_CTRL_PARAM_CREATOR_SW_CFG_NVM_DATA_DEFAULT_CFG_OFFSET);
 
+  dif_flash_ctrl_region_properties_t region_properties = {
+      .ecc_en = bitfield_field32_read(otp_val, FLASH_CTRL_OTP_FIELD_ECC),
+      .high_endurance_en =
+          bitfield_field32_read(otp_val, FLASH_CTRL_OTP_FIELD_HE),
+      .scramble_en =
+          bitfield_field32_read(otp_val, FLASH_CTRL_OTP_FIELD_SCRAMBLING),
+      .erase_en = kMultiBitBool4True,
+      .prog_en = kMultiBitBool4True,
+      .rd_en = kMultiBitBool4True};
+
+  CHECK_STATUS_OK(flash_ctrl_testutils_data_region_setup_properties(
+      &flash_state, kRegionBaseBank0Page0Index, flash_bank_0_data_region,
+      kRegionSize, region_properties, &address));
   CHECK_DIF_OK(dif_flash_ctrl_set_read_fifo_watermark(&flash_state, 8));
 
   clear_irq_variables();
   expected_irqs[kDifFlashCtrlIrqOpDone] = true;
   expected_irqs[kDifFlashCtrlIrqRdLvl] = true;
   expected_irqs[kDifFlashCtrlIrqRdFull] = true;
-
+  // Note: RdLvl and RdFull interrupts are enabled here and as opposed to
+  // ProgEmpty and ProgLvl above, they will be tested correctly, since they only
+  // assert once the FIFO reaches the respective fill levels.
+  CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+      &flash_ctrl, kDifFlashCtrlIrqRdLvl, kDifToggleEnabled));
+  CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+      &flash_ctrl, kDifFlashCtrlIrqRdFull, kDifToggleEnabled));
   uint32_t readback_data[kDataSize];
-  CHECK(flash_ctrl_testutils_read(&flash_state, address, kPartitionId,
-                                  readback_data, kDifFlashCtrlPartitionTypeData,
-                                  kDataSize, 1));
+  CHECK_STATUS_OK(flash_ctrl_testutils_read(
+      &flash_state, address, kPartitionId, readback_data,
+      kDifFlashCtrlPartitionTypeData, kDataSize, 1));
 
   compare_and_clear_irq_variables();
   read_and_check_host_if(0, readback_data);
@@ -226,41 +293,56 @@ static void do_bank0_data_partition_test(void) {
 
 /**
  * Tests the interrupts for erase, write and read of
- * the lowest and highest page of bank 1 data partition.
+ * the lowest and highest (usable) page of bank 1 data partition.
  * Confirms that the written data is read back correctly.
  * The whole bank is then erased and the interrupt is checked
  * followed by confirmation that the previously written data
  * has been wiped.
  */
 static void do_bank1_data_partition_test(void) {
-  uint32_t address;
-
+  uint32_t address = 0;
   CHECK_DIF_OK(dif_flash_ctrl_set_prog_fifo_watermark(&flash_state, 0));
   CHECK_DIF_OK(dif_flash_ctrl_set_read_fifo_watermark(&flash_state, 8));
 
   // Loop for low and high page erase, write and read.
   for (int i = 0; i < 2; ++i) {
     uint32_t page_index =
-        (i == 0) ? kRegionBaseBank1Page0Index : kRegionBaseBank1Page255Index;
+        (i == 0) ? flash_bank_1_page_index : flash_bank_1_page_index_scr;
     const uint32_t *test_data = (i == 0) ? kRandomData4 : kRandomData5;
 
-    address = flash_ctrl_testutils_data_region_setup(
-        &flash_state, page_index, kFlashBank1DataRegion, kRegionSize);
-
+    if (i == 0) {
+      // Set region1 for non-scrambled ecc enabled.
+      CHECK_STATUS_OK(flash_ctrl_testutils_data_region_setup(
+          &flash_state, page_index, flash_bank_1_data_region, kRegionSize,
+          &address));
+    } else {
+      // Set region2 for scrambled ecc enabled.
+      CHECK_STATUS_OK(flash_ctrl_testutils_data_region_scrambled_setup(
+          &flash_state, page_index, flash_bank_1_data_region_scr, kRegionSize,
+          &address));
+    }
     clear_irq_variables();
 
     expected_irqs[kDifFlashCtrlIrqOpDone] = true;
-    CHECK(flash_ctrl_testutils_erase_page(&flash_state, address, kPartitionId,
-                                          kDifFlashCtrlPartitionTypeData));
+    CHECK_STATUS_OK(flash_ctrl_testutils_erase_page(
+        &flash_state, address, kPartitionId, kDifFlashCtrlPartitionTypeData));
 
     compare_and_clear_irq_variables();
 
     expected_irqs[kDifFlashCtrlIrqOpDone] = true;
     expected_irqs[kDifFlashCtrlIrqProgEmpty] = true;
     expected_irqs[kDifFlashCtrlIrqProgLvl] = true;
-    CHECK(flash_ctrl_testutils_write(&flash_state, address, kPartitionId,
-                                     test_data, kDifFlashCtrlPartitionTypeData,
-                                     kDataSize));
+    // Note: ProgEmpty and ProgLvl interrupts are enabled here and since the
+    // assert by default, they will be serviced and silenced right away. In
+    // order to test them more thoroughly, in this test, we would have to rework
+    // the write operation test utility.
+    CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+        &flash_ctrl, kDifFlashCtrlIrqProgEmpty, kDifToggleEnabled));
+    CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+        &flash_ctrl, kDifFlashCtrlIrqProgLvl, kDifToggleEnabled));
+    CHECK_STATUS_OK(flash_ctrl_testutils_write(
+        &flash_state, address, kPartitionId, test_data,
+        kDifFlashCtrlPartitionTypeData, kDataSize));
 
     compare_and_clear_irq_variables();
 
@@ -268,7 +350,14 @@ static void do_bank1_data_partition_test(void) {
     expected_irqs[kDifFlashCtrlIrqOpDone] = true;
     expected_irqs[kDifFlashCtrlIrqRdLvl] = true;
     expected_irqs[kDifFlashCtrlIrqRdFull] = true;
-    CHECK(flash_ctrl_testutils_read(
+    // Note: RdLvl and RdFull interrupts are enabled here and as opposed to
+    // ProgEmpty and ProgLvl above, they will be tested correctly, since they
+    // only assert once the FIFO reaches the respective fill levels.
+    CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+        &flash_ctrl, kDifFlashCtrlIrqRdLvl, kDifToggleEnabled));
+    CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+        &flash_ctrl, kDifFlashCtrlIrqRdFull, kDifToggleEnabled));
+    CHECK_STATUS_OK(flash_ctrl_testutils_read(
         &flash_state, address, kPartitionId, readback_data,
         kDifFlashCtrlPartitionTypeData, kDataSize, 1));
 
@@ -283,9 +372,9 @@ static void do_bank1_data_partition_test(void) {
                                                         kDifToggleEnabled));
   expected_irqs[kDifFlashCtrlIrqOpDone] = true;
 
-  address = flash_ctrl_testutils_data_region_setup(
-      &flash_state, kRegionBaseBank1Page0Index, kFlashBank1DataRegion,
-      kRegionSize);
+  CHECK_STATUS_OK(flash_ctrl_testutils_data_region_setup(
+      &flash_state, flash_bank_1_page_index, flash_bank_1_data_region,
+      kRegionSize, &address));
   dif_flash_ctrl_transaction_t transaction = {
       .byte_address = address,
       .op = kDifFlashCtrlOpBankErase,
@@ -293,23 +382,31 @@ static void do_bank1_data_partition_test(void) {
       .partition_id = 0x0,
       .word_count = 0x0};
   CHECK_DIF_OK(dif_flash_ctrl_start(&flash_state, transaction));
-  CHECK(flash_ctrl_testutils_wait_transaction_end(&flash_state));
+  CHECK_STATUS_OK(flash_ctrl_testutils_wait_transaction_end(&flash_state));
 
   compare_and_clear_irq_variables();
 
   // Loop for low and high page read back after bank erase.
   for (int i = 0; i < 2; ++i) {
     uint32_t page_index =
-        (i == 0) ? kRegionBaseBank1Page0Index : kRegionBaseBank1Page255Index;
+        (i == 0) ? flash_bank_1_page_index : flash_bank_1_page_index_scr;
 
-    address = flash_ctrl_testutils_data_region_setup(
-        &flash_state, page_index, kFlashBank1DataRegion, kRegionSize);
+    CHECK_STATUS_OK(flash_ctrl_testutils_data_region_setup(
+        &flash_state, page_index, flash_bank_1_data_region, kRegionSize,
+        &address));
 
     uint32_t readback_data[kDataSize];
     expected_irqs[kDifFlashCtrlIrqOpDone] = true;
     expected_irqs[kDifFlashCtrlIrqRdLvl] = true;
     expected_irqs[kDifFlashCtrlIrqRdFull] = true;
-    CHECK(flash_ctrl_testutils_read(
+    // Note: RdLvl and RdFull interrupts are enabled here and as opposed to
+    // ProgEmpty and ProgLvl above, they will be tested correctly, since they
+    // only assert once the FIFO reaches the respective fill levels.
+    CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+        &flash_ctrl, kDifFlashCtrlIrqRdLvl, kDifToggleEnabled));
+    CHECK_DIF_OK(dif_flash_ctrl_irq_set_enabled(
+        &flash_ctrl, kDifFlashCtrlIrqRdFull, kDifToggleEnabled));
+    CHECK_STATUS_OK(flash_ctrl_testutils_read(
         &flash_state, address, kPartitionId, readback_data,
         kDifFlashCtrlPartitionTypeData, kDataSize, 1));
 
@@ -324,10 +421,30 @@ static void do_bank1_data_partition_test(void) {
 }
 
 bool test_main(void) {
+  flash_info = dif_flash_ctrl_get_device_info();
+
+  // Determine the region index and page index to use for tests.
+  // Test data page used for flash bank 1 should be the lowest and highest
+  // usable page.
+  if (kBootStage != kBootStageOwner) {
+    flash_bank_0_data_region = 0;
+    flash_bank_1_page_index = flash_info.data_pages;
+  } else {
+    // If we boot up in owner stage, the first 2 regions will be used by
+    // ROM_EXT.
+    flash_bank_0_data_region = 2;
+    // First 0x20 pages are configured by ROM_EXT. To avoid conflicts, skip over
+    // these pages.
+    flash_bank_1_page_index = flash_info.data_pages + 0x20;
+  }
+  flash_bank_1_data_region = flash_bank_0_data_region + 1;
+  flash_bank_1_data_region_scr = flash_bank_0_data_region + 2;
+  flash_bank_1_page_index_scr = flash_info.data_pages * 2 - 1;
+
   CHECK_DIF_OK(dif_rv_plic_init(
       mmio_region_from_addr(TOP_EARLGREY_RV_PLIC_BASE_ADDR), &plic0));
 
-  flash_ctrl_init_with_irqs(
+  flash_ctrl_init_with_event_irqs(
       mmio_region_from_addr(TOP_EARLGREY_FLASH_CTRL_CORE_BASE_ADDR),
       &flash_state, &flash_ctrl);
   rv_plic_testutils_irq_range_enable(&plic0, plic_ctx.hart_id,
@@ -338,10 +455,12 @@ bool test_main(void) {
   irq_global_ctrl(true);
   irq_external_ctrl(true);
 
-  do_info_partition_test(kFlashInfoPageIdCreatorSecret, kRandomData1);
-  do_info_partition_test(kFlashInfoPageIdOwnerSecret, kRandomData2);
-  do_info_partition_test(kFlashInfoPageIdIsoPart, kRandomData3);
-  do_bank0_data_partition_test();
+  if (kBootStage != kBootStageOwner) {
+    do_info_partition_test(kFlashInfoPageIdCreatorSecret, kRandomData1);
+    do_info_partition_test(kFlashInfoPageIdOwnerSecret, kRandomData2);
+    do_info_partition_test(kFlashInfoPageIdIsoPart, kRandomData3);
+    do_bank0_data_partition_test();
+  }
   do_bank1_data_partition_test();
 
   return true;

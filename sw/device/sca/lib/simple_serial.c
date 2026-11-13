@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include "sw/device/lib/dif/dif_uart.h"
 #include "sw/device/lib/runtime/print.h"
 #include "sw/device/sca/lib/prng.h"
+#include "sw/device/tests/penetrationtests/firmware/lib/pentest_lib.h"
 
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
 
@@ -27,18 +28,18 @@ enum {
    * Simple serial protocol version 1.1.
    */
   kSimpleSerialProtocolVersion = 1,
-  kUartMaxRxPacketSize = 64,
+  kUartMaxRxPacketSize = 128,
 };
 
 /**
  * Command handlers.
  *
  * Clients can register handlers for commands 'a'-'z' using
- * `simple_serial_register_handler()` except for 'v' (version) and 's' (seed
- * PRNG), which are handled by this library. This array has an extra element
- * (27) that is initialized in `simple_serial_init()` to point to
- * `simple_serial_unknown_command()` in order to simplify handling of invalid
- * commands in `simple_serial_process_packet()`.
+ * `simple_serial_register_handler()` except for 'v' (version), 's' (seed
+ * PRNG), and 't' (select trigger type) which are handled by this library. This
+ * array has an extra element (27) that is initialized in `simple_serial_init()`
+ * to point to `simple_serial_unknown_command()` in order to simplify handling
+ * of invalid commands in `simple_serial_process_packet()`.
  */
 static simple_serial_command_handler handlers[27];
 static const dif_uart_t *uart;
@@ -111,7 +112,7 @@ static void simple_serial_receive_packet(uint8_t *cmd, uint8_t *data,
       if (*data_len == data_buf_len) {
         break;
       }
-      data[*data_len] = hex_byte[0] << 4 | hex_byte[1];
+      data[*data_len] = (uint8_t)(hex_byte[0] << 4) | hex_byte[1];
       ++*data_len;
     } while (true);
   }
@@ -162,6 +163,20 @@ static void simple_serial_seed_prng(const uint8_t *seed, size_t seed_len) {
 }
 
 /**
+ * Simple serial 't' (select trigger type) command handler.
+ *
+ * This function only supports 1-byte trigger values.
+ *
+ * @param trigger A buffer holding the trigger type.
+ * @param trigger_len Buffer length.
+ */
+static void simple_serial_select_trigger_type(const uint8_t *trigger,
+                                              size_t trigger_len) {
+  SS_CHECK(trigger_len == 1);
+  pentest_select_trigger_type((pentest_trigger_type_t)trigger[0]);
+}
+
+/**
  * Handler for uninmplemented simple serial commands.
  *
  * Sends an error packet over UART.
@@ -181,6 +196,8 @@ void simple_serial_init(const dif_uart_t *uart_) {
     handlers[i] = simple_serial_unknown_command;
   }
   handlers[simple_serial_get_handler_index('s')] = simple_serial_seed_prng;
+  handlers[simple_serial_get_handler_index('t')] =
+      simple_serial_select_trigger_type;
   handlers[simple_serial_get_handler_index('v')] = simple_serial_version;
 }
 
@@ -188,7 +205,7 @@ simple_serial_result_t simple_serial_register_handler(
     uint8_t cmd, simple_serial_command_handler handler) {
   if (!simple_serial_is_valid_command(cmd)) {
     return kSimpleSerialError;
-  } else if (cmd == 's' || cmd == 'v') {
+  } else if (cmd == 's' || cmd == 't' || cmd == 'v') {
     // Cannot register handlers for built-in commands.
     return kSimpleSerialError;
   } else {

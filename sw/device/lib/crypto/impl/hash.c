@@ -1,149 +1,185 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sw/device/lib/crypto/include/hash.h"
+#include "sw/device/lib/crypto/impl/hash.h"
 
-#include <stdbool.h>
+#include "sw/device/lib/base/macros.h"
+#include "sw/device/lib/crypto/impl/status.h"
+#include "sw/device/lib/crypto/include/sha1.h"
+#include "sw/device/lib/crypto/include/sha2.h"
+#include "sw/device/lib/crypto/include/sha3.h"
 
-#include "sw/device/lib/crypto/drivers/kmac.h"
+// Module ID for status codes.
+#define MODULE_ID MAKE_MODULE_ID('h', 's', 'h')
 
 /**
- * Return the digest size (in bytes) for given hashing mode.
+ * Digest identifiers for different hash functions (little-endian).
  *
- * @param hash_mode Hashing mode (e.g. kHashModeSha256).
- * @param digest_len Result digest size in bytes.
- * @return Error status.
+ * See Note 1 in RFC 8017.
  */
-OT_WARN_UNUSED_RESULT
-static crypto_status_t get_digest_size(hash_mode_t hash_mode,
-                                       size_t *digest_len) {
-  if (digest_len == NULL) {
-    return kCryptoStatusBadArgs;
+static const uint8_t kSha1DigestIdentifier[] = {
+    0x14, 0x04, 0x00, 0x05, 0x1a, 0x02, 0x03, 0x0e,
+    0x2b, 0x05, 0x06, 0x09, 0x30, 0x21, 0x30,
+};
+static const uint8_t kSha256DigestIdentifier[] = {
+    0x20, 0x04, 0x00, 0x05, 0x01, 0x02, 0x04, 0x03, 0x65, 0x01,
+    0x48, 0x86, 0x60, 0x09, 0x06, 0x0d, 0x30, 0x31, 0x30,
+};
+static const uint8_t kSha384DigestIdentifier[] = {
+    0x30, 0x04, 0x00, 0x05, 0x02, 0x02, 0x04, 0x03, 0x65, 0x01,
+    0x48, 0x86, 0x60, 0x09, 0x06, 0x0d, 0x30, 0x41, 0x30,
+};
+static const uint8_t kSha512DigestIdentifier[] = {
+    0x40, 0x04, 0x00, 0x05, 0x03, 0x02, 0x04, 0x03, 0x65, 0x01,
+    0x48, 0x86, 0x60, 0x09, 0x06, 0x0d, 0x30, 0x51, 0x30,
+};
+/*
+ * SHA-3 digest identifiers adapted from the SHA-2 identifiers based on the
+ * algorithm identifiers on
+ * https://csrc.nist.gov/projects/computer-security-objects-register/algorithm-registration
+ */
+static const uint8_t kSha3_224DigestIdentifier[] = {
+    0x1c, 0x04, 0x00, 0x05, 0x07, 0x02, 0x04, 0x03, 0x65, 0x01,
+    0x48, 0x86, 0x60, 0x09, 0x06, 0x0d, 0x30, 0x2d, 0x30,
+};
+static const uint8_t kSha3_256DigestIdentifier[] = {
+    0x20, 0x04, 0x00, 0x05, 0x08, 0x02, 0x04, 0x03, 0x65, 0x01,
+    0x48, 0x86, 0x60, 0x09, 0x06, 0x0d, 0x30, 0x31, 0x30,
+};
+static const uint8_t kSha3_384DigestIdentifier[] = {
+    0x30, 0x04, 0x00, 0x05, 0x09, 0x02, 0x04, 0x03, 0x65, 0x01,
+    0x48, 0x86, 0x60, 0x09, 0x06, 0x0d, 0x30, 0x41, 0x30,
+};
+static const uint8_t kSha3_512DigestIdentifier[] = {
+    0x40, 0x04, 0x00, 0x05, 0x0a, 0x02, 0x04, 0x03, 0x65, 0x01,
+    0x48, 0x86, 0x60, 0x09, 0x06, 0x0d, 0x30, 0x51, 0x30,
+};
+
+status_t hash_info_get(otcrypto_hash_mode_t hash_mode, hash_info_t *info) {
+  switch (launder32(hash_mode)) {
+    case kOtcryptoHashModeNull:
+      *info = (hash_info_t){
+          .mode = kOtcryptoHashModeNull,
+          .digest_wordlen = 0,
+          .der_oid = kSha1DigestIdentifier,
+          .der_oid_len = 0,
+          .compute = NULL,
+      };
+      return OTCRYPTO_OK;
+    case kOtcryptoHashModeSha1:
+      *info = (hash_info_t){
+          .mode = kOtcryptoHashModeSha1,
+          .digest_wordlen = 160 / 32,
+          .der_oid = kSha1DigestIdentifier,
+          .der_oid_len = sizeof(kSha1DigestIdentifier),
+          .compute = otcrypto_sha1,
+      };
+      return OTCRYPTO_OK;
+    case kOtcryptoHashModeSha256:
+      *info = (hash_info_t){
+          .mode = kOtcryptoHashModeSha256,
+          .digest_wordlen = 256 / 32,
+          .der_oid = kSha256DigestIdentifier,
+          .der_oid_len = sizeof(kSha256DigestIdentifier),
+          .compute = otcrypto_sha2_256,
+      };
+      return OTCRYPTO_OK;
+    case kOtcryptoHashModeSha384:
+      *info = (hash_info_t){
+          .mode = kOtcryptoHashModeSha384,
+          .digest_wordlen = 384 / 32,
+          .der_oid = kSha384DigestIdentifier,
+          .der_oid_len = sizeof(kSha384DigestIdentifier),
+          .compute = otcrypto_sha2_384,
+      };
+      return OTCRYPTO_OK;
+    case kOtcryptoHashModeSha512:
+      *info = (hash_info_t){
+          .mode = kOtcryptoHashModeSha512,
+          .digest_wordlen = 512 / 32,
+          .der_oid = kSha512DigestIdentifier,
+          .der_oid_len = sizeof(kSha512DigestIdentifier),
+          .compute = otcrypto_sha2_512,
+      };
+      return OTCRYPTO_OK;
+    case kOtcryptoHashModeSha3_224:
+      *info = (hash_info_t){
+          .mode = kOtcryptoHashModeSha3_224,
+          .digest_wordlen = 224 / 32,
+          .der_oid = kSha3_224DigestIdentifier,
+          .der_oid_len = sizeof(kSha3_224DigestIdentifier),
+          .compute = otcrypto_sha3_224,
+      };
+      return OTCRYPTO_OK;
+    case kOtcryptoHashModeSha3_256:
+      *info = (hash_info_t){
+          .mode = kOtcryptoHashModeSha3_256,
+          .digest_wordlen = 256 / 32,
+          .der_oid = kSha3_256DigestIdentifier,
+          .der_oid_len = sizeof(kSha3_256DigestIdentifier),
+          .compute = otcrypto_sha3_256,
+      };
+      return OTCRYPTO_OK;
+    case kOtcryptoHashModeSha3_384:
+      *info = (hash_info_t){
+          .mode = kOtcryptoHashModeSha3_384,
+          .digest_wordlen = 384 / 32,
+          .der_oid = kSha3_384DigestIdentifier,
+          .der_oid_len = sizeof(kSha3_384DigestIdentifier),
+          .compute = otcrypto_sha3_384,
+      };
+      return OTCRYPTO_OK;
+    case kOtcryptoHashModeSha3_512:
+      *info = (hash_info_t){
+          .mode = kOtcryptoHashModeSha3_512,
+          .digest_wordlen = 512 / 32,
+          .der_oid = kSha3_512DigestIdentifier,
+          .der_oid_len = sizeof(kSha3_512DigestIdentifier),
+          .compute = otcrypto_sha3_512,
+      };
+      return OTCRYPTO_OK;
+    case kOtcryptoHashXofModeShake128:
+      *info = (hash_info_t){
+          .mode = kOtcryptoHashXofModeShake128,
+          .digest_wordlen = 256 / 32,
+          .der_oid = NULL,
+          .der_oid_len = 0,
+          .compute = otcrypto_shake128,
+      };
+      return OTCRYPTO_OK;
+    case kOtcryptoHashXofModeShake256:
+      *info = (hash_info_t){
+          .mode = kOtcryptoHashXofModeShake256,
+          .digest_wordlen = 512 / 32,
+          .der_oid = NULL,
+          .der_oid_len = 0,
+          .compute = otcrypto_shake256,
+      };
+      return OTCRYPTO_OK;
+    default:
+      // Unsupported or unrecognized hash function.
+      // COVERAGE (MISSING) We do not cover bad padding modes.
+      return OTCRYPTO_BAD_ARGS;
   }
 
-  // Below `digest_len` is in bytes, therefore magic values are obtained
-  // after division by 8.
-  switch (hash_mode) {
-    case kHashModeSha3_224:
-      *digest_len = 224 / 8;
-      break;
-    case kHashModeSha256:
-      OT_FALLTHROUGH_INTENDED;
-    case kHashModeSha3_256:
-      *digest_len = 256 / 8;
-      break;
-    case kHashModeSha384:
-      OT_FALLTHROUGH_INTENDED;
-    case kHashModeSha3_384:
-      *digest_len = 384 / 8;
-      break;
-    case kHashModeSha512:
-      OT_FALLTHROUGH_INTENDED;
-    case kHashModeSha3_512:
-      *digest_len = 512 / 8;
-      break;
-    default:
-      return kCryptoStatusBadArgs;
-  }
-  return kCryptoStatusOK;
+  // Should be unreachable.
+  HARDENED_TRAP();
+  // COVERAGE (FI CM) This is unreachable and is coded in as a fault
+  // countermeasure.
+  return OTCRYPTO_FATAL_ERR;
 }
 
-OT_WARN_UNUSED_RESULT
-crypto_status_t otcrypto_hash(crypto_const_uint8_buf_t input_message,
-                              hash_mode_t hash_mode,
-                              crypto_uint8_buf_t *digest) {
-  if (input_message.data == NULL && input_message.len != 0) {
-    return kCryptoStatusBadArgs;
-  } else if (digest->data == NULL) {
-    return kCryptoStatusBadArgs;
+status_t hash_message(otcrypto_hash_mode_t hash_mode,
+                      const otcrypto_const_byte_buf_t *message,
+                      uint32_t *digest_data, otcrypto_hash_digest_t *digest) {
+  hash_info_t info;
+  HARDENED_TRY(hash_info_get(hash_mode, &info));
+  if (info.compute == NULL) {
+    return OTCRYPTO_BAD_ARGS;
   }
-
-  // Check `digest->len` is consistent with `hash_mode`
-  size_t expected_digest_len;
-  crypto_status_t err_status = get_digest_size(hash_mode, &expected_digest_len);
-  if (err_status != kCryptoStatusOK) {
-    return err_status;
-  } else if (expected_digest_len != digest->len) {
-    return kCryptoStatusBadArgs;
-  }
-
-  kmac_error_t err = kKmacOk;
-  switch (hash_mode) {
-    case kHashModeSha3_224:
-      err = kmac_sha3_224(input_message, digest);
-      break;
-    case kHashModeSha3_256:
-      err = kmac_sha3_256(input_message, digest);
-      break;
-    case kHashModeSha3_384:
-      err = kmac_sha3_384(input_message, digest);
-      break;
-    case kHashModeSha3_512:
-      err = kmac_sha3_512(input_message, digest);
-      break;
-    default:
-      // TODO: (#16410) Connect SHA-2 implementations
-      return kCryptoStatusBadArgs;
-  }
-
-  // TODO: (#14549, #16410) Revisit KMAC error flow
-  // Need to map KMAC driver error enum to cryptolib error enum
-  if (err != kKmacOk) {
-    return kCryptoStatusBadArgs;
-  }
-
-  // TODO: (#16410) SHA-2 error check to be added here
-
-  return kCryptoStatusOK;
-}
-
-OT_WARN_UNUSED_RESULT
-crypto_status_t otcrypto_xof(crypto_const_uint8_buf_t input_message,
-                             xof_mode_t xof_mode,
-                             crypto_const_uint8_buf_t function_name_string,
-                             crypto_const_uint8_buf_t customization_string,
-                             size_t required_output_len,
-                             crypto_uint8_buf_t *digest) {
-  // TODO: (#16410) Add error checks
-  if (required_output_len != digest->len) {
-    return kCryptoStatusBadArgs;
-  }
-
-  // According to NIST SP 800-185 Section 3.2, cSHAKE call should use SHAKE, if
-  // both `customization_string` and `function_name_string` are empty string
-  if (customization_string.len == 0 && function_name_string.len == 0) {
-    if (xof_mode == kXofModeSha3Cshake128) {
-      xof_mode = kXofModeSha3Shake128;
-    } else if (xof_mode == kXofModeSha3Cshake256) {
-      xof_mode = kXofModeSha3Shake256;
-    }
-  }
-
-  kmac_error_t err;
-  switch (xof_mode) {
-    case kXofModeSha3Shake128:
-      err = kmac_shake_128(input_message, digest);
-      break;
-    case kXofModeSha3Shake256:
-      err = kmac_shake_256(input_message, digest);
-      break;
-    case kXofModeSha3Cshake128:
-      err = kmac_cshake_128(input_message, function_name_string,
-                            customization_string, digest);
-      break;
-    case kXofModeSha3Cshake256:
-      err = kmac_cshake_256(input_message, function_name_string,
-                            customization_string, digest);
-      break;
-    default:
-      return kCryptoStatusBadArgs;
-  }
-
-  // TODO: (#14549, #16410) Revisit KMAC error flow
-  if (err != kKmacOk) {
-    return kCryptoStatusBadArgs;
-  }
-
-  return kCryptoStatusOK;
+  digest->mode = hash_mode;
+  digest->len = info.digest_wordlen;
+  digest->data = digest_data;
+  return info.compute(message, digest);
 }

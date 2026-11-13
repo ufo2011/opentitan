@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,15 +9,15 @@
 #include "sw/device/lib/base/memory.h"
 #include "sw/device/lib/base/mmio.h"
 
-#include "aes_regs.h"  // Generated.
+#include "hw/top/aes_regs.h"  // Generated.
 
 /*
- * From: https://docs.opentitan.org/hw/ip/aes/doc/index.html#register-table,
+ * From: https://opentitan.org/book/hw/ip/aes/doc/registers.html,
  * aes.CTRL.
  */
 
 /**
- * Waits for the given AES status flag to be set the the given value.
+ * Waits for the given AES status flag to be set the given value.
  *
  * @param aes An aes DIF handle.
  * @param flag Status flag to query.
@@ -143,7 +143,10 @@ static dif_result_t configure_aux(const dif_aes_t *aes,
             reg_val, AES_CTRL_AUX_SHADOWED_KEY_TOUCH_FORCES_RESEED_BIT) !=
             transaction->reseed_on_key_change ||
         bitfield_bit32_read(reg_val, AES_CTRL_AUX_SHADOWED_FORCE_MASKS_BIT) !=
-            transaction->force_masks) {
+            transaction->force_masks ||
+        bitfield_bit32_read(
+            reg_val, AES_CTRL_AUX_SHADOWED_KEEP_START_TRIGGER_HIGH_BIT) !=
+            transaction->keep_start_trigger_high) {
       return kDifError;
     }
     return kDifOk;
@@ -154,6 +157,9 @@ static dif_result_t configure_aux(const dif_aes_t *aes,
                            transaction->reseed_on_key_change);
   reg_val = bitfield_bit32_write(reg_val, AES_CTRL_AUX_SHADOWED_FORCE_MASKS_BIT,
                                  transaction->force_masks);
+  reg_val = bitfield_bit32_write(
+      reg_val, AES_CTRL_AUX_SHADOWED_KEEP_START_TRIGGER_HIGH_BIT,
+      transaction->keep_start_trigger_high);
   aes_shadowed_write(aes->base_addr, AES_CTRL_AUX_SHADOWED_REG_OFFSET, reg_val);
 
   reg_val = transaction->ctrl_aux_lock == false;
@@ -173,7 +179,7 @@ static dif_result_t configure_aux(const dif_aes_t *aes,
 static void aes_set_multireg(const dif_aes_t *aes, const uint32_t *data,
                              size_t regs_num, ptrdiff_t reg0_offset) {
   for (int i = 0; i < regs_num; ++i) {
-    ptrdiff_t offset = reg0_offset + (i * sizeof(uint32_t));
+    ptrdiff_t offset = reg0_offset + (ptrdiff_t)i * (ptrdiff_t)sizeof(uint32_t);
 
     mmio_region_write32(aes->base_addr, offset, data[i]);
   }
@@ -182,7 +188,7 @@ static void aes_set_multireg(const dif_aes_t *aes, const uint32_t *data,
 static void aes_read_multireg(const dif_aes_t *aes, uint32_t *data,
                               size_t regs_num, ptrdiff_t reg0_offset) {
   for (int i = 0; i < regs_num; ++i) {
-    ptrdiff_t offset = reg0_offset + (i * sizeof(uint32_t));
+    ptrdiff_t offset = reg0_offset + (ptrdiff_t)i * (ptrdiff_t)sizeof(uint32_t);
 
     data[i] = mmio_region_read32(aes->base_addr, offset);
   }
@@ -233,6 +239,16 @@ dif_result_t dif_aes_start(const dif_aes_t *aes,
   result = configure_aux(aes, transaction);
   if (result != kDifOk) {
     return result;
+  }
+
+  // Wait for the IDLE bit in STATUS to become 1, i.e. wait for the AES
+  // unit handle any triggers resulting from writing the main control register.
+  AES_WAIT_FOR_STATUS(aes, AES_STATUS_IDLE_BIT, true);
+
+  if (transaction->mode == kDifAesModeGcm) {
+    // Put AES-GCM into init mode.
+    DIF_RETURN_IF_ERROR(dif_aes_set_gcm_phase(
+        aes, AES_CTRL_GCM_SHADOWED_PHASE_VALUE_GCM_INIT, 16));
   }
 
   if (transaction->key_provider == kDifAesKeySoftwareProvided) {
@@ -296,6 +312,49 @@ dif_result_t dif_aes_read_output(const dif_aes_t *aes, dif_aes_data_t *data) {
 
   aes_read_multireg(aes, data->data, AES_DATA_OUT_MULTIREG_COUNT,
                     AES_DATA_OUT_0_REG_OFFSET);
+
+  return kDifOk;
+}
+
+dif_result_t dif_aes_set_gcm_phase(const dif_aes_t *aes, uint32_t phase,
+                                   size_t num_valid_bytes) {
+  if (aes == NULL) {
+    return kDifBadArg;
+  }
+
+  if (!aes_idle(aes)) {
+    return kDifUnavailable;
+  }
+
+  uint32_t reg = bitfield_field32_write(
+      0, AES_CTRL_GCM_SHADOWED_NUM_VALID_BYTES_FIELD, num_valid_bytes);
+  // Put AES-GCM into the given phase.
+  reg = bitfield_field32_write(reg, AES_CTRL_GCM_SHADOWED_PHASE_FIELD, phase);
+  aes_shadowed_write(aes->base_addr, AES_CTRL_GCM_SHADOWED_REG_OFFSET, reg);
+
+  return kDifOk;
+}
+
+dif_result_t dif_aes_load_gcm_tag_len(const dif_aes_t *aes, uint64_t len_ptx,
+                                      uint64_t len_aad) {
+  if (aes == NULL) {
+    return kDifBadArg;
+  }
+
+  // Ensure that the INPUT_READY bit in STATUS is 1.
+  if (!aes_input_ready(aes)) {
+    return kDifUnavailable;
+  }
+
+  // len_aad_ptx = len(aad) || len(ptx)
+  dif_aes_data_t len_aad_ptx;
+  len_aad_ptx.data[0] = __builtin_bswap32((uint32_t)(len_aad >> 32));
+  len_aad_ptx.data[1] = __builtin_bswap32((uint32_t)(len_aad & 0xFFFFFFFF));
+  len_aad_ptx.data[2] = __builtin_bswap32((uint32_t)(len_ptx >> 32));
+  len_aad_ptx.data[3] = __builtin_bswap32((uint32_t)(len_ptx & 0xFFFFFFFF));
+
+  aes_set_multireg(aes, &len_aad_ptx.data[0], AES_DATA_IN_MULTIREG_COUNT,
+                   AES_DATA_IN_0_REG_OFFSET);
 
   return kDifOk;
 }
@@ -410,9 +469,24 @@ dif_result_t dif_aes_read_iv(const dif_aes_t *aes, dif_aes_iv_t *iv) {
   }
 
   for (int i = 0; i < AES_IV_MULTIREG_COUNT; ++i) {
-    ptrdiff_t offset = AES_IV_0_REG_OFFSET + (i * sizeof(uint32_t));
+    ptrdiff_t offset =
+        AES_IV_0_REG_OFFSET + (ptrdiff_t)i * (ptrdiff_t)sizeof(uint32_t);
 
     iv->iv[i] = mmio_region_read32(aes->base_addr, offset);
   }
+  return kDifOk;
+}
+
+dif_result_t dif_aes_load_iv(const dif_aes_t *aes, const dif_aes_iv_t iv) {
+  if (aes == NULL) {
+    return kDifBadArg;
+  }
+
+  if (!aes_idle(aes)) {
+    return kDifUnavailable;
+  }
+
+  aes_set_multireg(aes, &iv.iv[0], AES_IV_MULTIREG_COUNT, AES_IV_0_REG_OFFSET);
+
   return kDifOk;
 }

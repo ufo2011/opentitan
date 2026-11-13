@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/alert_handler_testutils.h"
 #include "sw/device/lib/testing/aon_timer_testutils.h"
+#include "sw/device/lib/testing/keymgr_dpe_testutils.h"
 #include "sw/device/lib/testing/pwrmgr_testutils.h"
 #include "sw/device/lib/testing/rstmgr_testutils.h"
 #include "sw/device/lib/testing/rv_plic_testutils.h"
@@ -26,9 +27,7 @@
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "alert_handler_regs.h"  // Generated.
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "sw/device/lib/testing/autogen/isr_testutils.h"
+#include "hw/top/alert_handler_regs.h"  // Generated.
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -48,17 +47,24 @@ static_assert(
     kTestParamWakeupThresholdUsec > 175000,
     "Invalid kTestParamWakeupThresholdUsec. See test plan for more details.");
 
+static const dt_pwrmgr_t kPwrmgrDt = 0;
+static_assert(kDtPwrmgrCount == 1, "this test expects a pwrmgr");
+static const dt_aon_timer_t kAonTimerDt = 0;
+static_assert(kDtAonTimerCount >= 1,
+              "this test expects at least one aon_timer");
+static const dt_rstmgr_t kRstmgrDt = 0;
+static_assert(kDtPwrmgrCount == 1, "this test expects a rstmgr");
+static const dt_alert_handler_t kAlertHandlerDt = 0;
+static_assert(kDtAlertHandlerCount == 1, "this test expects an alert_handler");
+static const dt_rv_plic_t kRvPlicDt = 0;
+static_assert(kDtRvPlicCount == 1, "this test expects exactly one rv_plic");
+
 static dif_rv_plic_t plic;
 static dif_pwrmgr_t pwrmgr;
 static dif_rstmgr_t rstmgr;
 static dif_aon_timer_t aon_timer;
 static dif_alert_handler_t alert_handler;
-static const uint32_t kPlicTarget = kTopEarlgreyPlicTargetIbex0;
-
-static plic_isr_ctx_t plic_ctx = {
-    .rv_plic = &plic,
-    .hart_id = kPlicTarget,
-};
+static const uint32_t kPlicTarget = 0;
 
 static volatile bool interrupt_serviced = false;
 
@@ -66,22 +72,19 @@ static volatile bool interrupt_serviced = false;
  * Initialize the peripherals used in this test.
  */
 static void init_peripherals(void) {
-  CHECK_DIF_OK(dif_rv_plic_init(
-      mmio_region_from_addr(TOP_EARLGREY_RV_PLIC_BASE_ADDR), &plic));
-  CHECK_DIF_OK(dif_alert_handler_init(
-      mmio_region_from_addr(TOP_EARLGREY_ALERT_HANDLER_BASE_ADDR),
-      &alert_handler));
-  CHECK_DIF_OK(dif_pwrmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_PWRMGR_AON_BASE_ADDR), &pwrmgr));
-  CHECK_DIF_OK(dif_rstmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR), &rstmgr));
-  CHECK_DIF_OK(dif_aon_timer_init(
-      mmio_region_from_addr(TOP_EARLGREY_AON_TIMER_AON_BASE_ADDR), &aon_timer));
+  CHECK_DIF_OK(dif_rv_plic_init_from_dt(kRvPlicDt, &plic));
+  CHECK_DIF_OK(dif_alert_handler_init_from_dt(kAlertHandlerDt, &alert_handler));
+  CHECK_DIF_OK(dif_pwrmgr_init_from_dt(kPwrmgrDt, &pwrmgr));
+  CHECK_DIF_OK(dif_rstmgr_init_from_dt(kRstmgrDt, &rstmgr));
+  CHECK_DIF_OK(dif_aon_timer_init_from_dt(kAonTimerDt, &aon_timer));
 
   // Enable all the alert_handler interrupts used in this test.
-  rv_plic_testutils_irq_range_enable(&plic, kPlicTarget,
-                                     kTopEarlgreyPlicIrqIdAlertHandlerClassa,
-                                     kTopEarlgreyPlicIrqIdAlertHandlerClassd);
+  rv_plic_testutils_irq_range_enable(
+      &plic, kPlicTarget,
+      dt_alert_handler_irq_to_plic_id(kAlertHandlerDt,
+                                      kDtAlertHandlerIrqClassa),
+      dt_alert_handler_irq_to_plic_id(kAlertHandlerDt,
+                                      kDtAlertHandlerIrqClassd));
 }
 
 /**
@@ -95,7 +98,7 @@ static void alert_handler_config(void) {
 
   // Enable all incoming alerts and configure them to classa.
   // This alert should never fire because we do not expect any incoming alerts.
-  for (int i = 0; i < ALERT_HANDLER_PARAM_N_ALERTS; ++i) {
+  for (dif_alert_handler_alert_t i = 0; i < ALERT_HANDLER_PARAM_N_ALERTS; ++i) {
     alerts[i] = i;
     alert_classes[i] = kDifAlertHandlerClassA;
   }
@@ -103,25 +106,28 @@ static void alert_handler_config(void) {
   // Enable alert ping fail local alert and configure that to classb.
   dif_alert_handler_local_alert_t loc_alerts[ALERT_HANDLER_PARAM_N_LOC_ALERT];
   dif_alert_handler_class_t loc_alert_classes[ALERT_HANDLER_PARAM_N_LOC_ALERT];
-  for (int i = 0; i < ALERT_HANDLER_PARAM_N_LOC_ALERT; ++i) {
+  for (dif_alert_handler_local_alert_t i = 0;
+       i < ALERT_HANDLER_PARAM_N_LOC_ALERT; ++i) {
     loc_alerts[i] = i;
     loc_alert_classes[i] = kDifAlertHandlerClassB;
   }
-
+  uint32_t cycles = 0;
+  CHECK_STATUS_OK(alert_handler_testutils_get_cycles_from_us(
+      kTestParamAlertHandlerPhase0EscalationDurationUsec, &cycles));
   dif_alert_handler_escalation_phase_t esc_phases[] = {
       {
           .phase = kDifAlertHandlerClassStatePhase0,
           .signal = 0,
-          .duration_cycles = alert_handler_testutils_get_cycles_from_us(
-              kTestParamAlertHandlerPhase0EscalationDurationUsec),
+          .duration_cycles = cycles,
       },
   };
 
+  CHECK_STATUS_OK(alert_handler_testutils_get_cycles_from_us(
+      kTestParamAlertHandlerIrqDeadlineUsec, &cycles));
   dif_alert_handler_class_config_t class_config = {
       .auto_lock_accumulation_counter = kDifToggleDisabled,
       .accumulator_threshold = 0,
-      .irq_deadline_cycles = alert_handler_testutils_get_cycles_from_us(
-          kTestParamAlertHandlerIrqDeadlineUsec),
+      .irq_deadline_cycles = cycles,
       .escalation_phases = esc_phases,
       .escalation_phases_len = ARRAYSIZE(esc_phases),
       .crashdump_escalation_phase = kDifAlertHandlerClassStatePhase1,
@@ -132,6 +138,8 @@ static void alert_handler_config(void) {
 
   dif_alert_handler_class_t classes[] = {kDifAlertHandlerClassA,
                                          kDifAlertHandlerClassB};
+  CHECK_STATUS_OK(alert_handler_testutils_get_cycles_from_us(
+      kTestParamAlertHandlerPingTimeoutUsec, &cycles));
   dif_alert_handler_config_t config = {
       .alerts = alerts,
       .alert_classes = alert_classes,
@@ -142,12 +150,11 @@ static void alert_handler_config(void) {
       .classes = classes,
       .class_configs = class_configs,
       .classes_len = ARRAYSIZE(class_configs),
-      .ping_timeout = alert_handler_testutils_get_cycles_from_us(
-          kTestParamAlertHandlerPingTimeoutUsec),
+      .ping_timeout = cycles,
   };
 
-  alert_handler_testutils_configure_all(&alert_handler, config,
-                                        kDifToggleEnabled);
+  CHECK_STATUS_OK(alert_handler_testutils_configure_all(&alert_handler, config,
+                                                        kDifToggleEnabled));
   // Enables alert handler irq.
   CHECK_DIF_OK(dif_alert_handler_irq_set_enabled(
       &alert_handler, kDifAlertHandlerIrqClassa, kDifToggleEnabled));
@@ -160,12 +167,22 @@ static void alert_handler_config(void) {
  * Ensure there were no local alerts fired.
  */
 static void check_local_alerts(void) {
-  for (int i = 0; i < ALERT_HANDLER_PARAM_N_LOC_ALERT; ++i) {
+  for (dif_alert_handler_local_alert_t i = 0;
+       i < ALERT_HANDLER_PARAM_N_LOC_ALERT; ++i) {
     bool is_cause;
     CHECK_DIF_OK(
         dif_alert_handler_local_alert_is_cause(&alert_handler, i, &is_cause));
     CHECK(!is_cause, "Unexpected local alert cause: %d", i);
   }
+}
+
+/**
+ * Resets the chip.
+ */
+static void chip_sw_reset(void) {
+  CHECK_DIF_OK(dif_rstmgr_software_device_reset(&rstmgr));
+  busy_spin_micros(100);
+  CHECK(false, "Should have reset before this line");
 }
 
 /**
@@ -175,27 +192,53 @@ static void check_local_alerts(void) {
  * line to the CPU, which results in a call to this OTTF ISR. This ISR
  * overrides the default OTTF implementation.
  */
-void ottf_external_isr(void) { interrupt_serviced = true; }
+void ottf_external_isr(uint32_t *exc_info) { interrupt_serviced = true; }
 
 bool test_main(void) {
   init_peripherals();
+  dif_pwrmgr_request_sources_t wakeup_sources;
+  CHECK_DIF_OK(dif_pwrmgr_find_request_source(
+      &pwrmgr, kDifPwrmgrReqTypeWakeup, dt_aon_timer_instance_id(kAonTimerDt),
+      kDtAonTimerWakeupWkupReq, &wakeup_sources));
 
-  if (pwrmgr_testutils_is_wakeup_reason(&pwrmgr, 0)) {
+  // We need to initialize the NVM partitions storing the Creator and
+  // Owner secrets to avoid getting the flash controller into a fatal error
+  // state.
+  if (kDeviceType == kDeviceFpgaCw310 || kDeviceType == kDeviceFpgaCw340) {
+    dif_rstmgr_reset_info_bitfield_t rst_info = rstmgr_testutils_reason_get();
+    if (rst_info & kDifRstmgrResetInfoPor) {
+      CHECK_STATUS_OK(
+          keymgr_dpe_testutils_nvm_init(&kCreatorSecret, &kOwnerSecret));
+      chip_sw_reset();
+    }
+  }
+
+  if (UNWRAP(pwrmgr_testutils_is_wakeup_reason(&pwrmgr, 0)) == true) {
     LOG_INFO("POR reset");
-    CHECK(rstmgr_testutils_reset_info_any(&rstmgr, kDifRstmgrResetInfoPor));
-    rstmgr_testutils_pre_reset(&rstmgr);
+
+    dif_rstmgr_reset_info_t reset_info = kDifRstmgrResetInfoPor;
+
+    // Update the expected `reset_info` value for the FPGA target, as we have
+    // a soft reset required to apply the NVM info page configuration.
+    if (kDeviceType == kDeviceFpgaCw310 || kDeviceType == kDeviceFpgaCw340) {
+      reset_info = kDifRstmgrResetInfoSw;
+    }
+
+    CHECK(UNWRAP(rstmgr_testutils_reset_info_any(&rstmgr, reset_info)));
+    CHECK_STATUS_OK(rstmgr_testutils_pre_reset(&rstmgr));
 
     alert_handler_config();
 
     irq_global_ctrl(true);
     irq_external_ctrl(true);
 
-    uint32_t wakeup_threshold = aon_timer_testutils_get_aon_cycles_from_us(
-        kTestParamWakeupThresholdUsec);
+    uint64_t wakeup_threshold = 0;
+    CHECK_STATUS_OK(aon_timer_testutils_get_aon_cycles_64_from_us(
+        kTestParamWakeupThresholdUsec, &wakeup_threshold));
 
     // Sleep longer in FPGA and silicon targets.
     if (kDeviceType != kDeviceSimDV && kDeviceType != kDeviceSimVerilator) {
-      uint32_t wakeup_threshold_new = wakeup_threshold * 100;
+      uint64_t wakeup_threshold_new = wakeup_threshold * 50;
       CHECK(wakeup_threshold_new > wakeup_threshold,
             "Detected wakeup_threshold overflow.");
       wakeup_threshold = wakeup_threshold_new;
@@ -208,18 +251,19 @@ bool test_main(void) {
     CHECK(interrupt_serviced == false, "Unexpected interrupt triggered.");
 
     // Enable and enter deep sleep.
-    aon_timer_testutils_wakeup_config(&aon_timer, wakeup_threshold);
-    pwrmgr_testutils_enable_low_power(&pwrmgr,
-                                      kDifPwrmgrWakeupRequestSourceFive, 0);
+    CHECK_STATUS_OK(
+        aon_timer_testutils_wakeup_config(&aon_timer, wakeup_threshold));
+    CHECK_STATUS_OK(
+        pwrmgr_testutils_enable_low_power(&pwrmgr, wakeup_sources, 0));
     wait_for_interrupt();
     CHECK(false, "Fail to enter in low power mode!");
     OT_UNREACHABLE();
-  } else if (pwrmgr_testutils_is_wakeup_reason(
-                 &pwrmgr, kDifPwrmgrWakeupRequestSourceFive)) {
+  } else if (UNWRAP(pwrmgr_testutils_is_wakeup_reason(
+                 &pwrmgr, wakeup_sources)) == true) {
     LOG_INFO("Wakeup reset");
-    CHECK(rstmgr_testutils_is_reset_info(&rstmgr,
-                                         kDifRstmgrResetInfoLowPowerExit));
-    aon_timer_testutils_shutdown(&aon_timer);
+    CHECK(UNWRAP(rstmgr_testutils_is_reset_info(
+        &rstmgr, kDifRstmgrResetInfoLowPowerExit)));
+    CHECK_STATUS_OK(aon_timer_testutils_shutdown(&aon_timer));
 
     // At this point the test has verified that the reset reason is low power
     // exit, which discounts any resets triggered by local alert escalations.

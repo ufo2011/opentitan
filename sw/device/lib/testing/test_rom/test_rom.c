@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,39 +6,150 @@
 #include "sw/device/lib/base/abs_mmio.h"
 #include "sw/device/lib/base/bitfield.h"
 #include "sw/device/lib/base/csr.h"
+#include "sw/device/lib/base/macros.h"
 #include "sw/device/lib/base/mmio.h"
 #include "sw/device/lib/dif/dif_base.h"
-#include "sw/device/lib/dif/dif_clkmgr.h"
-#include "sw/device/lib/dif/dif_flash_ctrl.h"
-#include "sw/device/lib/dif/dif_gpio.h"
-#include "sw/device/lib/dif/dif_pinmux.h"
 #include "sw/device/lib/dif/dif_rstmgr.h"
 #include "sw/device/lib/dif/dif_rv_core_ibex.h"
-#include "sw/device/lib/dif/dif_uart.h"
 #include "sw/device/lib/runtime/hart.h"
 #include "sw/device/lib/runtime/log.h"
-#include "sw/device/lib/runtime/print.h"
-#include "sw/device/lib/testing/flash_ctrl_testutils.h"
-#include "sw/device/lib/testing/pinmux_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/status.h"
-#include "sw/device/lib/testing/test_rom/chip_info.h"  // Generated.
 #include "sw/device/silicon_creator/lib/base/sec_mmio.h"
-#include "sw/device/silicon_creator/lib/drivers/flash_ctrl.h"
-#include "sw/device/silicon_creator/lib/drivers/retention_sram.h"
+#include "sw/device/silicon_creator/lib/build_info.h"
 #include "sw/device/silicon_creator/lib/manifest.h"
+
+#ifndef HAS_NVM
+static inline void init_nvm(uint32_t nvm_default_cfg) {
+  OT_DISCARD(nvm_default_cfg);
+}
+#else
+#include "sw/device/lib/testing/nvm_testutils.h"
+
+static inline void init_nvm(uint32_t nvm_default_cfg) {
+  CHECK_STATUS_OK(nvm_testutils_rom_init(nvm_default_cfg));
+}
+#endif
+
+#ifdef HAS_RETENTION_RAM
+#include "sw/device/silicon_creator/lib/drivers/retention_sram.h"
+#endif
+
+#ifdef SKIP_BOOTSTRAP
+static inline void run_bootstrap(void) {}
+#else
 #include "sw/device/silicon_creator/rom/bootstrap.h"
 
-#include "flash_ctrl_regs.h"
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"  // Generated.
-#include "otp_ctrl_regs.h"
+static inline void run_bootstrap(void) {
+  if (bootstrap_requested() == kHardenedBoolTrue) {
+    // This log statement is used to synchronize the rom and DV testbench
+    // for specific test cases.
+    LOG_INFO("Bootstrap requested");
+
+    rom_error_t bootstrap_err = bootstrap();
+    if (bootstrap_err != kErrorOk) {
+      LOG_ERROR("Bootstrap failed with status code: %08x",
+                (uint32_t)bootstrap_err);
+      // Currently the only way to recover is by a hard reset.
+      test_status_set(kTestStatusFailed);
+    }
+  }
+}
+#endif /* SKIP_BOOTSTRAP */
+
+#ifndef HAS_OTP_CTRL
+static inline uint32_t get_otp_ctrl_base(void) { return 0; }
+static inline bool otp_rom_exec_en_is_zero(uint32_t otp_ctrl_base) {
+  OT_DISCARD(otp_ctrl_base);
+  return false;
+}
+static inline uint32_t get_otp_cpuctrl(uint32_t otp_ctrl_base) {
+  OT_DISCARD(otp_ctrl_base);
+  return 0;
+}
+static inline uint32_t get_otp_nvm_default_cfg(uint32_t otp_ctrl_base) {
+  OT_DISCARD(otp_ctrl_base);
+  return 0;
+}
+#else
+#include "hw/top/dt/otp_ctrl.h"
+
+#include "hw/top/otp_ctrl_regs.h"
+
+static inline uint32_t get_otp_ctrl_base(void) {
+  static_assert(kDtOtpCtrlCount == 1, "Expected one otp_ctrl IP");
+  return dt_otp_ctrl_primary_reg_block(kDtOtpCtrlFirst);
+}
+
+static inline bool otp_rom_exec_en_is_zero(uint32_t otp_ctrl_base) {
+  uint32_t otp_val =
+      abs_mmio_read32(otp_ctrl_base + OTP_CTRL_SW_CFG_WINDOW_REG_OFFSET +
+                      OTP_CTRL_PARAM_CREATOR_SW_CFG_ROM_EXEC_EN_OFFSET);
+  return (otp_val == 0);
+}
+
+static inline uint32_t get_otp_cpuctrl(uint32_t otp_ctrl_base) {
+  return abs_mmio_read32(otp_ctrl_base + OTP_CTRL_SW_CFG_WINDOW_REG_OFFSET +
+                         OTP_CTRL_PARAM_CREATOR_SW_CFG_CPUCTRL_OFFSET);
+}
+
+static inline uint32_t get_otp_nvm_default_cfg(uint32_t otp_ctrl_base) {
+  return abs_mmio_read32(
+      otp_ctrl_base + OTP_CTRL_SW_CFG_WINDOW_REG_OFFSET +
+      OTP_CTRL_PARAM_CREATOR_SW_CFG_NVM_DATA_DEFAULT_CFG_OFFSET);
+}
+#endif /* HAS_OTP_CTRL */
+
+#ifndef HAS_PINMUX
+static inline void init_pinmux(void) {}
+#else
+#include "sw/device/lib/dif/dif_pinmux.h"
+#include "sw/device/lib/testing/pinmux_testutils.h"
+
+static void init_pinmux(void) {
+  static dif_pinmux_t pinmux;
+  static_assert(kDtPinmuxCount == 1, "Expected one pinmux IP");
+  CHECK_DIF_OK(dif_pinmux_init_from_dt(kDtPinmuxFirst, &pinmux));
+  pinmux_testutils_init(&pinmux);
+}
+#endif /* HAS_PINMUX */
+
+#ifndef HAS_UART
+static inline void init_uart(void) {}
+#else
+#include "hw/top/dt/api.h"   // Generated
+#include "hw/top/dt/uart.h"  // Generated
+#include "sw/device/lib/dif/dif_uart.h"
+#include "sw/device/lib/runtime/print_uart.h"
+
+static inline void init_uart(void) {
+  static dif_uart_t uart0;
+
+  // Setup the UART for printing messages to the console.
+  static_assert(kDtUartCount >= 1, "Expected one or more uart IPs");
+  CHECK_DIF_OK(dif_uart_init_from_dt(kDtUartFirst, &uart0));
+  CHECK(kUartBaudrate <= UINT32_MAX, "kUartBaudrate must fit in uint32_t");
+  CHECK_DIF_OK(dif_uart_configure(
+      &uart0, (dif_uart_config_t){
+                  .baudrate = (uint32_t)kUartBaudrate,
+                  .clk_freq_hz = dt_clock_frequency(
+                      dt_uart_clock(kDtUartFirst, kDtUartClockClk)),
+                  .parity_enable = kDifToggleDisabled,
+                  .parity = kDifUartParityEven,
+                  .tx_enable = kDifToggleEnabled,
+                  .rx_enable = kDifToggleEnabled,
+              }));
+  base_uart_stdout(&uart0);
+}
+#endif /* HAS_UART */
 
 /* These symbols are defined in
  * `opentitan/sw/device/lib/testing/test_rom/test_rom.ld`, and describes the
- * location of the flash header.
+ * location of the flash header and manifest.
  */
 extern char _rom_ext_virtual_start_address[];
 extern char _rom_ext_virtual_size[];
+extern char _manifest_address[];
 
 /**
  * Type alias for the OTTF entry point.
@@ -48,11 +159,7 @@ extern char _rom_ext_virtual_size[];
  */
 typedef void ottf_entry_point(void);
 
-static dif_clkmgr_t clkmgr;
-static dif_flash_ctrl_state_t flash_ctrl;
-static dif_pinmux_t pinmux;
 static dif_rstmgr_t rstmgr;
-static dif_uart_t uart0;
 static dif_rv_core_ibex_t ibex;
 
 /**
@@ -72,24 +179,20 @@ static inline uintptr_t rom_ext_vma_get(const manifest_t *manifest,
 // rom tests. By default, it simply jumps into the OTTF's flash.
 OT_WEAK
 bool rom_test_main(void) {
-#if !OT_IS_ENGLISH_BREAKFAST
   // Check the otp to see if execute should start
-  uint32_t otp_val = abs_mmio_read32(
-      TOP_EARLGREY_OTP_CTRL_CORE_BASE_ADDR + OTP_CTRL_SW_CFG_WINDOW_REG_OFFSET +
-      OTP_CTRL_PARAM_CREATOR_SW_CFG_ROM_EXEC_EN_OFFSET);
-
-  if (otp_val == 0) {
+  const uint32_t otp_ctrl_base = get_otp_ctrl_base();
+  bool rom_exec_en_is_zero = otp_rom_exec_en_is_zero(otp_ctrl_base);
+  if (rom_exec_en_is_zero) {
     test_status_set(kTestStatusInBootRomHalt);
     // Abort simply forever loops on a wait_for_interrupt;
     abort();
   }
 
+#ifndef OPENTITAN_IS_ENGLISHBREAKFAST
   // Initialize Ibex cpuctrl (contains icache / security feature enablements).
   uint32_t cpuctrl_csr;
   CSR_READ(CSR_REG_CPUCTRL, &cpuctrl_csr);
-  uint32_t cpuctrl_otp_val = abs_mmio_read32(
-      TOP_EARLGREY_OTP_CTRL_CORE_BASE_ADDR + OTP_CTRL_SW_CFG_WINDOW_REG_OFFSET +
-      OTP_CTRL_PARAM_CREATOR_SW_CFG_CPUCTRL_OFFSET);
+  uint32_t cpuctrl_otp_val = get_otp_cpuctrl(otp_ctrl_base);
   cpuctrl_csr = bitfield_field32_write(
       cpuctrl_csr, (bitfield_field32_t){.mask = 0x3f, .index = 0},
       cpuctrl_otp_val);
@@ -99,119 +202,49 @@ bool rom_test_main(void) {
   // Initial sec_mmio, required by bootstrap and its dependencies.
   sec_mmio_init();
 
-  // Configure the pinmux.
-  CHECK_DIF_OK(dif_pinmux_init(
-      mmio_region_from_addr(TOP_EARLGREY_PINMUX_AON_BASE_ADDR), &pinmux));
-  pinmux_testutils_init(&pinmux);
+  init_pinmux();
 
-  CHECK_DIF_OK(dif_rstmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR), &rstmgr));
+  static_assert(kDtRstmgrCount == 1, "Expected one rstmgr IP");
+  CHECK_DIF_OK(dif_rstmgr_init_from_dt(kDtRstmgrFirst, &rstmgr));
 
-  // Initialize the flash.
-  CHECK_DIF_OK(dif_flash_ctrl_init_state(
-      &flash_ctrl,
-      mmio_region_from_addr(TOP_EARLGREY_FLASH_CTRL_CORE_BASE_ADDR)));
-  CHECK_DIF_OK(dif_flash_ctrl_start_controller_init(&flash_ctrl));
-  flash_ctrl_testutils_wait_for_init(&flash_ctrl);
-  CHECK_DIF_OK(
-      dif_flash_ctrl_set_flash_enablement(&flash_ctrl, kDifToggleEnabled));
+  // Initialize the NVM.
+  {
+    uint32_t nvm_default_cfg = get_otp_nvm_default_cfg(otp_ctrl_base);
+    init_nvm(nvm_default_cfg);
+  }
 
-  // Setup the UART for printing messages to the console.
   if (kDeviceType != kDeviceSimDV) {
-    CHECK_DIF_OK(dif_uart_init(
-        mmio_region_from_addr(TOP_EARLGREY_UART0_BASE_ADDR), &uart0));
-    CHECK_DIF_OK(
-        dif_uart_configure(&uart0, (dif_uart_config_t){
-                                       .baudrate = kUartBaudrate,
-                                       .clk_freq_hz = kClockFreqPeripheralHz,
-                                       .parity_enable = kDifToggleDisabled,
-                                       .parity = kDifUartParityEven,
-                                       .tx_enable = kDifToggleEnabled,
-                                       .rx_enable = kDifToggleEnabled,
-                                   }));
-    base_uart_stdout(&uart0);
+    init_uart();
   }
 
   // Print the chip version information
-  LOG_INFO("%s", chip_info);
+  LOG_INFO("kBuildInfo: scm_revision=%x", kBuildInfo.scm_revision);
 
   // Skip sram_init for test_rom
   dif_rstmgr_reset_info_bitfield_t reset_reasons;
   CHECK_DIF_OK(dif_rstmgr_reset_info_get(&rstmgr, &reset_reasons));
 
+#ifdef HAS_RETENTION_RAM
   // Store the reset reason in retention RAM and clear the register.
   volatile retention_sram_t *ret_ram = retention_sram_get();
-  ret_ram->reset_reasons = reset_reasons;
+  ret_ram->creator.reset_reasons = reset_reasons;
   CHECK_DIF_OK(dif_rstmgr_reset_info_clear(&rstmgr));
 
   // Write 0x54534554 (ASCII: TEST) to the end of the retention SRAM creator
   // area to be able to determine the type of ROM in tests.
   volatile uint32_t *creator_last_word =
-      &ret_ram->reserved_creator[ARRAYSIZE(ret_ram->reserved_creator) - 1];
+      &ret_ram->creator.reserved[ARRAYSIZE(ret_ram->creator.reserved) - 1];
   *creator_last_word = TEST_ROM_IDENTIFIER;
-
-  // Print the FPGA version-id.
-  // This is guaranteed to be zero on all non-FPGA implementations.
-  dif_rv_core_ibex_fpga_info_t fpga;
-  CHECK_DIF_OK(dif_rv_core_ibex_init(
-      mmio_region_from_addr(TOP_EARLGREY_RV_CORE_IBEX_CFG_BASE_ADDR), &ibex));
-  CHECK_DIF_OK(dif_rv_core_ibex_read_fpga_info(&ibex, &fpga));
-  if (fpga != 0) {
-    LOG_INFO("TestROM:%08x", fpga);
-  }
-
-  // Enable clock jitter if requested.
-  // The kJitterEnabled symbol defaults to false across all hardware platforms.
-  // However, in DV simulation, it may be overridden via a backdoor write with
-  // the plusarg: `+en_jitter=1`.
-  if (kJitterEnabled) {
-    CHECK_DIF_OK(dif_clkmgr_init(
-        mmio_region_from_addr(TOP_EARLGREY_CLKMGR_AON_BASE_ADDR), &clkmgr));
-    CHECK_DIF_OK(dif_clkmgr_jitter_set_enabled(&clkmgr, kDifToggleEnabled));
-    LOG_INFO("Jitter is enabled");
-  }
-
-#if !OT_IS_ENGLISH_BREAKFAST
-  // Check the otp to see if flash scramble should be enabled.
-  otp_val = abs_mmio_read32(
-      TOP_EARLGREY_OTP_CTRL_CORE_BASE_ADDR + OTP_CTRL_SW_CFG_WINDOW_REG_OFFSET +
-      OTP_CTRL_PARAM_CREATOR_SW_CFG_FLASH_DATA_DEFAULT_CFG_OFFSET);
-
-  if (otp_val != 0) {
-    dif_flash_ctrl_region_properties_t default_properties;
-    CHECK_DIF_OK(dif_flash_ctrl_get_default_region_properties(
-        &flash_ctrl, &default_properties));
-    default_properties.scramble_en =
-        bitfield_field32_read(otp_val, FLASH_CTRL_OTP_FIELD_SCRAMBLING);
-    default_properties.ecc_en =
-        bitfield_field32_read(otp_val, FLASH_CTRL_OTP_FIELD_ECC);
-    default_properties.high_endurance_en =
-        bitfield_field32_read(otp_val, FLASH_CTRL_OTP_FIELD_HE);
-    CHECK_DIF_OK(dif_flash_ctrl_set_default_region_properties(
-        &flash_ctrl, default_properties));
-  }
 #endif
 
-  if (bootstrap_requested() == kHardenedBoolTrue) {
-    // This log statement is used to synchronize the rom and DV testbench
-    // for specific test cases.
-    LOG_INFO("Boot strap requested");
+  static_assert(kDtRvCoreIbexCount == 1, "Expected one rv_core_ibex IP");
+  CHECK_DIF_OK(dif_rv_core_ibex_init_from_dt(kDtRvCoreIbexFirst, &ibex));
 
-    rom_error_t bootstrap_err = bootstrap();
-    if (bootstrap_err != kErrorOk) {
-      LOG_ERROR("Bootstrap failed with status code: %08x",
-                (uint32_t)bootstrap_err);
-      // Currently the only way to recover is by a hard reset.
-      test_status_set(kTestStatusFailed);
-    }
-  }
-  CHECK_DIF_OK(
-      dif_flash_ctrl_set_exec_enablement(&flash_ctrl, kDifToggleEnabled));
+  run_bootstrap();
 
-  // Always select slot a and enable address translation if manifest says to.
-  const manifest_t *manifest =
-      (const manifest_t *)TOP_EARLGREY_EFLASH_BASE_ADDR;
+  const manifest_t *manifest = (const manifest_t *)_manifest_address;
   uintptr_t entry_point = manifest_entry_point_get(manifest);
+  // Enable address translation if manifest says to
   if (manifest->address_translation == kHardenedBoolTrue) {
     dif_rv_core_ibex_addr_translation_mapping_t addr_map = {
         .matching_addr = (uintptr_t)_rom_ext_virtual_start_address,
@@ -233,12 +266,12 @@ bool rom_test_main(void) {
     entry_point = rom_ext_vma_get(manifest, entry_point);
   }
 
-  // Jump to the OTTF in flash. Within the flash binary, it is the
+  // Jump to the OTTF in NVM. Within the flash/RRAM binary, it is the
   // responsibily of the OTTF to set up its own stack, and to never return.
-  LOG_INFO("Test ROM complete, jumping to flash (addr: %x)!", entry_point);
+  LOG_INFO("Test ROM complete, jumping to NVM (addr: %x)!", entry_point);
   ((ottf_entry_point *)entry_point)();
 
-  // If the flash image returns, we should abort anyway.
+  // If the NVM image returns, we should abort anyway.
   abort();
 }
 

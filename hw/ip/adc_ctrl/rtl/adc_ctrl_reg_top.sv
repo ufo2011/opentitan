@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -18,10 +18,7 @@ module adc_ctrl_reg_top (
   input  adc_ctrl_reg_pkg::adc_ctrl_hw2reg_t hw2reg, // Read
 
   // Integrity check errors
-  output logic intg_err_o,
-
-  // Config
-  input devmode_i // If 1, explicit error return for unmapped register access
+  output logic intg_err_o
 );
 
   import adc_ctrl_reg_pkg::* ;
@@ -57,9 +54,9 @@ module adc_ctrl_reg_top (
 
   // also check for spurious write enables
   logic reg_we_err;
-  logic [30:0] reg_we_check;
+  logic [31:0] reg_we_check;
   prim_reg_we_check #(
-    .OneHotWidth(31)
+    .OneHotWidth(32)
   ) u_prim_reg_we_check (
     .clk_i(clk_i),
     .rst_ni(rst_ni),
@@ -121,21 +118,21 @@ module adc_ctrl_reg_top (
   // cdc oversampling signals
 
   assign reg_rdata = reg_rdata_next ;
-  assign reg_error = (devmode_i & addrmiss) | wr_err | intg_err;
+  assign reg_error = addrmiss | wr_err | intg_err;
 
   // Define SW related signals
   // Format: <reg>_<field>_{wd|we|qs}
   //        or <reg>_{wd|we|qs} if field == 1 or 0
-  logic intr_state_we;
   logic intr_state_qs;
-  logic intr_state_wd;
   logic intr_enable_we;
   logic intr_enable_qs;
   logic intr_enable_wd;
   logic intr_test_we;
   logic intr_test_wd;
   logic alert_test_we;
-  logic alert_test_wd;
+  logic alert_test_fatal_fault_wd;
+  logic alert_test_regwen_qs;
+  logic alert_test_regwen_wd;
   logic adc_en_ctl_we;
   logic [1:0] adc_en_ctl_qs;
   logic adc_en_ctl_busy;
@@ -204,19 +201,28 @@ module adc_ctrl_reg_top (
   logic [27:0] adc_chn_val_1_qs;
   logic adc_chn_val_1_busy;
   logic adc_wakeup_ctl_we;
-  logic [7:0] adc_wakeup_ctl_qs;
+  logic [8:0] adc_wakeup_ctl_qs;
   logic adc_wakeup_ctl_busy;
   logic filter_status_we;
-  logic [7:0] filter_status_qs;
+  logic [8:0] filter_status_qs;
   logic filter_status_busy;
   logic adc_intr_ctl_we;
-  logic [8:0] adc_intr_ctl_qs;
-  logic [8:0] adc_intr_ctl_wd;
+  logic [7:0] adc_intr_ctl_match_en_qs;
+  logic [7:0] adc_intr_ctl_match_en_wd;
+  logic adc_intr_ctl_trans_en_qs;
+  logic adc_intr_ctl_trans_en_wd;
+  logic adc_intr_ctl_oneshot_en_qs;
+  logic adc_intr_ctl_oneshot_en_wd;
   logic adc_intr_status_we;
-  logic [7:0] adc_intr_status_filter_match_qs;
-  logic [7:0] adc_intr_status_filter_match_wd;
+  logic [7:0] adc_intr_status_match_qs;
+  logic [7:0] adc_intr_status_match_wd;
+  logic adc_intr_status_trans_qs;
+  logic adc_intr_status_trans_wd;
   logic adc_intr_status_oneshot_qs;
   logic adc_intr_status_oneshot_wd;
+  logic adc_fsm_state_re;
+  logic [4:0] adc_fsm_state_qs;
+  logic adc_fsm_state_busy;
   // Define register CDC handling.
   // CDC handling is done on a per-reg instead of per-field boundary.
 
@@ -269,7 +275,7 @@ module adc_ctrl_reg_top (
   logic unused_aon_adc_pd_ctl_wdata;
 
   always_comb begin
-    aon_adc_pd_ctl_qs = 32'h64060;
+    aon_adc_pd_ctl_qs = 32'h64070;
     aon_adc_pd_ctl_qs[0] = aon_adc_pd_ctl_lp_mode_qs_int;
     aon_adc_pd_ctl_qs[7:4] = aon_adc_pd_ctl_pwrup_time_qs_int;
     aon_adc_pd_ctl_qs[31:8] = aon_adc_pd_ctl_wakeup_time_qs_int;
@@ -277,7 +283,7 @@ module adc_ctrl_reg_top (
 
   prim_reg_cdc #(
     .DataWidth(32),
-    .ResetVal(32'h64060),
+    .ResetVal(32'h64070),
     .BitMask(32'hfffffff1),
     .DstWrReq(0)
   ) u_adc_pd_ctl_cdc (
@@ -1220,21 +1226,23 @@ module adc_ctrl_reg_top (
     .dst_wd_o     ()
   );
 
-  logic [7:0]  aon_adc_wakeup_ctl_qs_int;
-  logic [7:0] aon_adc_wakeup_ctl_qs;
-  logic [7:0] aon_adc_wakeup_ctl_wdata;
+  logic [7:0]  aon_adc_wakeup_ctl_match_en_qs_int;
+  logic  aon_adc_wakeup_ctl_trans_en_qs_int;
+  logic [8:0] aon_adc_wakeup_ctl_qs;
+  logic [8:0] aon_adc_wakeup_ctl_wdata;
   logic aon_adc_wakeup_ctl_we;
   logic unused_aon_adc_wakeup_ctl_wdata;
 
   always_comb begin
-    aon_adc_wakeup_ctl_qs = 8'h0;
-    aon_adc_wakeup_ctl_qs = aon_adc_wakeup_ctl_qs_int;
+    aon_adc_wakeup_ctl_qs = 9'h0;
+    aon_adc_wakeup_ctl_qs[7:0] = aon_adc_wakeup_ctl_match_en_qs_int;
+    aon_adc_wakeup_ctl_qs[8] = aon_adc_wakeup_ctl_trans_en_qs_int;
   end
 
   prim_reg_cdc #(
-    .DataWidth(8),
-    .ResetVal(8'h0),
-    .BitMask(8'hff),
+    .DataWidth(9),
+    .ResetVal(9'h0),
+    .BitMask(9'h1ff),
     .DstWrReq(0)
   ) u_adc_wakeup_ctl_cdc (
     .clk_src_i    (clk_i),
@@ -1244,7 +1252,7 @@ module adc_ctrl_reg_top (
     .src_regwen_i ('0),
     .src_we_i     (adc_wakeup_ctl_we),
     .src_re_i     ('0),
-    .src_wd_i     (reg_wdata[7:0]),
+    .src_wd_i     (reg_wdata[8:0]),
     .src_busy_o   (adc_wakeup_ctl_busy),
     .src_qs_o     (adc_wakeup_ctl_qs), // for software read back
     .dst_update_i ('0),
@@ -1258,26 +1266,30 @@ module adc_ctrl_reg_top (
   assign unused_aon_adc_wakeup_ctl_wdata =
       ^aon_adc_wakeup_ctl_wdata;
 
-  logic [7:0]  aon_filter_status_ds_int;
-  logic [7:0]  aon_filter_status_qs_int;
-  logic [7:0] aon_filter_status_ds;
+  logic [7:0]  aon_filter_status_match_ds_int;
+  logic [7:0]  aon_filter_status_match_qs_int;
+  logic  aon_filter_status_trans_ds_int;
+  logic  aon_filter_status_trans_qs_int;
+  logic [8:0] aon_filter_status_ds;
   logic aon_filter_status_qe;
-  logic [7:0] aon_filter_status_qs;
-  logic [7:0] aon_filter_status_wdata;
+  logic [8:0] aon_filter_status_qs;
+  logic [8:0] aon_filter_status_wdata;
   logic aon_filter_status_we;
   logic unused_aon_filter_status_wdata;
 
   always_comb begin
-    aon_filter_status_qs = 8'h0;
-    aon_filter_status_ds = 8'h0;
-    aon_filter_status_ds = aon_filter_status_ds_int;
-    aon_filter_status_qs = aon_filter_status_qs_int;
+    aon_filter_status_qs = 9'h0;
+    aon_filter_status_ds = 9'h0;
+    aon_filter_status_ds[7:0] = aon_filter_status_match_ds_int;
+    aon_filter_status_qs[7:0] = aon_filter_status_match_qs_int;
+    aon_filter_status_ds[8] = aon_filter_status_trans_ds_int;
+    aon_filter_status_qs[8] = aon_filter_status_trans_qs_int;
   end
 
   prim_reg_cdc #(
-    .DataWidth(8),
-    .ResetVal(8'h0),
-    .BitMask(8'hff),
+    .DataWidth(9),
+    .ResetVal(9'h0),
+    .BitMask(9'h1ff),
     .DstWrReq(1)
   ) u_filter_status_cdc (
     .clk_src_i    (clk_i),
@@ -1287,7 +1299,7 @@ module adc_ctrl_reg_top (
     .src_regwen_i ('0),
     .src_we_i     (filter_status_we),
     .src_re_i     ('0),
-    .src_wd_i     (reg_wdata[7:0]),
+    .src_wd_i     (reg_wdata[8:0]),
     .src_busy_o   (filter_status_busy),
     .src_qs_o     (filter_status_qs), // for software read back
     .dst_update_i (aon_filter_status_qe),
@@ -1301,19 +1313,60 @@ module adc_ctrl_reg_top (
   assign unused_aon_filter_status_wdata =
       ^aon_filter_status_wdata;
 
+  logic [4:0]  aon_adc_fsm_state_ds_int;
+  logic [4:0]  aon_adc_fsm_state_qs_int;
+  logic [4:0] aon_adc_fsm_state_ds;
+  logic aon_adc_fsm_state_qe;
+  logic [4:0] aon_adc_fsm_state_qs;
+  logic aon_adc_fsm_state_re;
+
+  always_comb begin
+    aon_adc_fsm_state_qs = 5'h0;
+    aon_adc_fsm_state_ds = 5'h0;
+    aon_adc_fsm_state_ds = aon_adc_fsm_state_ds_int;
+    aon_adc_fsm_state_qs = aon_adc_fsm_state_qs_int;
+  end
+
+  prim_reg_cdc #(
+    .DataWidth(5),
+    .ResetVal(5'h0),
+    .BitMask(5'h1f),
+    .DstWrReq(1)
+  ) u_adc_fsm_state_cdc (
+    .clk_src_i    (clk_i),
+    .rst_src_ni   (rst_ni),
+    .clk_dst_i    (clk_aon_i),
+    .rst_dst_ni   (rst_aon_ni),
+    .src_regwen_i ('0),
+    .src_we_i     ('0),
+    .src_re_i     (adc_fsm_state_re),
+    .src_wd_i     ('0),
+    .src_busy_o   (adc_fsm_state_busy),
+    .src_qs_o     (adc_fsm_state_qs), // for software read back
+    .dst_update_i (aon_adc_fsm_state_qe),
+    .dst_ds_i     (aon_adc_fsm_state_ds),
+    .dst_qs_i     (aon_adc_fsm_state_qs),
+    .dst_we_o     (),
+    .dst_re_o     (aon_adc_fsm_state_re),
+    .dst_regwen_o (),
+    .dst_wd_o     ()
+  );
+
   // Register instances
   // R[intr_state]: V(False)
   prim_subreg #(
     .DW      (1),
-    .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .SwAccess(prim_subreg_pkg::SwAccessRO),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_state (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (intr_state_we),
-    .wd     (intr_state_wd),
+    .we     (1'b0),
+    .wd     ('0),
 
     // from internal hardware
     .de     (hw2reg.intr_state.de),
@@ -1333,10 +1386,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_intr_enable (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (intr_enable_we),
@@ -1378,14 +1433,18 @@ module adc_ctrl_reg_top (
 
   // R[alert_test]: V(True)
   logic alert_test_qe;
-  logic [0:0] alert_test_flds_we;
+  logic [1:0] alert_test_flds_we;
   assign alert_test_qe = &alert_test_flds_we;
+  // Create REGWEN-gated WE signal
+  logic alert_test_gated_we;
+  assign alert_test_gated_we = alert_test_we && alert_test_regwen_qs;
+  //   F[fatal_fault]: 0:0
   prim_subreg_ext #(
     .DW    (1)
-  ) u_alert_test (
+  ) u_alert_test_fatal_fault (
     .re     (1'b0),
-    .we     (alert_test_we),
-    .wd     (alert_test_wd),
+    .we     (alert_test_gated_we),
+    .wd     (alert_test_fatal_fault_wd),
     .d      ('0),
     .qre    (),
     .qe     (alert_test_flds_we[0]),
@@ -1395,16 +1454,46 @@ module adc_ctrl_reg_top (
   );
   assign reg2hw.alert_test.qe = alert_test_qe;
 
+  //   F[regwen]: 31:31
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW0C),
+    .RESVAL  (1'h1),
+    .Mubi    (1'b0)
+  ) u_alert_test_regwen (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (alert_test_we),
+    .wd     (alert_test_regwen_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (alert_test_flds_we[1]),
+    .q      (),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (alert_test_regwen_qs)
+  );
+
 
   // R[adc_en_ctl]: V(False)
   //   F[adc_enable]: 0:0
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_en_ctl_adc_enable (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_en_ctl_we),
@@ -1427,10 +1516,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_en_ctl_oneshot_mode (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_en_ctl_we),
@@ -1455,10 +1546,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_pd_ctl_lp_mode (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_pd_ctl_we),
@@ -1481,10 +1574,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (4),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (4'h6)
+    .RESVAL  (4'h7),
+    .Mubi    (1'b0)
   ) u_adc_pd_ctl_pwrup_time (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_pd_ctl_we),
@@ -1507,10 +1602,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (24),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (24'h640)
+    .RESVAL  (24'h640),
+    .Mubi    (1'b0)
   ) u_adc_pd_ctl_wakeup_time (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_pd_ctl_we),
@@ -1534,10 +1631,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (8),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (8'h4)
+    .RESVAL  (8'h4),
+    .Mubi    (1'b0)
   ) u_adc_lp_sample_ctl (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_lp_sample_ctl_we),
@@ -1561,10 +1660,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (16),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (16'h9b)
+    .RESVAL  (16'h9b),
+    .Mubi    (1'b0)
   ) u_adc_sample_ctl (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_sample_ctl_we),
@@ -1588,10 +1689,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_fsm_rst (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_fsm_rst_we),
@@ -1617,10 +1720,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_0_min_v_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_0_we),
@@ -1643,10 +1748,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_0_cond_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_0_we),
@@ -1669,10 +1776,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_0_max_v_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_0_we),
@@ -1695,10 +1804,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_0_en_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_0_we),
@@ -1724,10 +1835,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_1_min_v_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_1_we),
@@ -1750,10 +1863,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_1_cond_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_1_we),
@@ -1776,10 +1891,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_1_max_v_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_1_we),
@@ -1802,10 +1919,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_1_en_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_1_we),
@@ -1831,10 +1950,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_2_min_v_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_2_we),
@@ -1857,10 +1978,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_2_cond_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_2_we),
@@ -1883,10 +2006,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_2_max_v_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_2_we),
@@ -1909,10 +2034,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_2_en_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_2_we),
@@ -1938,10 +2065,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_3_min_v_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_3_we),
@@ -1964,10 +2093,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_3_cond_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_3_we),
@@ -1990,10 +2121,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_3_max_v_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_3_we),
@@ -2016,10 +2149,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_3_en_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_3_we),
@@ -2045,10 +2180,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_4_min_v_4 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_4_we),
@@ -2071,10 +2208,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_4_cond_4 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_4_we),
@@ -2097,10 +2236,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_4_max_v_4 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_4_we),
@@ -2123,10 +2264,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_4_en_4 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_4_we),
@@ -2152,10 +2295,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_5_min_v_5 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_5_we),
@@ -2178,10 +2323,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_5_cond_5 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_5_we),
@@ -2204,10 +2351,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_5_max_v_5 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_5_we),
@@ -2230,10 +2379,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_5_en_5 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_5_we),
@@ -2259,10 +2410,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_6_min_v_6 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_6_we),
@@ -2285,10 +2438,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_6_cond_6 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_6_we),
@@ -2311,10 +2466,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_6_max_v_6 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_6_we),
@@ -2337,10 +2494,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_6_en_6 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_6_we),
@@ -2366,10 +2525,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_7_min_v_7 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_7_we),
@@ -2392,10 +2553,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_7_cond_7 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_7_we),
@@ -2418,10 +2581,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_7_max_v_7 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_7_we),
@@ -2444,10 +2609,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn0_filter_ctl_7_en_7 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn0_filter_ctl_7_we),
@@ -2473,10 +2640,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_0_min_v_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_0_we),
@@ -2499,10 +2668,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_0_cond_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_0_we),
@@ -2525,10 +2696,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_0_max_v_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_0_we),
@@ -2551,10 +2724,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_0_en_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_0_we),
@@ -2580,10 +2755,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_1_min_v_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_1_we),
@@ -2606,10 +2783,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_1_cond_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_1_we),
@@ -2632,10 +2811,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_1_max_v_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_1_we),
@@ -2658,10 +2839,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_1_en_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_1_we),
@@ -2687,10 +2870,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_2_min_v_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_2_we),
@@ -2713,10 +2898,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_2_cond_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_2_we),
@@ -2739,10 +2926,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_2_max_v_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_2_we),
@@ -2765,10 +2954,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_2_en_2 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_2_we),
@@ -2794,10 +2985,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_3_min_v_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_3_we),
@@ -2820,10 +3013,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_3_cond_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_3_we),
@@ -2846,10 +3041,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_3_max_v_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_3_we),
@@ -2872,10 +3069,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_3_en_3 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_3_we),
@@ -2901,10 +3100,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_4_min_v_4 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_4_we),
@@ -2927,10 +3128,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_4_cond_4 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_4_we),
@@ -2953,10 +3156,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_4_max_v_4 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_4_we),
@@ -2979,10 +3184,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_4_en_4 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_4_we),
@@ -3008,10 +3215,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_5_min_v_5 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_5_we),
@@ -3034,10 +3243,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_5_cond_5 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_5_we),
@@ -3060,10 +3271,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_5_max_v_5 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_5_we),
@@ -3086,10 +3299,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_5_en_5 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_5_we),
@@ -3115,10 +3330,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_6_min_v_6 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_6_we),
@@ -3141,10 +3358,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_6_cond_6 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_6_we),
@@ -3167,10 +3386,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_6_max_v_6 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_6_we),
@@ -3193,10 +3414,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_6_en_6 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_6_we),
@@ -3222,10 +3445,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_7_min_v_7 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_7_we),
@@ -3248,10 +3473,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_7_cond_7 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_7_we),
@@ -3274,10 +3501,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_7_max_v_7 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_7_we),
@@ -3300,10 +3529,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn1_filter_ctl_7_en_7 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_chn1_filter_ctl_7_we),
@@ -3331,10 +3562,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (2),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (2'h0)
+    .RESVAL  (2'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn_val_0_adc_chn_value_ext_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3357,10 +3590,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn_val_0_adc_chn_value_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3383,10 +3618,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (2),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (2'h0)
+    .RESVAL  (2'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn_val_0_adc_chn_value_intr_ext_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3409,10 +3646,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn_val_0_adc_chn_value_intr_0 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3440,10 +3679,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (2),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (2'h0)
+    .RESVAL  (2'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn_val_1_adc_chn_value_ext_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3466,10 +3707,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn_val_1_adc_chn_value_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3492,10 +3735,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (2),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (2'h0)
+    .RESVAL  (2'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn_val_1_adc_chn_value_intr_ext_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3518,10 +3763,12 @@ module adc_ctrl_reg_top (
   prim_subreg #(
     .DW      (10),
     .SwAccess(prim_subreg_pkg::SwAccessRO),
-    .RESVAL  (10'h0)
+    .RESVAL  (10'h0),
+    .Mubi    (1'b0)
   ) u_adc_chn_val_1_adc_chn_value_intr_1 (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (1'b0),
@@ -3542,13 +3789,16 @@ module adc_ctrl_reg_top (
 
 
   // R[adc_wakeup_ctl]: V(False)
+  //   F[match_en]: 7:0
   prim_subreg #(
     .DW      (8),
     .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (8'h0)
-  ) u_adc_wakeup_ctl (
+    .RESVAL  (8'h0),
+    .Mubi    (1'b0)
+  ) u_adc_wakeup_ctl_match_en (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (aon_adc_wakeup_ctl_we),
@@ -3560,55 +3810,27 @@ module adc_ctrl_reg_top (
 
     // to internal hardware
     .qe     (),
-    .q      (reg2hw.adc_wakeup_ctl.q),
+    .q      (reg2hw.adc_wakeup_ctl.match_en.q),
     .ds     (),
 
     // to register interface (read)
-    .qs     (aon_adc_wakeup_ctl_qs_int)
+    .qs     (aon_adc_wakeup_ctl_match_en_qs_int)
   );
 
-
-  // R[filter_status]: V(False)
-  logic [0:0] filter_status_flds_we;
-  assign aon_filter_status_qe = |filter_status_flds_we;
+  //   F[trans_en]: 8:8
   prim_subreg #(
-    .DW      (8),
-    .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (8'h0)
-  ) u_filter_status (
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_adc_wakeup_ctl_trans_en (
     .clk_i   (clk_aon_i),
     .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
 
     // from register interface
-    .we     (aon_filter_status_we),
-    .wd     (aon_filter_status_wdata[7:0]),
-
-    // from internal hardware
-    .de     (hw2reg.filter_status.de),
-    .d      (hw2reg.filter_status.d),
-
-    // to internal hardware
-    .qe     (filter_status_flds_we[0]),
-    .q      (reg2hw.filter_status.q),
-    .ds     (aon_filter_status_ds_int),
-
-    // to register interface (read)
-    .qs     (aon_filter_status_qs_int)
-  );
-
-
-  // R[adc_intr_ctl]: V(False)
-  prim_subreg #(
-    .DW      (9),
-    .SwAccess(prim_subreg_pkg::SwAccessRW),
-    .RESVAL  (9'h0)
-  ) u_adc_intr_ctl (
-    .clk_i   (clk_i),
-    .rst_ni  (rst_ni),
-
-    // from register interface
-    .we     (adc_intr_ctl_we),
-    .wd     (adc_intr_ctl_wd),
+    .we     (aon_adc_wakeup_ctl_we),
+    .wd     (aon_adc_wakeup_ctl_wdata[8]),
 
     // from internal hardware
     .de     (1'b0),
@@ -3616,49 +3838,227 @@ module adc_ctrl_reg_top (
 
     // to internal hardware
     .qe     (),
-    .q      (reg2hw.adc_intr_ctl.q),
+    .q      (reg2hw.adc_wakeup_ctl.trans_en.q),
     .ds     (),
 
     // to register interface (read)
-    .qs     (adc_intr_ctl_qs)
+    .qs     (aon_adc_wakeup_ctl_trans_en_qs_int)
+  );
+
+
+  // R[filter_status]: V(False)
+  logic [1:0] filter_status_flds_we;
+  assign aon_filter_status_qe = |filter_status_flds_we;
+  //   F[match]: 7:0
+  prim_subreg #(
+    .DW      (8),
+    .SwAccess(prim_subreg_pkg::SwAccessW1C),
+    .RESVAL  (8'h0),
+    .Mubi    (1'b0)
+  ) u_filter_status_match (
+    .clk_i   (clk_aon_i),
+    .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (aon_filter_status_we),
+    .wd     (aon_filter_status_wdata[7:0]),
+
+    // from internal hardware
+    .de     (hw2reg.filter_status.match.de),
+    .d      (hw2reg.filter_status.match.d),
+
+    // to internal hardware
+    .qe     (filter_status_flds_we[0]),
+    .q      (reg2hw.filter_status.match.q),
+    .ds     (aon_filter_status_match_ds_int),
+
+    // to register interface (read)
+    .qs     (aon_filter_status_match_qs_int)
+  );
+
+  //   F[trans]: 8:8
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW1C),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_filter_status_trans (
+    .clk_i   (clk_aon_i),
+    .rst_ni  (rst_aon_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (aon_filter_status_we),
+    .wd     (aon_filter_status_wdata[8]),
+
+    // from internal hardware
+    .de     (hw2reg.filter_status.trans.de),
+    .d      (hw2reg.filter_status.trans.d),
+
+    // to internal hardware
+    .qe     (filter_status_flds_we[1]),
+    .q      (reg2hw.filter_status.trans.q),
+    .ds     (aon_filter_status_trans_ds_int),
+
+    // to register interface (read)
+    .qs     (aon_filter_status_trans_qs_int)
+  );
+
+
+  // R[adc_intr_ctl]: V(False)
+  //   F[match_en]: 7:0
+  prim_subreg #(
+    .DW      (8),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (8'h0),
+    .Mubi    (1'b0)
+  ) u_adc_intr_ctl_match_en (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (adc_intr_ctl_we),
+    .wd     (adc_intr_ctl_match_en_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.adc_intr_ctl.match_en.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (adc_intr_ctl_match_en_qs)
+  );
+
+  //   F[trans_en]: 8:8
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_adc_intr_ctl_trans_en (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (adc_intr_ctl_we),
+    .wd     (adc_intr_ctl_trans_en_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.adc_intr_ctl.trans_en.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (adc_intr_ctl_trans_en_qs)
+  );
+
+  //   F[oneshot_en]: 9:9
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessRW),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_adc_intr_ctl_oneshot_en (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (adc_intr_ctl_we),
+    .wd     (adc_intr_ctl_oneshot_en_wd),
+
+    // from internal hardware
+    .de     (1'b0),
+    .d      ('0),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.adc_intr_ctl.oneshot_en.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (adc_intr_ctl_oneshot_en_qs)
   );
 
 
   // R[adc_intr_status]: V(False)
-  //   F[filter_match]: 7:0
+  //   F[match]: 7:0
   prim_subreg #(
     .DW      (8),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (8'h0)
-  ) u_adc_intr_status_filter_match (
+    .RESVAL  (8'h0),
+    .Mubi    (1'b0)
+  ) u_adc_intr_status_match (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (adc_intr_status_we),
-    .wd     (adc_intr_status_filter_match_wd),
+    .wd     (adc_intr_status_match_wd),
 
     // from internal hardware
-    .de     (hw2reg.adc_intr_status.filter_match.de),
-    .d      (hw2reg.adc_intr_status.filter_match.d),
+    .de     (hw2reg.adc_intr_status.match.de),
+    .d      (hw2reg.adc_intr_status.match.d),
 
     // to internal hardware
     .qe     (),
-    .q      (reg2hw.adc_intr_status.filter_match.q),
+    .q      (reg2hw.adc_intr_status.match.q),
     .ds     (),
 
     // to register interface (read)
-    .qs     (adc_intr_status_filter_match_qs)
+    .qs     (adc_intr_status_match_qs)
   );
 
-  //   F[oneshot]: 8:8
+  //   F[trans]: 8:8
   prim_subreg #(
     .DW      (1),
     .SwAccess(prim_subreg_pkg::SwAccessW1C),
-    .RESVAL  (1'h0)
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
+  ) u_adc_intr_status_trans (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
+
+    // from register interface
+    .we     (adc_intr_status_we),
+    .wd     (adc_intr_status_trans_wd),
+
+    // from internal hardware
+    .de     (hw2reg.adc_intr_status.trans.de),
+    .d      (hw2reg.adc_intr_status.trans.d),
+
+    // to internal hardware
+    .qe     (),
+    .q      (reg2hw.adc_intr_status.trans.q),
+    .ds     (),
+
+    // to register interface (read)
+    .qs     (adc_intr_status_trans_qs)
+  );
+
+  //   F[oneshot]: 9:9
+  prim_subreg #(
+    .DW      (1),
+    .SwAccess(prim_subreg_pkg::SwAccessW1C),
+    .RESVAL  (1'h0),
+    .Mubi    (1'b0)
   ) u_adc_intr_status_oneshot (
     .clk_i   (clk_i),
     .rst_ni  (rst_ni),
+    .reinit_i(1'b0),
 
     // from register interface
     .we     (adc_intr_status_we),
@@ -3678,10 +4078,27 @@ module adc_ctrl_reg_top (
   );
 
 
+  // R[adc_fsm_state]: V(True)
+  logic [0:0] adc_fsm_state_flds_we;
+  assign aon_adc_fsm_state_qe = |adc_fsm_state_flds_we;
+  prim_subreg_ext #(
+    .DW    (5)
+  ) u_adc_fsm_state (
+    .re     (aon_adc_fsm_state_re),
+    .we     (1'b0),
+    .wd     ('0),
+    .d      (hw2reg.adc_fsm_state.d),
+    .qre    (),
+    .qe     (adc_fsm_state_flds_we[0]),
+    .q      (),
+    .ds     (aon_adc_fsm_state_ds_int),
+    .qs     (aon_adc_fsm_state_qs_int)
+  );
 
-  logic [30:0] addr_hit;
+
+
+  logic [31:0] addr_hit;
   always_comb begin
-    addr_hit = '0;
     addr_hit[ 0] = (reg_addr == ADC_CTRL_INTR_STATE_OFFSET);
     addr_hit[ 1] = (reg_addr == ADC_CTRL_INTR_ENABLE_OFFSET);
     addr_hit[ 2] = (reg_addr == ADC_CTRL_INTR_TEST_OFFSET);
@@ -3713,6 +4130,7 @@ module adc_ctrl_reg_top (
     addr_hit[28] = (reg_addr == ADC_CTRL_FILTER_STATUS_OFFSET);
     addr_hit[29] = (reg_addr == ADC_CTRL_ADC_INTR_CTL_OFFSET);
     addr_hit[30] = (reg_addr == ADC_CTRL_ADC_INTR_STATUS_OFFSET);
+    addr_hit[31] = (reg_addr == ADC_CTRL_ADC_FSM_STATE_OFFSET);
   end
 
   assign addrmiss = (reg_re || reg_we) ? ~|addr_hit : 1'b0 ;
@@ -3750,13 +4168,11 @@ module adc_ctrl_reg_top (
                (addr_hit[27] & (|(ADC_CTRL_PERMIT[27] & ~reg_be))) |
                (addr_hit[28] & (|(ADC_CTRL_PERMIT[28] & ~reg_be))) |
                (addr_hit[29] & (|(ADC_CTRL_PERMIT[29] & ~reg_be))) |
-               (addr_hit[30] & (|(ADC_CTRL_PERMIT[30] & ~reg_be)))));
+               (addr_hit[30] & (|(ADC_CTRL_PERMIT[30] & ~reg_be))) |
+               (addr_hit[31] & (|(ADC_CTRL_PERMIT[31] & ~reg_be)))));
   end
 
   // Generate write-enables
-  assign intr_state_we = addr_hit[0] & reg_we & !reg_error;
-
-  assign intr_state_wd = reg_wdata[0];
   assign intr_enable_we = addr_hit[1] & reg_we & !reg_error;
 
   assign intr_enable_wd = reg_wdata[0];
@@ -3765,7 +4181,9 @@ module adc_ctrl_reg_top (
   assign intr_test_wd = reg_wdata[0];
   assign alert_test_we = addr_hit[3] & reg_we & !reg_error;
 
-  assign alert_test_wd = reg_wdata[0];
+  assign alert_test_fatal_fault_wd = reg_wdata[0];
+
+  assign alert_test_regwen_wd = reg_wdata[31];
   assign adc_en_ctl_we = addr_hit[4] & reg_we & !reg_error;
 
 
@@ -3861,21 +4279,29 @@ module adc_ctrl_reg_top (
 
   assign adc_wakeup_ctl_we = addr_hit[27] & reg_we & !reg_error;
 
+
   assign filter_status_we = addr_hit[28] & reg_we & !reg_error;
+
 
   assign adc_intr_ctl_we = addr_hit[29] & reg_we & !reg_error;
 
-  assign adc_intr_ctl_wd = reg_wdata[8:0];
+  assign adc_intr_ctl_match_en_wd = reg_wdata[7:0];
+
+  assign adc_intr_ctl_trans_en_wd = reg_wdata[8];
+
+  assign adc_intr_ctl_oneshot_en_wd = reg_wdata[9];
   assign adc_intr_status_we = addr_hit[30] & reg_we & !reg_error;
 
-  assign adc_intr_status_filter_match_wd = reg_wdata[7:0];
+  assign adc_intr_status_match_wd = reg_wdata[7:0];
 
-  assign adc_intr_status_oneshot_wd = reg_wdata[8];
+  assign adc_intr_status_trans_wd = reg_wdata[8];
+
+  assign adc_intr_status_oneshot_wd = reg_wdata[9];
+  assign adc_fsm_state_re = addr_hit[31] & reg_re & !reg_error;
 
   // Assign write-enables to checker logic vector.
   always_comb begin
-    reg_we_check = '0;
-    reg_we_check[0] = intr_state_we;
+    reg_we_check[0] = 1'b0;
     reg_we_check[1] = intr_enable_we;
     reg_we_check[2] = intr_test_we;
     reg_we_check[3] = alert_test_we;
@@ -3906,6 +4332,7 @@ module adc_ctrl_reg_top (
     reg_we_check[28] = filter_status_we;
     reg_we_check[29] = adc_intr_ctl_we;
     reg_we_check[30] = adc_intr_status_we;
+    reg_we_check[31] = 1'b0;
   end
 
   // Read data return
@@ -3926,6 +4353,7 @@ module adc_ctrl_reg_top (
 
       addr_hit[3]: begin
         reg_rdata_next[0] = '0;
+        reg_rdata_next[31] = alert_test_regwen_qs;
       end
 
       addr_hit[4]: begin
@@ -4004,14 +4432,20 @@ module adc_ctrl_reg_top (
         reg_rdata_next = DW'(filter_status_qs);
       end
       addr_hit[29]: begin
-        reg_rdata_next[8:0] = adc_intr_ctl_qs;
+        reg_rdata_next[7:0] = adc_intr_ctl_match_en_qs;
+        reg_rdata_next[8] = adc_intr_ctl_trans_en_qs;
+        reg_rdata_next[9] = adc_intr_ctl_oneshot_en_qs;
       end
 
       addr_hit[30]: begin
-        reg_rdata_next[7:0] = adc_intr_status_filter_match_qs;
-        reg_rdata_next[8] = adc_intr_status_oneshot_qs;
+        reg_rdata_next[7:0] = adc_intr_status_match_qs;
+        reg_rdata_next[8] = adc_intr_status_trans_qs;
+        reg_rdata_next[9] = adc_intr_status_oneshot_qs;
       end
 
+      addr_hit[31]: begin
+        reg_rdata_next = DW'(adc_fsm_state_qs);
+      end
       default: begin
         reg_rdata_next = '1;
       end
@@ -4024,7 +4458,7 @@ module adc_ctrl_reg_top (
 
   // register busy
   logic reg_busy_sel;
-  assign reg_busy = reg_busy_sel | shadow_busy;
+  assign reg_busy = (reg_busy_sel | shadow_busy) & tl_i.a_valid;
   always_comb begin
     reg_busy_sel = '0;
     unique case (1'b1)
@@ -4102,6 +4536,9 @@ module adc_ctrl_reg_top (
       end
       addr_hit[28]: begin
         reg_busy_sel = filter_status_busy;
+      end
+      addr_hit[31]: begin
+        reg_busy_sel = adc_fsm_state_busy;
       end
       default: begin
         reg_busy_sel  = '0;

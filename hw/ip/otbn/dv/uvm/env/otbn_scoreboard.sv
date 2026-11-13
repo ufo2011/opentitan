@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -57,6 +57,10 @@ class otbn_scoreboard extends cip_base_scoreboard #(
   // The mirrored STATUS register from the ISS.
   bit [7:0] model_status;
 
+  // The number of instructions that the model has reported since model_status last changed. This
+  // is used to check instructions reported when PAUSED (see process_model_fifo).
+  int unsigned num_insns_while_paused;
+
   // The "locked" field is used to track whether OTBN is "locked". For most operational state
   // tracking, we go through the ISS, but OTBN can become locked without actually starting an
   // operation (for example, there might be a malformed TL transaction). We spot that sort of thing
@@ -103,6 +107,8 @@ class otbn_scoreboard extends cip_base_scoreboard #(
     fork
       process_model_fifo();
       process_trace_fifo();
+      watch_escalate_if();
+      watch_rma_if();
     join_none
   endtask
 
@@ -214,6 +220,8 @@ class otbn_scoreboard extends cip_base_scoreboard #(
           // as well.
           if (item.is_write) begin
             cfg.model_agent_cfg.vif.set_software_errs_fatal(item.a_data[0]);
+            cfg.model_agent_cfg.vif.set_wfi_enabled(item.a_data[1]);
+            cfg.model_agent_cfg.vif.set_urnd_ctrl_enabled(item.a_data[2]);
           end
         end
         default: begin
@@ -392,17 +400,27 @@ class otbn_scoreboard extends cip_base_scoreboard #(
           if (item.rst_n !== 1'b1) model_status = item.status;
 
           // Has the status changed from idle to busy? If so, we should have seen a write to the
-          // command register on the previous posedge. See comment above pending_start_tl_trans for
-          // the details.
+          // command register on the previous posedge or there should be an RMA request. See comment
+          // above pending_start_tl_trans for the details of how we track writes to the command
+          // register.
           if (model_status == otbn_pkg::StatusIdle && is_busy) begin
-            `DV_CHECK_FATAL(pending_start_tl_trans,
+            `DV_CHECK_FATAL(pending_start_tl_trans || cfg.escalate_vif.req == lc_ctrl_pkg::On,
                             "Saw start transaction without corresponding write to CMD")
             pending_start_tl_trans = 1'b0;
           end
 
-          // Has the status changed to locked? This should be accompanied by a fatal alert
-          if (item.status == otbn_pkg::StatusLocked) begin
+          // Has the status changed to locked? This should be accompanied by a fatal alert unless
+          // this is in response to an RMA request (in which case, we shouldn't see an alert).
+          // Assuming that an RMA request won't be dropped after it takes effect, we can just check
+          // the escalation interface to see whether it is still high.
+          //
+          // We should also clear the pending_start_tl_trans flag if it is set. This would mean that
+          // we've seen a start request, but it's being ignored because the model locks instead of
+          // starting an execution.
+          if ((item.status == otbn_pkg::StatusLocked) &&
+              (cfg.escalate_vif.req != lc_ctrl_pkg::On)) begin
             expect_alert("fatal");
+            pending_start_tl_trans = 1'b0;
           end
           // Has the status changed from executing to idle with a nonzero err_bits?
           // If so, we should see a recoverable alert. Note that we are not expecting to catch
@@ -412,9 +430,10 @@ class otbn_scoreboard extends cip_base_scoreboard #(
           end
 
           model_status = item.status;
+          num_insns_while_paused = 0;
 
           if (cfg.en_cov) begin
-            cov.on_state_change(get_operational_state(status_e'(model_status)));
+            cov.on_state_change(status_e'(model_status));
           end
         end
 
@@ -422,9 +441,29 @@ class otbn_scoreboard extends cip_base_scoreboard #(
           // The model agent's monitor should be configured to only emit OtbnModelInsn items if
           // coverage is enabled.
           `DV_CHECK_FATAL(cfg.en_cov)
-          // We don't expect any instructions unless we're currently running something.
-          `DV_CHECK_EQ_FATAL(model_status, 1 /* BUSY_EXECUTE */,
-                             "Saw instruction when not in BUSY_EXECUTE operational state.")
+          // We don't expect any instructions unless we're currently running something. The
+          // exception is the end of a pause. A WFI instruction retires in the cycle that OTBN
+          // resumes, but the ISS's STATUS change is only visible two cycles later (STATUS is
+          // double-flopped, as in the RTL). The model monitor also reports instructions on the
+          // posedge and status changes on the negedge. So we can see the WFI and then one more
+          // instruction before the status change.
+          if (model_status == otbn_pkg::StatusPaused) begin
+            if (num_insns_while_paused == 0 && item.mnemonic != "wfi") begin
+              `uvm_error("non_wfi_when_paused",
+                         $sformatf("Saw an %0s instruction when PAUSED (but only expect 'wfi')",
+                                   item.mnemonic))
+            end
+            if (num_insns_while_paused >= 2) begin
+              `uvm_error("too_many_insns_when_paused",
+                         $sformatf({"Saw an %0s instruction when PAUSED (but only expect 'wfi' ",
+                                    "and at most one more instruction)"},
+                                   item.mnemonic))
+            end
+            num_insns_while_paused++;
+          end else begin
+            `DV_CHECK_EQ_FATAL(model_status, otbn_pkg::StatusBusyExecute,
+                               "Saw instruction when not in BUSY_EXECUTE operational state.")
+          end
 
           iss_trace_queue.push_back(item);
           pop_trace_queues();
@@ -555,7 +594,7 @@ class otbn_scoreboard extends cip_base_scoreboard #(
   endtask
 
   // Overridden from cip_base_scoreboard. Called when an alert happens.
-  function void on_alert(string alert_name, alert_esc_agent_pkg::alert_esc_seq_item item);
+  function void on_alert(string alert_name, alert_agent_pkg::alert_seq_item item);
 
     `uvm_info(`gfn, $sformatf("on_alert(%0s)", alert_name), UVM_HIGH)
 
@@ -570,13 +609,13 @@ class otbn_scoreboard extends cip_base_scoreboard #(
     end
     else `uvm_fatal(`gfn, $sformatf("Bad alert name: %0s", alert_name));
 
-    // Wait up to 400 cycles for the prediction to come through (giving up on reset).  This is a
+    // Wait up to 4000 cycles for the prediction to come through (giving up on reset).  This is a
     // long time, but that's needed because an error that comes in when we're running will cause an
     // immediate alert but the status change will only appear after secure wipe is done.  A secure
     // wipe includes a reseed of the URND, and the time for that depends on the EDN.  Note that
     // the alert might be here already, in which case `wait_for_expected_alert` will take zero time.
     fork
-      wait_for_expected_alert(alert_name, 400);
+      wait_for_expected_alert(alert_name, 4000);
     join_none
   endfunction
 
@@ -633,9 +672,10 @@ class otbn_scoreboard extends cip_base_scoreboard #(
   endfunction
 
   virtual function void mem_compare(string ral_name, uvm_reg_addr_t addr, tl_seq_item item);
-    // We can only compare the contents inside memories when the OTBN is not busy executing
-    // or wiping the memories
-    if (model_status inside {otbn_pkg::StatusIdle, otbn_pkg::StatusBusySecWipeInt}) begin
+    // We can only compare the contents inside memories when the OTBN is not busy executing,
+    // paused or wiping the memories
+    if (model_status inside {otbn_pkg::StatusIdle, otbn_pkg::StatusPaused,
+                             otbn_pkg::StatusBusySecWipeInt}) begin
       super.mem_compare(ral_name, addr, item);
     // Otherwise the contents will read out as zeros so compare expected memory with zero.
     end else begin
@@ -647,6 +687,30 @@ class otbn_scoreboard extends cip_base_scoreboard #(
     super.process_mem_read(item, ral_name);
     if (model_status == 'b1 && item.d_data != 0) begin
       `uvm_error(`gfn, "read data is non zero when memory is accessed while otbn is busy")
+    end
+  endtask
+
+  // This task watches the escalate interface and collects coverage whenever it changes
+  //
+  virtual task watch_escalate_if();
+    // The 'enable' signal is connected to the lc_escalate_en_i top-level input
+    forever begin
+      if (cfg.clk_rst_vif.rst_n) begin
+        if (cfg.en_cov) cov.escalate_en_cg.sample(cfg.escalate_vif.enable);
+      end
+      @(cfg.escalate_vif.enable or cfg.clk_rst_vif.rst_n);
+    end
+  endtask
+
+  // This task watches the rma interface and collects coverage whenever it changes
+  //
+  virtual task watch_rma_if();
+    // The 'req' signal is connected to the lc_rma_req_i top-level input
+    forever begin
+      if (cfg.clk_rst_vif.rst_n) begin
+        if (cfg.en_cov) cov.rma_req_cg.sample(cfg.escalate_vif.req);
+      end
+      @(cfg.escalate_vif.req or cfg.clk_rst_vif.rst_n);
     end
   endtask
 

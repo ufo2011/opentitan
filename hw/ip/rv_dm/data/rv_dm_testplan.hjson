@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -145,14 +145,15 @@
     {
       name: jtag_dtm_hard_reset
       desc: '''
-            Verify that the debugger can camcel an on-going DMI transaction with a hard reset.
+            Verify that the debugger can cancel an on-going DMI transaction with a hard reset.
 
-            - Perform a random legal DMI write to a chosen DMI register and immediately write to
-              dtmcs[dmihardreset] bit.
-            - Read the target DMI register to verify the write did not succeed.
+            - Perform DMI register read and check the data value.
+            - Write 1 to dtmcs[dmihardreset] bit.
+            - Perform DMI register read and check the data value to make sure the reset doesn't
+              create any harmful event.
             '''
       stage: V2
-      tests: [] // TODO(#15670)
+      tests: ["rv_dm_jtag_dtm_hard_reset"]
     }
     {
       name: jtag_dtm_idle_hint
@@ -166,7 +167,7 @@
               successfully, without dmistat reflecting an error.
             '''
       stage: V2
-      tests: [] // TODO(#17033)
+      tests: ["rv_dm_jtag_dtm_idle_hint"]
     }
     {
       name: jtag_dmi_failed_op
@@ -179,22 +180,25 @@
             - Clear it by writing to dtmcs[dmireset] register.
             - Poll the DMI access for completion and verify that the first write completed
               successfully by doing a read-check.
-            - TBO - unclear how to generate other types of failed DMI transactions.
             '''
       stage: V2
-      tests: [] // TODO(#17034)
+      tests: ["rv_dm_dmi_failed_op"]
     }
     {
       name: jtag_dmi_dm_inactive
       desc: '''
-            Verify that writes to DMI registers other than dmcontrol[dmactive] and ignored and they
-            all retain the reset values on reads.
 
-            - Perform random writes to DMI registers while dmcontrol[dmactive] is 0 (exclude it).
-            - Read all DMI registers back and verify they reflect POR values.
+            Verify that DMI writes to data other than dmcontrol.dmactive are ignored when dmactive
+            is false. All of these registers should return their reset values on reads.
+
+            - Write 0 to DMCONTROL.DMACTIVE to put the debug module into its reset state.
+            - Perform random DMI writes, constrained only by requiring that they don't write 1 to
+              DMCONTROL.DMACTIVE.
+            - Write 1 to DMCONTROL.DMACTIVE to leave the reset state.
+            - Read DMI registers back and check they have their POR values.
             '''
       stage: V2
-      tests: [] // TODO(#17035)
+      tests: ["rv_dm_jtag_dmi_dm_inactive"]
     }
 
     {
@@ -276,25 +280,20 @@
               originally written value.
             '''
       stage: V2
-      tests: [] // TODO(#15667)
+      tests: ["rv_dm_jtag_dmi_debug_disabled"]
     }
-
     {
       name: sba_debug_disabled
       desc: '''
-            Verify that access to SBA interface is disabled if lc_hw_debug_en is set to not strict
-            true value.
+            Verify that access to SBA interface is disabled if lc_hw_debug_en is set to a value
+            other than lc_ctrl_pkg::On.
 
-            - Set lc_hw_debug_en to true and activate the dm.
-            - Attempt to inject a legal randomized SBA access - verify that it comes through.
             - Set lc_hw_debug_en to non-true value and activate the dm.
-            - Attempt to inject a legal randomized SBA access - verify that no SBA TL accesses
-              appear on the TL interface.
-            - Reapeat, a random number of times.
-            - Verify via assertion checks, no transactions were seen on the SBA TL interface.
+            - Attempt to send some legal randomized SBA accesses. Checks in the scoreboard will
+              assert that no SBA TL accesses appear on the TL interface.
             '''
       stage: V2
-      tests: [] // TODO(#15668)
+      tests: ["rv_dm_sba_debug_disabled"]
     }
     {
       name: ndmreset_req
@@ -302,23 +301,24 @@
             Verify that the debugger can issue a non-debug reset to the rest of the system.
 
             - Set lc_hw_debug_en / pinmux_hw_debug_en to true value and activate the dm.
-            - Pick a random set of write/readable CSRs in all 3 RALs (JTAG DMI, regs RAL and debug
-              mem RAL). Write known values to them.
+            - Pick a random set of write/readable CSRs in the debug RALs (JTAG DMI and debug
+              memory). Write known values to them.
             - Write the dmcontrol register to assert ndmreset - verify that the ndmreset output
-              stays asserted.
-            - Mimic the CPU going into reset by asserting unavailable input, asserting rst_ni
-              and setting lc_hw_debug_en to false. Keep pinmux_hw_debug_en set to true to keep
-              the JTAG side open while the ndmreset is in progress.
+              is asserted.
+            - Mimic the CPU going into reset by asserting the unavailable input.
+            - Set lc_hw_debug_en to something other than On (since it should no longer be needed).
+              At this point the ndmreset output signal will drop. Keep pinmux_hw_debug_en set to On
+              to keep the JTAG side open while the ndmreset is in progress.
             - Read the dmstatus register to verify allunavail is asserted.
             - De-assert the ndmreset by writing 0 to the dmcontrol register field, verify the
               ndmreset output deasserted as well.
-            - Mimic the CPU going out of reset by de-asserting unavailable input and rst_ni
+            - Mimic the CPU going out of reset by de-asserting unavailable input
               after some delay. Set lc_hw_debug_en to true again as well.
             - Read the previously written registers back and verify that they reflect the previously
               written value, proving that ndmreset assertion had no effect on them.
             '''
       stage: V2
-      tests: [] // TODO(#15666)
+      tests: ["rv_dm_ndmreset_req"]
     }
     {
       name: hart_unavail
@@ -332,7 +332,7 @@
               `unavailable` input value
             '''
       stage: V2
-      tests: [] // TODO(#17036)
+      tests: ["rv_dm_hart_unavail"]
     }
     {
       name: tap_ctrl_transitions
@@ -342,7 +342,203 @@
             This test should verify that the standardized JTAG TAP FSM is working correctly.
             '''
       stage: V2
-      tests: [] // TODO(#17032)
+      tests: ["rv_dm_tap_fsm", "rv_dm_tap_fsm_rand_reset"]
+    }
+    {
+      name: jtag_dmi_cmderr_busy
+      desc: '''
+            Generate the "busy" command error in abstractcs.
+
+            - Start an abstract command executing (but don't allow it to stop)
+
+            - Write to one of command, abstractcs, abstractauto or access (read or write) the data
+              or progbuf register.
+
+            - Read the abstractcs register and check that cmderr is now set to 1 (the encoding of
+              "busy")
+            '''
+      stage: V1
+      tests: ["rv_dm_cmderr_busy"]
+    }
+    {
+      name: jtag_dmi_cmderr_not_supported
+      desc: '''
+            Generate the "not supported" command error in abstractcs
+
+            This command error is generated when trying to run an abstract command that is not
+            supported.
+
+            - Write a command to the command register where cmdtype is definitely not supported.
+            - Check that the cmderr field of abstractcs register is set to 2.
+            '''
+      stage: V1
+      tests: ["rv_dm_cmderr_not_supported"]
+    }
+    {
+      name: cmderr_exception
+      desc: '''
+             Verify that if an exception occurs when executing a command then cmderr is set to 3.
+
+             - Start an abstract command.
+             - While it's running, write to the exception register over TL.
+             - Check that the cmderr field of abstractcs register is now 3.
+            '''
+      stage: V1
+      tests: ["rv_dm_cmderr_exception"]
+    }
+     {
+      name: mem_tl_access_resuming
+      desc: '''
+             Verify whether the selected hart has been resumed or not.
+
+            -Write into memory mapped register called RESUMING(0x110) through tl-device interface.
+            -Verify that the anyresumeack and allresumeack bits of the dmstatus register are set.
+            -After that, set the resumereq bit of dmcontrol register.
+            -Verify that the anyresumeack and allresumeack bits of the dmstatus register are cleared.
+            '''
+      stage: V1
+      tests: ["rv_dm_mem_tl_access_resuming"]
+    }
+    {
+      name: mem_tl_access_halted
+      desc: '''
+            Verify whether the selected hart has been halted or not.
+
+            - Set the haltreq bit of dmcontrol register.
+            - Write into memory mapped register called HALTED(0x100) through tl-device(mem_tl_if) interface.
+            - Verify that the anyhalted and allhalted bits of the dmstatus register are set.
+            '''
+      stage: V1
+      tests: ["rv_dm_mem_tl_access_halted"]
+    }
+    {
+      name: cmderr_halt_resume
+      desc: '''
+            Verify that attempt to generate command error result in cmderr field of abstractcs
+            register are set.
+
+            - Try to execute abstract command when hart is not in halt/resume state.
+            - Assert unavailable signal through core interface.
+            - The abstract command could not be execute.
+            - Verify that the cmderr field of abstractcs register is set to 4.
+            '''
+      stage: V1
+      tests: ["rv_dm_cmderr_halt_resume"]
+    }
+    {
+      name: dataaddr_rw_access
+      desc: '''
+            Verify the read write access of the data registers through the memory mapped DataAddr register.
+
+            - Write random data to the shadowed data registers via the corresponding DataAddr registers.
+            - Read back the written data and verify that it matches the expected values.
+            '''
+      stage: V1
+      tests: ["rv_dm_dataaddr_rw_access"]
+    }
+    {
+      name: halt_resume
+      desc: '''
+            Verify debug module halt/going/resume behavior.
+
+            - Request a halt over DMI, then send an abstract command.
+            - Check that the debug module reports itself to be busy.
+            - Check that the debug module's internal state machine is in the Go state.
+            - As the hart, respond to the message from the debug module to say that it has started handling it.
+            - Check the debug module still reports itself to be busy.
+            - Check that WHERETO points at the expected address (which contains the start of the abstract command)
+            - As the hart, tell the debug module that we have halted.
+            - Check the debug module no longer reports itself to be busy.
+            - Tell the debug module to resume again, by clearing the halt request and sending a resume request.
+            - Check the debug module now reports itself busy again (since it should be asking the hart to resume)
+            - Check flags to make sure the debug module is in the Resume state.
+            - As the hart, acknowledge the resume request.
+            - Check the debug module no longer reports itself to be busy.
+      '''
+      stage: V1
+      tests: ["rv_dm_halt_resume_whereto"]
+    }
+    {
+      name: progbuf_busy
+      desc: '''
+            Verify that writing on DM progbuf registers while abstract command is executing
+            causes jtag_dmi_ral.abstractcs.busy to be set to 1.
+
+            This is implemented by rv_dm_cmderr_busy, which chooses a random operation to generate
+            the busy command error. One possible operation is writing to progbuf[0].
+            '''
+      stage: V1
+      tests: ["rv_dm_cmderr_busy"]
+    }
+    {
+      name: abstractcmd_status
+      desc: '''
+            Verify the functionality of abstract command by reading tl_mem_ral.abstractcmd0-9
+            registers.
+
+            - Program jtag_dmi_ral.dmcontrol.haltreq to 1'b1.
+            - Verify that the 'debug_req_o' is set to 1.
+            - Acknowledge haltreq by setting tl_mem_ral.halted to 0.
+            - Send a valid abstract command (command type AccessRegister).
+            - Verify that the jtag_dmi_ral.abstractcs.busy is set to 1.
+            - Read tl_mem_ral.abstractcmd0-9 registers to verify that due to executing specific
+              abstract command we can read instructions stored in these registers.
+            '''
+      stage: V1
+      tests: ["rv_dm_abstractcmd_status"]
+    }
+    {
+      name: progbuf_read_write_execute
+      desc: '''
+            Verify the functionality of program buffer by writing random data on program buffer.
+
+            - Program jtag_dmi_ral.dmcontrol.haltreq to 1'b1.
+            - Verify that 'debug_req_o' is set to 1.
+            - Acknowledge haltreq by setting tl_mem_ral.halted to 0.
+            - Fill the program buffer by writing random data to jtag_dmi_ral.progbuf0-7
+              registers.
+            - Read tl_mem_ral.program_buffer0-7 registers to
+              verify that the data we wrote is what we read back.
+            '''
+      stage: V1
+      tests: ["rv_dm_progbuf_read_write_execute"]
+    }
+    {
+      name: progbuf_exception
+      desc: '''
+            Verify that writing on tl_mem_ral.exception register while an abstract command
+            is executing causes jtag_dmi_ral.abstractcs.cmderr to be set to 3.
+
+            - Program jtag_dmi_ral.dmcontrol.haltreq to 1'b1.
+            - Verify that 'debug_req_o' is set to 1.
+            - Acknowledge haltreq by setting tl_mem_ral.halted to 0.
+            - Send access register abstract command with postexec bit set.
+            - Write on tl_mem_ral.exception register.
+            - Verify that jtag_dmi_ral.abstractcs.cmderr is set to 3.
+            '''
+      stage: V1
+      tests: ["rv_dm_cmderr_exception"]
+    }
+    {
+      name: rom_read_access
+      desc: '''
+            Verify the read accessability of rom.
+
+            - Read from the addresses of rom and verify that it reads the expected data.
+            '''
+      stage: V1
+      tests: ["rv_dm_rom_read_access"]
+    }
+    {
+      name: hartsel_warl
+      desc: '''
+        Check the WARL behaviour of the hartsel field in dmcontrol
+
+        - Write '1 to hartsel and then read dmcontrol back again.
+        - Check resulting value of hartsel equals the maximum hart index.
+      '''
+      stage: V2
+      tests: ["rv_dm_hartsel_warl"]
     }
     {
       name: stress_all

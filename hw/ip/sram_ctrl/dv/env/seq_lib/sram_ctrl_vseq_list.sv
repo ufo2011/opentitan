@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,3 +15,5 @@
 `include "sram_ctrl_regwen_vseq.sv"
 `include "sram_ctrl_ram_cfg_vseq.sv"
 `include "sram_ctrl_stress_all_vseq.sv"
+`include "sram_ctrl_readback_err_vseq.sv"
+`include "sram_ctrl_mubi_enc_err_vseq.sv"

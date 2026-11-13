@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -89,5 +89,6 @@ def load_elf(sim: OTBNSim, path: str) -> Optional[int]:
     sim.load_program(imem_insns)
     sim.loop_warps = loop_warps
     sim.load_data(dmem_bytes, has_validity=False)
+    sim.symbols = symbols
 
     return exp_end

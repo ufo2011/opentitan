@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,7 @@ class chip_sw_sysrst_ctrl_in_irq_vseq extends chip_sw_base_vseq;
   virtual function void write_test_phase(input int phase);
     bit [7:0] test_phase[1];
     test_phase[0] = phase;
-    sw_symbol_backdoor_overwrite("kCurrentTestPhase", test_phase);
+    sw_symbol_backdoor_overwrite("kCurrentTestPhaseDV", test_phase);
   endfunction
 
   virtual task create_glitch_on_pads(int glitch_duration_ns, bit [7:0] pad_values_prev,

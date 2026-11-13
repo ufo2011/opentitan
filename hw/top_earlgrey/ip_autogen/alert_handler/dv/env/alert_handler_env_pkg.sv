@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,8 @@ package alert_handler_env_pkg;
   import dv_utils_pkg::*;
   import csr_utils_pkg::*;
   import tl_agent_pkg::*;
-  import alert_esc_agent_pkg::*;
+  import alert_agent_pkg::*;
+  import esc_agent_pkg::*;
   import alert_handler_ral_pkg::*;
   import dv_base_reg_pkg::*;
   import cip_base_pkg::*;

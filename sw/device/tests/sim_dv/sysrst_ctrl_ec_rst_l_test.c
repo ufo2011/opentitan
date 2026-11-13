@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,10 +9,10 @@
 #include "sw/device/lib/dif/dif_sysrst_ctrl.h"
 #include "sw/device/lib/runtime/ibex.h"
 #include "sw/device/lib/runtime/log.h"
-#include "sw/device/lib/testing/flash_ctrl_testutils.h"
 #include "sw/device/lib/testing/rstmgr_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
+#include "sw/device/lib/testing/test_framework/ottf_utils.h"
 
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
 
@@ -22,10 +22,9 @@ static dif_pinmux_t pinmux;
 static dif_sysrst_ctrl_t sysrst_ctrl;
 static dif_pwrmgr_t pwrmgr;
 static dif_rstmgr_t rstmgr;
-static dif_flash_ctrl_state_t flash;
 static dif_rstmgr_reset_info_bitfield_t rstmgr_reset_info;
 
-const uint32_t kTestPhaseTimeoutUsec = 2500;
+const uint32_t kTestPhaseTimeoutUsec = 10000;
 
 typedef enum {
   kTestPhaseSetup = 0,
@@ -46,10 +45,10 @@ enum {
 };
 
 static const dif_pinmux_index_t kPeripheralInputs[] = {
-    kTopEarlgreyPinmuxPeripheralInSysrstCtrlAonKey0In,
-    kTopEarlgreyPinmuxPeripheralInSysrstCtrlAonKey1In,
-    kTopEarlgreyPinmuxPeripheralInSysrstCtrlAonKey2In,
-    kTopEarlgreyPinmuxPeripheralInSysrstCtrlAonPwrbIn,
+    kTopEarlgreyPinmuxPeripheralInSysrstCtrlKey0In,
+    kTopEarlgreyPinmuxPeripheralInSysrstCtrlKey1In,
+    kTopEarlgreyPinmuxPeripheralInSysrstCtrlKey2In,
+    kTopEarlgreyPinmuxPeripheralInSysrstCtrlPwrbIn,
 };
 
 static const dif_pinmux_index_t kInputPads[] = {
@@ -60,12 +59,12 @@ static const dif_pinmux_index_t kInputPads[] = {
 };
 
 static const dif_pinmux_index_t kPeripheralOutputs[] = {
-    kTopEarlgreyPinmuxOutselSysrstCtrlAonKey0Out,
-    kTopEarlgreyPinmuxOutselSysrstCtrlAonKey1Out,
-    kTopEarlgreyPinmuxOutselSysrstCtrlAonKey2Out,
-    kTopEarlgreyPinmuxOutselSysrstCtrlAonPwrbOut,
-    kTopEarlgreyPinmuxOutselSysrstCtrlAonBatDisable,
-    kTopEarlgreyPinmuxOutselSysrstCtrlAonZ3Wakeup,
+    kTopEarlgreyPinmuxOutselSysrstCtrlKey0Out,
+    kTopEarlgreyPinmuxOutselSysrstCtrlKey1Out,
+    kTopEarlgreyPinmuxOutselSysrstCtrlKey2Out,
+    kTopEarlgreyPinmuxOutselSysrstCtrlPwrbOut,
+    kTopEarlgreyPinmuxOutselSysrstCtrlBatDisable,
+    kTopEarlgreyPinmuxOutselSysrstCtrlZ3Wakeup,
 };
 
 static const dif_pinmux_index_t kOutputPads[] = {
@@ -91,7 +90,7 @@ enum {
 };
 
 // Test phase written by testbench.
-static volatile const test_phases_e kTestPhase = 0;
+static volatile const uint8_t kTestPhase = 0;
 
 // Sets up the pinmux to assign input and output pads
 // to the sysrst_ctrl peripheral as required.
@@ -128,11 +127,15 @@ static void configure_combo_reset(void) {
                                      .allow_zero = true,
                                      .enabled = kDifToggleEnabled,
                                      .override_value = true}));
-  // Prepare rstmgr for a reset with sysrst_ctrl (source one).
-  rstmgr_testutils_pre_reset(&rstmgr);
-  CHECK_DIF_OK(dif_pwrmgr_set_request_sources(&pwrmgr, kDifPwrmgrReqTypeReset,
-                                              kDifPwrmgrResetRequestSourceOne,
-                                              kDifToggleEnabled));
+  // Prepare rstmgr for a reset with sysrst_ctrl.
+  CHECK_STATUS_OK(rstmgr_testutils_pre_reset(&rstmgr));
+  dif_pwrmgr_request_sources_t reset_sources;
+  CHECK_DIF_OK(dif_pwrmgr_find_request_source(
+      &pwrmgr, kDifPwrmgrReqTypeReset,
+      dt_sysrst_ctrl_instance_id(kDtSysrstCtrl), kDtSysrstCtrlResetReqRstReq,
+      &reset_sources));
+  CHECK_DIF_OK(dif_pwrmgr_set_request_sources(
+      &pwrmgr, kDifPwrmgrReqTypeReset, reset_sources, kDifToggleEnabled));
   // Issue WFI and wait for reset condition.
   test_status_set(kTestStatusInWfi);
   wait_for_interrupt();
@@ -141,16 +144,14 @@ static void configure_combo_reset(void) {
 // Waits for the kTestPhase variable to be changed by a backdoor overwrite
 // from the testbench in `chip_sw_sysrst_ctrl_ec_rst_l_vseq.sv`. This will
 // indicate that the testbench is ready to proceed with the next phase of the
-// test. The function `flash_ctrl_testutils_backdoor_wait_update` it's used to
-// deal with possible caching that can prevent the software to read the new
-// value of `kTestPhase`.
-static void sync_with_testbench(void) {
+// test.
+static void sync_with_testbench(uint8_t prior_phase) {
   // Set WFI status for testbench synchronization,
   // no actual WFI instruction is issued.
   test_status_set(kTestStatusInWfi);
   test_status_set(kTestStatusInTest);
-  flash_ctrl_testutils_backdoor_wait_update(&flash, (uintptr_t)&kTestPhase,
-                                            kTestPhaseTimeoutUsec);
+  IBEX_SPIN_FOR(OTTF_BACKDOOR_READ(kTestPhase) != prior_phase,
+                kTestPhaseTimeoutUsec);
 }
 
 // Enables the sysrst_ctrl overrides for the output pins. Allows
@@ -166,15 +167,6 @@ static void override_setup(uint8_t pins_to_override) {
   }
 }
 
-// Disables the overrides. Allows the outputs to pass-through the
-// values from the relevant input pins.
-static void override_disable(void) {
-  for (int i = 0; i < kOutputNumPads; ++i) {
-    CHECK_DIF_OK(dif_sysrst_ctrl_output_pin_override_set_enabled(
-        &sysrst_ctrl, kSysrstCtrlOutputs[i], kDifToggleDisabled));
-  }
-}
-
 // Sets the values of the output overrides as required.
 static void set_output_overrides(uint8_t override_value) {
   for (int i = 0; i < kOutputNumPads; ++i) {
@@ -185,16 +177,12 @@ static void set_output_overrides(uint8_t override_value) {
 
 bool test_main(void) {
   CHECK_DIF_OK(dif_pinmux_init(
-      mmio_region_from_addr(TOP_EARLGREY_PINMUX_AON_BASE_ADDR), &pinmux));
+      mmio_region_from_addr(TOP_EARLGREY_PINMUX_BASE_ADDR), &pinmux));
   CHECK_DIF_OK(dif_sysrst_ctrl_init(
-      mmio_region_from_addr(TOP_EARLGREY_SYSRST_CTRL_AON_BASE_ADDR),
-      &sysrst_ctrl));
-  CHECK_DIF_OK(dif_pwrmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_PWRMGR_AON_BASE_ADDR), &pwrmgr));
+      mmio_region_from_addr(TOP_EARLGREY_SYSRST_CTRL_BASE_ADDR), &sysrst_ctrl));
+  CHECK_DIF_OK(dif_pwrmgr_init_from_dt(kDtPwrmgr, &pwrmgr));
   CHECK_DIF_OK(dif_rstmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR), &rstmgr));
-
-  flash_ctrl_testutils_backdoor_init(&flash);
+      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_BASE_ADDR), &rstmgr));
 
   pinmux_setup();
   rstmgr_reset_info = rstmgr_testutils_reason_get();
@@ -203,8 +191,10 @@ bool test_main(void) {
   CHECK_DIF_OK(dif_sysrst_ctrl_output_pin_override_set_enabled(
       &sysrst_ctrl, kDifSysrstCtrlPinEcResetInOut, kDifToggleDisabled));
 
-  while (kTestPhase < kTestPhaseDone) {
-    switch (kTestPhase) {
+  uint8_t current_test_phase = kTestPhase;
+  while (current_test_phase < kTestPhaseDone) {
+    LOG_INFO("Test phase %d", current_test_phase);
+    switch (current_test_phase) {
       case kTestPhaseSetup:
         CHECK(rstmgr_reset_info == kDifRstmgrResetInfoPor);
         configure_combo_reset();
@@ -223,10 +213,11 @@ bool test_main(void) {
         set_output_overrides(kAllOne);
         break;
       default:
-        LOG_ERROR("Unexpected test phase : %d", kTestPhase);
+        LOG_ERROR("Unexpected test phase : %d", current_test_phase);
         break;
     }
-    sync_with_testbench();
+    sync_with_testbench(current_test_phase);
+    current_test_phase = kTestPhase;
   }
   return true;
 }

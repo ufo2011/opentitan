@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,12 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "sw/device/lib/base/macros.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif  // __cplusplus
 
 /**
  * @file
@@ -50,6 +56,21 @@ typedef enum device_type {
    * development board with SCA capability, containing a Xilinx FPGA.
    */
   kDeviceFpgaCw305 = 3,
+  /**
+   * Represents the "ChipWhisperer CW340 FPGA" device, i.e., the particular
+   * FPGA board blessed for OpenTitan development, containing a Xilinx FPGA.
+   */
+  kDeviceFpgaCw340 = 4,
+  /**
+   * Represents the "Silicon" device, i.e., an instantiation of OpenTitan in
+   * Silicon.
+   */
+  kDeviceSilicon = 5,
+  /**
+   * Represents the "QEMU" device, i.e. an emulation of OpenTitan written
+   * independently of the RTL.
+   */
+  kDeviceSimQemu = 6,
 } device_type_t;
 
 /**
@@ -107,10 +128,15 @@ extern const uint64_t kUartBaudrate;
  * the NCO width, use NCO = 0xffff for this case since the error is tolerable.
  * Refer to #4263
  */
-#define CALCULATE_UART_NCO(baudrate, peripheral_clock)  \
+#define CALCULATE_UART_NCO_(baudrate, peripheral_clock) \
   (baudrate == 1500000 && peripheral_clock == 24000000) \
       ? 0xffff                                          \
-      : (((baudrate) << (16 + 4)) / (peripheral_clock))
+      : (uint32_t)(((uint64_t)(baudrate) << (16 + 4)) / (peripheral_clock))
+
+#define CALCULATE_UART_NCO(baudrate, peripheral_clock)      \
+  CALCULATE_UART_NCO_(baudrate, peripheral_clock) < 0x10000 \
+      ? CALCULATE_UART_NCO_(baudrate, peripheral_clock)     \
+      : 0;
 
 /**
  * The pre-calculated UART NCO value based on the Baudrate and Peripheral clock.
@@ -118,19 +144,25 @@ extern const uint64_t kUartBaudrate;
 extern const uint32_t kUartNCOValue;
 
 /**
+ * Additional pre-calculated UART NCO values.  If the pre-calculated value is
+ * zero, then the corresponding baudrate is not supported.
+ */
+extern const uint32_t kUartBaud115K;
+extern const uint32_t kUartBaud230K;
+extern const uint32_t kUartBaud460K;
+extern const uint32_t kUartBaud921K;
+extern const uint32_t kUartBaud1M33;
+extern const uint32_t kUartBaud1M50;
+
+/**
  * Helper macro to calculate the time it takes to transmit the entire UART TX
  * FIFO in CPU cycles.
  *
- * This macro assumes 10 bits per byte (no parity bits) and a 32 byte deep TX
+ * This macro assumes 10 bits per byte (no parity bits) and a 128 byte deep TX
  * FIFO.
  */
-#define CALCULATE_UART_TX_FIFO_CPU_CYCLES(baud_rate_, cpu_freq_) \
-  ((cpu_freq_)*10 * 32 / (baud_rate_))
-
-/**
- * The time it takes to transmit the entire UART TX fifo in CPU cycles.
- */
-extern const uint32_t kUartTxFifoCpuCycles;
+#define CALCULATE_UART_TX_FIFO_CPU_CYCLES(baud_rate_, cpu_freq_, fifo_depth_) \
+  ((cpu_freq_) * 10 * (fifo_depth_) / (baud_rate_))
 
 /**
  * Helper macro to calculate the maximum duration of the AST initialization
@@ -139,7 +171,7 @@ extern const uint32_t kUartTxFifoCpuCycles;
  * This macro assumes that the desired duration is 100us.
  */
 #define CALCULATE_AST_CHECK_POLL_CPU_CYCLES(cpu_freq_) \
-  ((cpu_freq_)*100 / 1000000)
+  ((cpu_freq_) * 100 / 1000000)
 
 /**
  * Maximum duration of the AST initialization check poll in CPU cycles. This
@@ -148,30 +180,25 @@ extern const uint32_t kUartTxFifoCpuCycles;
 extern const uint32_t kAstCheckPollCpuCycles;
 
 /**
- * An address to write to to report test status.
+ * An address to write to report test status.
  *
- * If this is zero, there is no address to write to to report test status.
+ * If this is zero, there is no address to write to report test status.
  *
  * Depending on the simulation environment and the value written to this
  * address, the simulation may stop.
  *
  * @see #test_status_set
  */
-extern const uintptr_t kDeviceTestStatusAddress;
+uintptr_t device_test_status_address(void);
 
 /**
  * An address to write use for UART logging bypass
  *
- * If this is zero, there is no address to write to to bypass UART logging.
+ * If this is zero, there is no address to write to bypass UART logging.
  *
  * @see #LOG
  */
-extern const uintptr_t kDeviceLogBypassUartAddress;
-
-/**
- * A knob to set jitter_enable in clkmgr.
- */
-extern const bool kJitterEnabled;
+uintptr_t device_log_bypass_uart_address(void);
 
 /**
  * A platform-specific function to convert microseconds to cpu cycles.
@@ -179,13 +206,11 @@ extern const bool kJitterEnabled;
  * This is primarily used for spin waits that use the cpu cycle counters.
  * For platforms with clock periods slower than 1 us this will round up.
  */
+OT_WARN_UNUSED_RESULT
 uint64_t to_cpu_cycles(uint64_t usec);
 
-/**
- * Prints the FPGA version.
- *
- * This function is a NOP unless we are building for an FPGA.
- */
-void device_fpga_version_print(void);
+#ifdef __cplusplus
+}  // extern "C"
+#endif  // __cplusplus
 
 #endif  // OPENTITAN_SW_DEVICE_LIB_ARCH_DEVICE_H_

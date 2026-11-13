@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -61,14 +61,12 @@ class spi_device_tpm_base_vseq extends spi_device_base_vseq;
     cfg.spi_host_agent_cfg.device_bit_dir = 0;
     ral.cfg.tx_order.set(cfg.spi_host_agent_cfg.host_bit_dir);
     ral.cfg.rx_order.set(cfg.spi_host_agent_cfg.device_bit_dir);
-    ral.cfg.cpol.set(1'b0);
-    ral.cfg.cpha.set(1'b0);
     csr_update(.csr(ral.cfg));
 
     // tpm_cfg needs to be included in cfg.spi_cfg_sema, because tpm and flash may be enabled
-    // in 2 separate threads, but when tpm is on, sck polariy/phase needs to be 'b00, while flash
+    // in 2 separate threads, but when tpm is on, sck polarity/phase needs to be 'b00, while flash
     // can support 'b11. Hence, when enable flash mode, need to check tpm_cfg.en before setting
-    // sck polariy/phase.
+    // sck polarity/phase.
     ral.tpm_cfg.en.set(1'b1);
     ral.tpm_cfg.tpm_mode.set(mode);
     if (is_hw_return) begin
@@ -111,6 +109,10 @@ class spi_device_tpm_base_vseq extends spi_device_base_vseq;
     // only clear TPM interrupt, don't clear flash related interrupt,
     // as the other thread processes that one
     intr_state_val[TpmHeaderNotEmpty] = 1;
+    // Wait for register access to complete
+    while(ral.intr_state.is_busy()) begin
+      cfg.clk_rst_vif.wait_clks(1);
+    end
     csr_wr(ral.intr_state, intr_state_val);
   endtask : clear_tpm_interrupt
 
@@ -120,19 +122,24 @@ class spi_device_tpm_base_vseq extends spi_device_base_vseq;
 
     // Upon receiving read command, set read fifo contents
     if (write) begin
-      bit [7:0] wrfifo_byte;
+      bit [7:0] wrfifo_bytes[$];
       int idx;
-      while (idx < exp_num_bytes) begin
-        // wait until fifo size > 0
-        csr_spinwait(.ptr(ral.tpm_status.wrfifo_depth), .exp_data(0), .compare_op(CompareOpGt));
-        `DV_CHECK_LE(idx + `gmv(ral.tpm_status.wrfifo_depth), exp_num_bytes)
-
-        repeat (`gmv(ral.tpm_status.wrfifo_depth)) begin
-          csr_rd(.ptr(ral.tpm_write_fifo), .value(wrfifo_byte));
-          `uvm_info(`gfn, $sformatf("TPM Write FIFO Content = 0x%0h", wrfifo_byte), UVM_MEDIUM)
-          byte_q.push_back(wrfifo_byte);
-          idx++;
+      uint wrfifo_base_offset = spi_device_reg_pkg::SramTpmWrFifoOffset;
+      uint exp_num_words = (exp_num_bytes + 3) >> 2;
+      for (int i = 0; i < exp_num_words; i++) begin
+        bit [TL_DW-1:0] val;
+        int offset = i + wrfifo_base_offset;
+        mem_rd(.ptr(ral.ingress_buffer), .offset(offset), .data(val));
+        wrfifo_bytes = {<<byte{val}};
+        while (wrfifo_bytes.size() != 0) begin
+          bit [7:0] wrfifo_byte = wrfifo_bytes.pop_front();
+          if (byte_q.size() < exp_num_bytes) begin
+            `uvm_info(`gfn, $sformatf("TPM Write FIFO Content = 0x%0h", wrfifo_byte), UVM_MEDIUM)
+            byte_q.push_back(wrfifo_byte);
+          end
         end
+        // Release the WrFIFO buffer.
+        csr_wr(.ptr(ral.tpm_status), .value(0));
       end
     end else begin
       bit [31:0] word_q[$];

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -123,7 +123,7 @@ module spid_readsram
   assign sram_l2m_o.req   = sram_req;
   assign sram_l2m_o.we    = 1'b 0;
   assign sram_l2m_o.wdata = '0;
-  assign sram_l2m_o.wstrb = 8'h0; // no write
+  assign sram_l2m_o.wstrb = SramStrbW'(0); // no write
 
   sram_addr_t sram_addr;
   assign sram_l2m_o.addr = sram_addr;
@@ -273,7 +273,7 @@ module spid_readsram
 
       StActive: begin
         // Assume the SRAM logic is faster than update of current_address_i.
-        // TODO: Put assertion.
+        // ICEBOX(#18352): Put assertion.
         addr_sel = AddrContinuous; // Pointing to next_address to check mailbox hit
         if (!sram_fifo_full) begin
           st_d = StPush;
@@ -294,9 +294,10 @@ module spid_readsram
   // Instance //
   //////////////
   prim_fifo_sync #(
-    .Width ($bits(sram_data_t)),
-    .Pass  (1'b 1),
-    .Depth (1),
+    .Width       ($bits(sram_data_t)),
+    .Pass        (1'b 1),
+    .Depth       (1),
+    .NeverClears (1'b1),
     .OutputZeroIfEmpty (1'b 0)
   ) u_sram_fifo (
     .clk_i,
@@ -321,7 +322,8 @@ module spid_readsram
     .Width             ($bits(spi_byte_t)),
     .Pass              (1'b1),
     .Depth             (2),
-    .OutputZeroIfEmpty (1'b0)
+    .OutputZeroIfEmpty (1'b0),
+    .NeverClears       (1'b1)
   ) u_fifo (
     .clk_i,
     .rst_ni,
@@ -341,7 +343,7 @@ module spid_readsram
     .err_o    ()
   );
 
-  // TODO: Handle SRAM integrity errors
+  // ICEBOX(#18353): Handle SRAM integrity errors
   sram_err_t unused_sram_rerror;
   assign unused_sram_rerror = sram_m2l_i.rerror;
 

@@ -1,9 +1,10 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-load("@nonhermetic//:env.bzl", "ENV")
-load("@ot_python_deps//:requirements.bzl", "entry_point")
+load("@bazel_skylib//lib:dicts.bzl", "dicts")
+load("@nonhermetic//:env.bzl", "BIN_PATHS", "ENV")
+load("//rules:files.bzl", "hash_files")
 
 """Rules for running FuseSoC.
 
@@ -26,15 +27,37 @@ def _corefiles2rootarg(core):
     return core.dirname
 
 def _fusesoc_build_impl(ctx):
-    dirname = "build.{}".format(ctx.label.name)
-    out_dir = ctx.actions.declare_directory(dirname)
+    build_dir = "build.{}".format(ctx.label.name)
+    out_dir = "{}/{}/{}".format(ctx.bin_dir.path, ctx.label.package, build_dir)
     flags = [ctx.expand_location(f, ctx.attr.srcs) for f in ctx.attr.flags]
-    outputs = [out_dir]
+    outputs = []
     groups = {}
+
+    # Vivado expects `HOME` environment variable to exist. Redirect it to a fake directory.
+    home_dir = "{}/homeless-shelter".format(out_dir)
+
+    # TODO(#27346): Use of `/tmp` here isn't hermetic.
+    cache_dir = "/tmp/fusesoc-cache"
+    cfg_file_path = "build.{}.fusesoc_config.toml".format(ctx.label.name)
+    cfg_file = ctx.actions.declare_file(cfg_file_path)
+    cfg_str = "[main]\n  cache_root = {}".format(cache_dir)
+    ctx.actions.write(cfg_file, cfg_str)
+
     args = ctx.actions.args()
+    args.add(cfg_file.path, format = "--config=%s")
 
     for group, files in ctx.attr.output_groups.items():
-        deps = [ctx.actions.declare_file("{}/{}".format(dirname, f)) for f in files]
+        # If hashing only, ignore all output groups but one.
+        if ctx.attr.files_to_hash_only and group != "files_to_hash":
+            continue
+
+        deps = []
+        for file in files:
+            path = "{}/{}".format(build_dir, file)
+            if file.endswith("/"):
+                deps.append(ctx.actions.declare_directory(path))
+            else:
+                deps.append(ctx.actions.declare_file(path))
         outputs.extend(deps)
         groups[group] = depset(deps)
 
@@ -53,33 +76,35 @@ def _fusesoc_build_impl(ctx):
         format_each = "--cores-root=%s",
     )
 
-    args.add_all([
-        "run",
-        "--flag=fileset_top",
-    ])
+    args.add("run")
     args.add(ctx.attr.target, format = "--target=%s")
-    args.add_all([
-        "--setup",
-        "--build",
-    ])
-    args.add(out_dir.path, format = "--build-root=%s")
+    args.add("--setup")
+    if not ctx.attr.files_to_hash_only:
+        args.add("--build")
+    args.add(out_dir, format = "--build-root=%s")
 
     args.add_all(ctx.attr.systems)
     args.add_all(flags)
 
-    # Note: the `fileset_top` flag used above is specific to the OpenTitan
-    # project to select the correct RTL fileset.
     ctx.actions.run(
         mnemonic = "FuseSoC",
         outputs = outputs,
-        inputs = ctx.files.srcs + ctx.files.cores + ctx.files._fusesoc,
+        inputs = ctx.files.srcs + ctx.files.cores + ctx.files._fusesoc + [
+            cfg_file,
+        ],
         arguments = [args],
         executable = ctx.executable._fusesoc,
         use_default_shell_env = False,
-        execution_requirements = {
-            "no-sandbox": "",
-        },
-        env = ENV,
+        env = dicts.add(
+            # Verilator build doesn't need nonhermetic environment variables
+            ENV if ctx.attr.target == "synth" else {},
+            ctx.attr.env,
+            {
+                "HOME": home_dir,
+                # Obtain the non-hermetic binary path and append Bazel's default PATH.
+                "PATH": BIN_PATHS["vivado" if ctx.attr.target == "synth" else "verilator"] + ":/bin:/usr/bin:/usr/local/bin",
+            },
+        ),
     )
     return [
         DefaultInfo(
@@ -98,16 +123,54 @@ fusesoc_build = rule(
         "target": attr.string(mandatory = True, doc = "Target name (e.g. 'sim')"),
         "systems": attr.string_list(mandatory = True, doc = "Systems to build"),
         "flags": attr.string_list(doc = "Flags controlling the FuseSOC system build"),
+        "env": attr.string_dict(doc = "Environment variables for the tools, except HOME and PATH"),
         "output_groups": attr.string_list_dict(
             allow_empty = True,
-            doc = "Mapping of group name to lists of files in that named group",
+            doc = """
+                Mappings from output group names to lists of paths contained in
+                that group.
+
+                Paths to directories must have a trailing `/`. It is not
+                possible to output both a directory and a file from within that
+                directory.
+            """,
+        ),
+        "files_to_hash_only": attr.bool(
+            default = False,
+            doc = "If set, only --setup will be passed to fusesoc and only the files_to_hash output group will be emitted",
         ),
         "verilator_options": attr.label(),
         "make_options": attr.label(),
         "_fusesoc": attr.label(
-            default = entry_point("fusesoc"),
+            default = "//util:fusesoc_build",
             executable = True,
             cfg = "exec",
         ),
     },
 )
+
+def fusesoc_hash_and_build(
+        name,
+        # All other attributes of fusesoc_build
+        **kwargs):
+    """
+    This rule is similar to fusesoc_build but in addition, it will also create a target named
+    `{name}_hash` containing the hash of all input files listed by fusesoc. The output group `files_to_hash`
+    must contain the list of files/directories in the fusesoc build directory which need to be hashed.
+    """
+    fusesoc_build(
+        name = name,
+        **kwargs
+    )
+
+    fusesoc_build(
+        name = name + "_files_to_hash",
+        files_to_hash_only = True,
+        **kwargs
+    )
+    hash_files(
+        name = name + "_hash",
+        src = ":{}_files_to_hash".format(name),
+        output_group = "files_to_hash",
+        testonly = kwargs.get("testonly", False),
+    )

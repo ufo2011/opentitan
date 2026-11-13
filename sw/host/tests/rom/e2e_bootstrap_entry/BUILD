@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,9 +14,9 @@ rust_binary(
     deps = [
         "//sw/host/opentitanlib",
         "@crate_index//:anyhow",
+        "@crate_index//:clap",
         "@crate_index//:humantime",
         "@crate_index//:log",
         "@crate_index//:regex",
-        "@crate_index//:structopt",
     ],
 )

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -19,8 +19,15 @@ from pathlib import Path
 # calls to get back to the top.
 REPO_TOP = Path(__file__).resolve().parent.parent
 
+IGNORED = {
+    Path('sw/device/silicon_creator/rom/e2e/presigned_images/rom_e2e_self_hash_sim_dv.logs.txt'),
+    Path('sw/device/silicon_creator/rom/e2e/presigned_images/rom_e2e_self_hash_sim_dv.rodata.txt'),
+}
+
 
 def is_ignored(path):
+    if path in IGNORED:
+        return True
     return subprocess.run(['git', 'check-ignore', path]).returncode == 0
 
 
@@ -48,7 +55,7 @@ def main():
         '--recursive', '-r',
         action='store_true',
         default=False,
-        help='traverse the entire tree modolo .gitignore'
+        help='traverse the entire tree modulo .gitignore'
     )
     parser.add_argument(
         '--verbose', '-v',
@@ -68,9 +75,9 @@ def main():
     total_fixable = 0
     for path in files:
         path = Path(path).resolve().relative_to(REPO_TOP)
-        if not path.is_file() or path.is_symlink():
+        if not path.is_file() or path.is_symlink() or is_ignored(path):
             continue
-        if 'vendor' in path.parts or path.suffix in ['.patch', '.svg', '.tpl']:
+        if 'vendor' in path.parts or path.suffix in ['.patch', '.svg', '.tpl', '.bin']:
             continue
         if args.verbose:
             print(f'Checking: "{path}"')

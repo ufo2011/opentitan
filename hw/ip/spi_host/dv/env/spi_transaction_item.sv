@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@ class spi_transaction_item extends uvm_sequence_item;
   // NOTICE read_weight + write_weight <= 100
   int  read_weight                    = 45;
   int  write_weight                   = 50;
+  rand int  alt_weight                = 50;
   bit  std_en                         = 1;
   bit  dual_en                        = 0;
   bit  quad_en                        = 0;
@@ -64,13 +65,24 @@ class spi_transaction_item extends uvm_sequence_item;
   // writeStd = 50/200, writeDual = 50/200 (overall write pct 50/100)
   // cmd_only = 2*5/200 (overall 5/100) etc.
   constraint cmd_c {
-    cmd dist {
-       ReadStd   := read_weight*std_en,
-       WriteStd  := write_weight*std_en,
-       ReadDual  := read_weight*dual_en,
-       WriteDual := write_weight*dual_en,
-       ReadQuad  := read_weight*quad_en,
-       WriteQuad := write_weight*quad_en };
+    solve alt_weight before cmd;
+    alt_weight dist {
+      0        := 50,
+      [1:50]   := 20,
+      [51:100] := 30
+    };
+    alt_weight dist {0        := 50,
+                     [1:50]   := 20,
+                     [51:100] := 30
+    };
+    cmd dist {ReadStd   := read_weight*std_en,
+              WriteStd  := write_weight*std_en,
+              ReadDual  := read_weight*dual_en,
+              WriteDual := write_weight*dual_en,
+              ReadQuad  := read_weight*quad_en,
+              WriteQuad := write_weight*quad_en,
+              AltCmd    := alt_weight
+    };
 
     read_weight + write_weight == 100;
   }
@@ -90,7 +102,8 @@ class spi_transaction_item extends uvm_sequence_item;
 
 
   function void segment_init();
-    segment                  = new();
+    segment                  = spi_segment_item::type_id::create("segment");
+
     segment.rx_only_weight   = rx_only_weight;
     segment.tx_only_weight   = tx_only_weight;
     segment.num_dummy        = num_dummy;

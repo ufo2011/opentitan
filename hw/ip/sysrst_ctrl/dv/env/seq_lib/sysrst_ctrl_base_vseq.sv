@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,6 +20,46 @@ class sysrst_ctrl_base_vseq extends cip_base_vseq #(
     cfg.clk_aon_rst_vif.set_freq_khz(200);
   endtask
 
+  // Set the inputs back to inactive
+  virtual function void reset_combo_inputs(input bit [4:0] val = 5'h1F, bit [4:0] mask = 5'h1F);
+    // Set the inputs
+    if (mask[0]) cfg.vif.key0_in = val[0];
+    if (mask[1]) cfg.vif.key1_in = val[1];
+    if (mask[2]) cfg.vif.key2_in = val[2];
+    if (mask[3]) cfg.vif.pwrb_in = val[3];
+    if (mask[4]) cfg.vif.ac_present = val[4];
+  endfunction
+
+  // Get input of combo detection logic
+  virtual function bit[4:0] get_combo_input();
+    get_combo_input[0] = cfg.vif.key0_in;
+    get_combo_input[1] = cfg.vif.key1_in;
+    get_combo_input[2] = cfg.vif.key2_in;
+    get_combo_input[3] = cfg.vif.pwrb_in;
+    get_combo_input[4] = cfg.vif.ac_present;
+  endfunction
+
+
+  // Disable ec_rst_l_o override
+  virtual task release_ec_rst_l_o();
+    uint16_t get_ec_rst_timer;
+
+    // Explicitly release the EC reset
+    // Disable the override function
+    ral.pin_out_ctl.ec_rst_l.set(0);
+    csr_update(ral.pin_out_ctl);
+    // Get the ec_rst timer value
+    csr_rd(ral.ec_rst_ctl, get_ec_rst_timer);
+
+    // Check ec_rst_l asserts for ec_rst_timer cycles after reset
+    monitor_ec_rst_low(get_ec_rst_timer);
+    cfg.clk_aon_rst_vif.wait_clks(10);
+
+    // ec_rst_l_o remains high
+    `DV_CHECK_EQ(cfg.vif.ec_rst_l_out, 1);
+
+  endtask
+
   virtual task monitor_ec_rst_low(int exp_cycles);
     int act_cycles, wait_cycles;
     int aon_period_ns = cfg.clk_aon_rst_vif.clk_period_ps / 1000;
@@ -31,9 +71,10 @@ class sysrst_ctrl_base_vseq extends cip_base_vseq #(
     `DV_SPINWAIT(while (cfg.vif.ec_rst_l_out != 1) begin
                    cfg.clk_aon_rst_vif.wait_clks(1);
                    act_cycles++;
-                 end,"time out waiting for ec_rst == 1",aon_period_ns * (exp_cycles + 3))
-    `DV_CHECK(act_cycles inside {[exp_cycles - 3 : exp_cycles + 3]},
-              $sformatf("act(%0d) vs exp(%0d) +/-3", act_cycles, exp_cycles))
+                 end, "time out waiting for ec_rst == 1", aon_period_ns * (exp_cycles + 10))
+    // Accounting for CDC randomization, check the actual cycles is within +/-5 of expected cycles
+    `DV_CHECK(act_cycles inside {[exp_cycles - 5 : exp_cycles + 5]},
+              $sformatf("act(%0d) vs exp(%0d) +/-5", act_cycles, exp_cycles))
   endtask
 
   virtual task driver_ec_rst_l_in(int cycles);
@@ -61,14 +102,32 @@ class sysrst_ctrl_base_vseq extends cip_base_vseq #(
     cfg.clk_rst_vif.wait_clks(2);
   endtask
 
-  virtual task read_and_check_all_csrs_after_reset();
+  virtual protected task read_and_check_all_csrs_after_reset();
     add_delay_after_reset_before_csrs_access();
     super.read_and_check_all_csrs_after_reset();
   endtask
 
   virtual task dut_shutdown();
-    // check for pending sysrst_ctrl operations and wait for them to complete
-    // TODO
+    uvm_reg_data_t rdata;
+    uvm_reg  interrupt_register_q[$] = '{ral.ulp_status,
+                                         ral.wkup_status,
+                                         ral.combo_intr_status,
+                                         ral.key_intr_status};
+    // Check for any active interrupts
+    csr_rd(ral.intr_state, rdata);
+    if (rdata[0]) begin
+      `uvm_info(`gfn, "Unhandled interrupt detected", UVM_LOW)
+      foreach (interrupt_register_q[i]) begin
+        // Check interrupt status
+        csr_rd(interrupt_register_q[i], rdata);
+        if (rdata[0]) begin
+          `uvm_info(`gfn, $sformatf("%s : 0x%0x", interrupt_register_q[i].get_name(), rdata),
+            UVM_LOW)
+          `uvm_info(`gfn, $sformatf("Clearing %s", interrupt_register_q[i].get_name()), UVM_LOW)
+          csr_wr(interrupt_register_q[i], 'd0);
+        end
+      end
+    end
   endtask
 
   // setup basic sysrst_ctrl features
@@ -84,8 +143,7 @@ class sysrst_ctrl_base_vseq extends cip_base_vseq #(
         super.apply_reset(kind);
         // Aon domain has very slow clock so uses scheme 0 to make sure the `rst_ni` and
         // `rst_aon_ni` will be asserted together within one clk_i cycle.
-        cfg.clk_aon_rst_vif.apply_reset(.pre_reset_dly_clks(0),
-                                        .reset_width_clks(400),
+        cfg.clk_aon_rst_vif.apply_reset(.reset_width_clks(400),
                                         .post_reset_dly_clks(0),
                                         .rst_n_scheme(common_ifs_pkg::RstAssertSyncDeassertSync));
       join

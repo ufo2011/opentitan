@@ -1,10 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sw/device/lib/dif/dif_gpio.h"
 
-#include "gpio_regs.h"  // Generated.
+#include "hw/top/gpio_regs.h"  // Generated.
 
 static_assert(kDifGpioNumPins <= 32,
               "This implementation assumes that the number of pins is less "

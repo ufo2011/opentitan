@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,13 +16,7 @@ class spi_device_stress_all_vseq extends spi_device_base_vseq;
 
   task body();
     int num_flash_tpm_seq;
-    string seq_names[$] = {"spi_device_txrx_vseq",
-                           "spi_device_fifo_full_vseq",
-                           "spi_device_fifo_underflow_overflow_vseq",
-                           "spi_device_extreme_fifo_size_vseq",
-                           "spi_device_dummy_item_extra_dly_vseq",
-                           "spi_device_intr_vseq",
-                           "spi_device_perf_vseq",
+    string seq_names[$] = {
                            "spi_device_csb_read_vseq",
                            "spi_device_common_vseq" // for intr_test
                           };

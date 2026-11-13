@@ -1,104 +1,125 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-#![feature(min_specialization)]
 use anyhow::Result;
-use atty::Stream;
+use clap::{Parser, ValueEnum};
 use directories::ProjectDirs;
 use log::LevelFilter;
-use serde_annotate::Annotate;
 use serde_annotate::ColorProfile;
-use std::env::{args_os, ArgsOs};
+use std::env::{ArgsOs, args_os};
 use std::ffi::OsString;
 use std::io::ErrorKind;
+use std::io::IsTerminal;
 use std::iter::{IntoIterator, Iterator};
 use std::path::PathBuf;
-use structopt::clap::arg_enum;
-use structopt::StructOpt;
+use std::str::FromStr;
 
 mod command;
-use opentitanlib::app::command::CommandDispatch;
 use opentitanlib::app::TransportWrapper;
+use opentitanlib::app::command::CommandDispatch;
 use opentitanlib::backend;
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, StructOpt, CommandDispatch)]
+#[derive(Debug, Parser, CommandDispatch)]
 enum RootCommandHierarchy {
+    Bfv(command::bfv::BfvCommand),
     // Not flattened because `Bootstrap` is a leaf command.
     Bootstrap(command::bootstrap::BootstrapCommand),
     // Not flattened because `Console` is a leaf command.
     Console(command::console::Console),
 
+    #[command(subcommand)]
     Gpio(command::gpio::GpioCommand),
+    #[command(subcommand)]
+    Ecdsa(command::ecdsa::Ecdsa),
+    #[command(subcommand)]
     Emulator(command::emulator::EmuCommand),
 
+    #[command(subcommand)]
     Fpga(command::fpga::FpgaCommand),
     I2c(command::i2c::I2cCommand),
+    #[command(subcommand)]
     Image(command::image::Image),
+    #[command(subcommand)]
+    LifeCycle(command::lc::LcCommand),
+    #[command(subcommand)]
+    Mldsa(command::mldsa::Mldsa),
     NoOp(command::NoOp),
+    #[command(subcommand)]
     Otp(command::otp::Otp),
+    #[command(subcommand)]
+    Ownership(command::ownership::OwnershipCommand),
+    Rescue(command::rescue::RescueCommand),
+    #[command(subcommand)]
     Rsa(command::rsa::Rsa),
     Spi(command::spi::SpiCommand),
+    #[command(subcommand)]
+    Spx(command::spx::Spx),
+    #[command(subcommand)]
     Transport(command::transport::TransportCommand),
+    Uart(command::uart::UartCommand),
     Version(command::version::Version),
+    #[command(subcommand)]
+    Status(command::status_cmd::StatusCommand),
+    #[command(subcommand)]
+    Certificate(command::certificate::CertificateCommand),
+
+    #[command(subcommand)]
+    Xmodem(command::xmodem::XmodemCommand),
 
     // Flattened because `Greetings` is a subcommand hierarchy.
     #[cfg(feature = "demo_commands")]
-    #[structopt(flatten)]
+    #[command(subcommand)]
     Greetings(command::hello::Greetings),
 }
 
-arg_enum! {
-    #[derive(Clone, Copy, Debug)]
-    enum Format {
-        Json,
-        Json5,
-        HJson,
-        Yaml,
-    }
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[value(rename_all = "verbatim")]
+enum Format {
+    Json,
+    Json5,
+    HJson,
+    Yaml,
 }
 
-#[derive(Debug, StructOpt)]
-#[structopt(
+#[derive(Debug, Parser)]
+#[command(
     name = "opentitantool",
     about = "A tool for interacting with OpenTitan chips."
 )]
 struct Opts {
-    #[structopt(
-        long,
-        default_value = "config",
-        help = "Filename of a default flagsfile.  Relative to $XDG_CONFIG_HOME/opentitantool."
-    )]
+    /// Filename of a default flagsfile.  Relative to $XDG_CONFIG_HOME/opentitantool.
+    #[arg(long, value_parser = PathBuf::from_str, default_value = "config")]
     rcfile: PathBuf,
 
-    #[structopt(long, default_value = "warn")]
+    #[arg(long, default_value = "warn")]
     logging: LevelFilter,
 
-    #[structopt(
-        short,
-        long,
-        possible_values = &Format::variants(),
-        case_insensitive = true,
-        default_value = "hjson",
-        help = "Preferred output format"
-    )]
+    /// Preferred output format.
+    #[arg(short, long, value_enum, ignore_case = true, default_value = "hjson")]
     format: Format,
 
-    #[structopt(short, long, parse(try_from_str), help = "Use color in the output")]
+    /// Use color in the output.
+    #[arg(short, long, value_parser = bool::from_str)]
     color: Option<bool>,
 
-    #[structopt(
-        long,
-        number_of_values(1),
-        help = "Parse and execute the argument as a command"
-    )]
+    /// Do not print command results.
+    #[arg(short, long)]
+    quiet: bool,
+
+    /// Parse and execute the argument as a command.
+    #[arg(long, num_args = 1)]
     exec: Vec<String>,
 
-    #[structopt(flatten)]
+    /// De-assert reset signal before executing commands.
+    #[arg(short, long)]
+    drop_reset: bool,
+
+    #[command(flatten)]
     backend_opts: backend::BackendOpts,
 
-    #[structopt(subcommand)]
+    #[command(subcommand)]
     command: RootCommandHierarchy,
 }
 
@@ -109,6 +130,8 @@ fn parse_command_line(opts: Opts, mut args: ArgsOs) -> Result<Opts> {
     let logging = opts.logging;
     if logging != LevelFilter::Off {
         env_logger::Builder::from_default_env()
+            .format_target(true)
+            .format_module_path(false)
             .filter(None, opts.logging)
             .init();
     }
@@ -146,11 +169,13 @@ fn parse_command_line(opts: Opts, mut args: ArgsOs) -> Result<Opts> {
     }?;
 
     // Extend the argument list with all remaining command line arguments.
-    arguments.extend(args.into_iter());
-    let opts = Opts::from_iter(&arguments);
+    arguments.extend(args);
+    let opts = Opts::parse_from(&arguments);
     if opts.logging != logging {
         // Try re-initializing the logger.  Ignore errors.
         let _ = env_logger::Builder::from_default_env()
+            .format_target(true)
+            .format_module_path(false)
             .filter(None, opts.logging)
             .try_init();
     }
@@ -159,11 +184,17 @@ fn parse_command_line(opts: Opts, mut args: ArgsOs) -> Result<Opts> {
 
 // Print the result of a command.
 // If there is an error and `RUST_BACKTRACE=1`, print a backtrace.
-fn print_command_result(opts: &Opts, result: Result<Option<Box<dyn Annotate>>>) -> Result<()> {
+fn print_command_result(
+    opts: &Opts,
+    result: Result<Option<Box<dyn erased_serde::Serialize>>>,
+) -> Result<()> {
     match result {
         Ok(Some(value)) => {
             log::info!("Command result: success.");
-            let profile = if atty::is(Stream::Stdout) && opts.color.unwrap_or(true) {
+            if opts.quiet {
+                return Ok(());
+            }
+            let profile = if std::io::stdout().is_terminal() && opts.color.unwrap_or(true) {
                 ColorProfile::basic()
             } else {
                 ColorProfile::default()
@@ -195,7 +226,7 @@ fn execute<I>(args: I, opts: &Opts, transport: &TransportWrapper) -> Result<()>
 where
     I: IntoIterator<Item = OsString>,
 {
-    let command = RootCommandHierarchy::from_iter(
+    let command = RootCommandHierarchy::parse_from(
         std::iter::once(OsString::from("opentitantool")).chain(args),
     );
     print_command_result(opts, command.run(opts, transport))?;
@@ -203,9 +234,13 @@ where
 }
 
 fn main() -> Result<()> {
-    let opts = parse_command_line(Opts::from_args(), args_os())?;
+    let opts = parse_command_line(Opts::parse(), args_os())?;
 
     let transport = backend::create(&opts.backend_opts)?;
+
+    if opts.drop_reset {
+        transport.pin_strapping("RESET")?.remove()?;
+    }
 
     for command in &opts.exec {
         execute(

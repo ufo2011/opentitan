@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -8,7 +8,7 @@
 #ifndef OPENTITAN_SW_DEVICE_TESTS_CRYPTO_ECDSA_P256_VERIFY_TESTVECTORS_H_
 #define OPENTITAN_SW_DEVICE_TESTS_CRYPTO_ECDSA_P256_VERIFY_TESTVECTORS_H_
 
-#include "sw/device/lib/crypto/impl/ecdsa_p256/ecdsa_p256.h"
+#include "sw/device/lib/crypto/impl/ecc/p256.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,9 +23,9 @@ extern "C" {
  */
 typedef const struct ecdsa_p256_verify_test_vector {
   // The public key.
-  ecdsa_p256_public_key_t public_key;
+  p256_point_t public_key;
   // The signature to verify.
-  ecdsa_p256_signature_t signature;
+  p256_ecdsa_signature_t signature;
   // Expected result (true iff signature is valid).
   bool valid;
   // Any notes about the test vector (a C string).

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,7 @@ ${autogen_banner}
 #include "sw/device/lib/base/mock_mmio.h"
 #include "sw/device/lib/dif/dif_test_base.h"
 
-#include "${ip.name_snake}_regs.h"  // Generated.
+#include "hw/top/${ip.name_snake}_regs.h"  // Generated.
 
 namespace dif_${ip.name_snake}_autogen_unittest {
 namespace {
@@ -69,7 +69,8 @@ namespace {
   TEST_F(AlertForceTest, Success) {
     // Force first alert.
     EXPECT_WRITE32(${ip.name_upper}_ALERT_TEST_REG_OFFSET,
-      {{${ip.name_upper}_ALERT_TEST_${ip.alerts[0].name_upper}_BIT, true}});
+      {{${ip.name_upper}_ALERT_TEST_${ip.alerts[0].name_upper}_BIT, true},
+       {${ip.name_upper}_ALERT_TEST_REGWEN_BIT, true}});
     EXPECT_DIF_OK(dif_${ip.name_snake}_alert_force(
         &${ip.name_snake}_,
         kDif${ip.name_camel}Alert${ip.alerts[0].name_camel}));
@@ -77,7 +78,8 @@ namespace {
   % if len(ip.alerts) > 1:
     // Force last alert.
     EXPECT_WRITE32(${ip.name_upper}_ALERT_TEST_REG_OFFSET,
-        {{${ip.name_upper}_ALERT_TEST_${ip.alerts[-1].name_upper}_BIT, true}});
+        {{${ip.name_upper}_ALERT_TEST_${ip.alerts[-1].name_upper}_BIT, true},
+         {${ip.name_upper}_ALERT_TEST_REGWEN_BIT, true}});
     EXPECT_DIF_OK(dif_${ip.name_snake}_alert_force(
         &${ip.name_snake}_,
         kDif${ip.name_camel}Alert${ip.alerts[-1].name_camel}));
@@ -146,7 +148,11 @@ namespace {
         kDif${ip.name_camel}Irq${ip.irqs[0].name_camel},
       % endif
         &type));
-    EXPECT_EQ(type, 0);
+      % if ip.irqs[0].type == "event":
+    EXPECT_EQ(type, kDifIrqTypeEvent);
+      % else:
+    EXPECT_EQ(type, kDifIrqTypeStatus);
+      % endif
   }
 
   class IrqGetStateTest : public ${ip.name_camel}Test {};
@@ -304,6 +310,65 @@ namespace {
         &irq_state));
     EXPECT_FALSE(irq_state);
   % endif
+  }
+
+  class AcknowledgeStateTest : public ${ip.name_camel}Test {};
+
+  TEST_F(AcknowledgeStateTest, NullArgs) {
+    dif_${ip.name_snake}_irq_state_snapshot_t irq_snapshot = 0;
+    EXPECT_DIF_BADARG(dif_${ip.name_snake}_irq_acknowledge_state(
+        nullptr,
+      % if ip.name_snake == "rv_timer":
+        0,
+      % endif
+        irq_snapshot
+        ));
+  }
+
+  TEST_F(AcknowledgeStateTest, AckSnapshot) {
+  <%
+    num_irqs = 0
+    for irq in ip.irqs:
+      num_irqs += irq.width
+  %>
+    constexpr uint32_t num_irqs = ${num_irqs};
+    constexpr uint32_t irq_mask = (uint64_t{1} << num_irqs) - 1;
+    dif_${ip.name_snake}_irq_state_snapshot_t irq_snapshot = 1;
+
+    // Test a few snapshots.
+    for (size_t i = 0; i < num_irqs; ++i) {
+      irq_snapshot = ~irq_snapshot & irq_mask;
+      irq_snapshot |= (1u << i);
+    % if ip.name_snake == "rv_timer":
+      EXPECT_WRITE32(${ip.name_upper}_INTR_STATE0_REG_OFFSET, 
+    % else:
+      EXPECT_WRITE32(${ip.name_upper}_INTR_STATE_REG_OFFSET, 
+    % endif
+        irq_snapshot);
+      EXPECT_DIF_OK(dif_${ip.name_snake}_irq_acknowledge_state(
+          &${ip.name_snake}_, 
+        % if ip.name_snake == "rv_timer":
+          0,
+        % endif
+          irq_snapshot));
+    }
+  }
+
+  TEST_F(AcknowledgeStateTest, SuccessNoneRaised) {
+    dif_${ip.name_snake}_irq_state_snapshot_t irq_snapshot = 0;
+
+  % if ip.name_snake == "rv_timer":
+    EXPECT_READ32(${ip.name_upper}_INTR_STATE0_REG_OFFSET, 0);
+  % else:
+    EXPECT_READ32(${ip.name_upper}_INTR_STATE_REG_OFFSET, 0);
+  % endif
+    EXPECT_DIF_OK(dif_${ip.name_snake}_irq_get_state(
+        &${ip.name_snake}_, 
+      % if ip.name_snake == "rv_timer":
+        0,
+      % endif
+        &irq_snapshot));
+    EXPECT_EQ(irq_snapshot, 0);
   }
 
   class AcknowledgeAllTest : public ${ip.name_camel}Test {};

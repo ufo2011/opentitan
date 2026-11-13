@@ -1,12 +1,14 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 class spi_device_env_cfg extends cip_base_env_cfg #(.RAL_T(spi_device_reg_block));
   rand spi_agent_cfg  spi_host_agent_cfg;
   rand spi_agent_cfg  spi_device_agent_cfg;
-  bit [TL_AW-1:0]     sram_start_addr;
-  bit [TL_AW-1:0]     sram_end_addr;
+  bit [TL_AW-1:0]     sram_egress_start_addr;
+  bit [TL_AW-1:0]     sram_egress_end_addr;
+  bit [TL_AW-1:0]     sram_ingress_start_addr;
+  bit [TL_AW-1:0]     sram_ingress_end_addr;
 
   // read buffer needs to be read with incremental address, otherwise, watermark/fip won't work
   // this needs to be kept across sequences and cleared when reset occurs. Only seq uses it.
@@ -20,9 +22,6 @@ class spi_device_env_cfg extends cip_base_env_cfg #(.RAL_T(spi_device_reg_block)
   // This prevents clk from being configured multiple times
   bit                 do_spi_clk_configure = 1;
 
-  // can only configure the FW mem once after reset.
-  bit                 do_spi_device_fw_mem_cfg = 1;
-
   // test may have 2 threads to configure spi_device for flash and TPM mode.
   // both may access the same csr `CFG`, have this to avoid accessing it at the same time.
   semaphore           spi_cfg_sema = new(1);
@@ -30,10 +29,22 @@ class spi_device_env_cfg extends cip_base_env_cfg #(.RAL_T(spi_device_reg_block)
   // TODO(#15543) SW can only configure addr_4b after reset
   bit                 do_addr_4b_cfg;
 
+  // when asserted this will reinitialise the scoreboard's memory models
+  bit                 scb_clear_mems = 0;
+
   // in some sequence, both SW and HW may want to update this interrupt at the same time,
   // which is hard to handle in scb. In this case, disable the checker.
   // as long as all TPM requests can be read out and compared correctly, it's sufficient.
   bit                 en_check_tpm_not_empty_intr = 1;
+
+  // The scoreboard sets the flag below, just so certain sequences have 'busy' visibility and checks
+  // work correctly
+  bit                 last_flash_cmd_set_busy = 0;
+
+  // vseq_txn_finished is used to avoid blocking on flash_status.busy being set
+  // If the busy set
+  bit                 vseq_txn_finished;
+
   `uvm_object_utils_begin(spi_device_env_cfg)
     `uvm_field_object(spi_host_agent_cfg, UVM_DEFAULT)
     `uvm_field_object(spi_device_agent_cfg, UVM_DEFAULT)
@@ -41,17 +52,24 @@ class spi_device_env_cfg extends cip_base_env_cfg #(.RAL_T(spi_device_reg_block)
 
   `uvm_object_new
 
-  virtual function void initialize(bit [TL_AW-1:0] csr_base_addr = '1);
+  function void scoreboard_clear_mems();
+    scb_clear_mems = 1;
+  endfunction
+
+  virtual function void initialize(bit inherit_ral_models = 1'b0);
     list_of_alerts = spi_device_env_pkg::LIST_OF_ALERTS;
-    super.initialize(csr_base_addr);
+    super.initialize(inherit_ral_models);
     // create spi agent config obj
     spi_host_agent_cfg = spi_agent_cfg::type_id::create("spi_host_agent_cfg");
     spi_device_agent_cfg = spi_agent_cfg::type_id::create("spi_device_agent_cfg");
     // set num_interrupts & num_alerts which will be used to create coverage and more
     num_interrupts = ral.intr_state.get_n_used_bits();
 
-    sram_start_addr = ral.get_addr_from_offset(SRAM_OFFSET);
-    sram_end_addr   = sram_start_addr + SRAM_SIZE - 1;
+    sram_egress_start_addr = ral.get_addr_from_offset(ral.egress_buffer.get_offset());
+    sram_egress_end_addr   = sram_egress_start_addr + SRAM_EGRESS_SIZE - 1;
+    sram_ingress_start_addr = ral.get_addr_from_offset(ral.ingress_buffer.get_offset());
+    sram_ingress_end_addr   = sram_ingress_start_addr + SRAM_INGRESS_SIZE - 1;
+    $display("SRAM ingress start = 0x%h", sram_ingress_start_addr);
 
     // only support 1 outstanding TL item
     m_tl_agent_cfg.max_outstanding_req = 1;

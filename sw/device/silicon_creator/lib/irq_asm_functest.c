@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,10 +14,10 @@
 #include "sw/device/lib/runtime/print.h"
 #include "sw/device/lib/testing/rstmgr_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
+#include "sw/device/lib/testing/test_framework/ottf_main.h"
 #include "sw/device/silicon_creator/lib/drivers/retention_sram.h"
 #include "sw/device/silicon_creator/lib/drivers/rstmgr.h"
 #include "sw/device/silicon_creator/lib/error.h"
-#include "sw/device/silicon_creator/lib/test_main.h"
 
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
 
@@ -48,7 +48,7 @@ bool test_main(void) {
 
   // Use the part of the retention SRAM reserved for the silicon owner to
   // store the test phase.
-  uint32_t *phase = &retention_sram_get()->reserved_owner[0];
+  uint32_t *phase = &retention_sram_get()->owner.reserved[0];
 
   if (bitfield_bit32_read(reason, kRstmgrReasonPowerOn)) {
     // First execution after bootstrap: Zero out the retention RAM.

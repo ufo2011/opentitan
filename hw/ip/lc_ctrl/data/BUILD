@@ -1,19 +1,17 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
 package(default_visibility = ["//visibility:public"])
 
-load("//rules:autogen.bzl", "autogen_hjson_header")
-
-autogen_hjson_header(
-    name = "lc_ctrl_regs",
-    srcs = [
-        "lc_ctrl.hjson",
-    ],
-)
-
 filegroup(
     name = "all_files",
     srcs = glob(["**"]),
+)
+
+exports_files(glob(["**"]))
+
+filegroup(
+    name = "doc_files",
+    srcs = glob(["*_testplan.hjson"]),
 )

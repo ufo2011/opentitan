@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "sw/device/lib/base/status.h"
 #include "sw/device/lib/dif/dif_sram_ctrl.h"
 
 /**
@@ -31,23 +32,18 @@ void sram_ctrl_testutils_write(uintptr_t address,
  * has not finished in approximately 850 cycles, a timeout assertion occurs.
  * The SRAM documentation stated that the scrambling operation takes around
  * 800 cycles, so another 50 are added just to be on a safe side.
+ *
+ * @return The result of the operation.
  */
-void sram_ctrl_testutils_scramble(const dif_sram_ctrl_t *sram_ctrl);
+OT_WARN_UNUSED_RESULT
+status_t sram_ctrl_testutils_scramble(const dif_sram_ctrl_t *sram_ctrl);
 
 /**
  * Triggers the SRAM wipe operation and waits for it to finish.
- */
-void sram_ctrl_testutils_wipe(const dif_sram_ctrl_t *sram_ctrl);
-
-/**
- * Reads data from `backdoor_addr` in SRAM (retention or main) and
- * compares against `expected_bytes`.
  *
- * The data is checked for equality.
+ * @return The result of the operation.
  */
-void sram_ctrl_testutils_check_backdoor_write(uintptr_t backdoor_addr,
-                                              uint32_t num_words,
-                                              uint32_t offset_addr,
-                                              const uint8_t *expected_bytes);
+OT_WARN_UNUSED_RESULT
+status_t sram_ctrl_testutils_wipe(const dif_sram_ctrl_t *sram_ctrl);
 
 #endif  // OPENTITAN_SW_DEVICE_LIB_TESTING_SRAM_CTRL_TESTUTILS_H_

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 
 /**
  * @file
- * @brief <a href="/hw/ip/lc_ctrl/doc/">Lifecycle Controller</a> Device
+ * @brief <a href="/book/hw/ip/lc_ctrl/">Lifecycle Controller</a> Device
  * Interface Functions
  */
 
@@ -40,6 +40,11 @@ typedef enum dif_lc_ctrl_status_code {
    */
   kDifLcCtrlStatusCodeReady,
   /**
+   * Indicates that the clock manager has successfully switched to the
+   * external clock.
+   */
+  kDifLcCtrlStatusExtClockSwitched,
+  /**
    * Indicates that the last lifecycle transition succeeded.
    */
   kDifLcCtrlStatusCodeSuccess,
@@ -57,9 +62,9 @@ typedef enum dif_lc_ctrl_status_code {
    */
   kDifLcCtrlStatusCodeBadToken,
   /**
-   * Indicates a flash RMA request error.
+   * Indicates a nvm RMA request error.
    */
-  kDifLcCtrlStatusCodeFlashRmaError,
+  kDifLcCtrlStatusCodeNvmRmaError,
   /**
    * Indicates an error during an OTP operation.
    *
@@ -275,12 +280,13 @@ typedef struct dif_lc_ctrl_token {
  * A 32-bit hardware revision number.
  */
 typedef struct {
-  uint16_t chip_gen;
-  uint16_t chip_rev;
+  uint16_t silicon_creator_id;
+  uint16_t product_id;
+  uint8_t revision_id;
 } dif_lc_ctrl_hw_rev_t;
 
 /**
- * A 256-bit device id stored in OTP's hw_cfg partition.
+ * A 256-bit device id stored in OTP's hw_cfg0 partition.
  */
 typedef struct dif_lc_ctrl_device_id {
   uint32_t data[256 / 32];
@@ -432,6 +438,16 @@ dif_result_t dif_lc_ctrl_set_otp_vendor_test_reg(const dif_lc_ctrl_t *lc,
 OT_WARN_UNUSED_RESULT
 dif_result_t dif_lc_ctrl_get_otp_vendor_test_reg(const dif_lc_ctrl_t *lc,
                                                  uint32_t *settings);
+
+/**
+ * Clears LC_CTRL_CLAIM_TRANSITION_IF_REGWEN to lock ability to claim mutex over
+ * TL-UL, effectively disabling SW-initiated lifecycle transitions.
+ *
+ * @param lc A lifecycle handle.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_lc_ctrl_sw_mutex_lock(const dif_lc_ctrl_t *lc);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,7 +44,7 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
   bit interrupt_handler_active = 0;
 
   // List of states to specfically hit for main_sm transition coverage
-  localparam int NumRareMainFsmStates = 8;
+  localparam int NumRareMainFsmStates = 11;
 
   entropy_src_main_sm_pkg::state_e [NumRareMainFsmStates - 1:0] rare_fsm_states = {
      entropy_src_main_sm_pkg::StartupPass1,
@@ -54,7 +54,10 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
      entropy_src_main_sm_pkg::BootPostHTChk,
      entropy_src_main_sm_pkg::ContHTStart,
      entropy_src_main_sm_pkg::FWInsertStart,
-     entropy_src_main_sm_pkg::Sha3MsgDone
+     entropy_src_main_sm_pkg::Sha3MsgDone,
+     entropy_src_main_sm_pkg::Sha3Process,
+     entropy_src_main_sm_pkg::Sha3Valid,
+     entropy_src_main_sm_pkg::AlertState
   };
 
   // A checklist vector with each bit corresponding to each of the rare_fsm_states above.
@@ -66,8 +69,11 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
   // to AlertState) by creating another checklist variable and updating the task
   // targeted_transition_thread()
 
-  bit [NumRareMainFsmStates - 1:0] rare_state_to_idle_checklist = 8'b00000000;
-  bit [NumRareMainFsmStates - 1:0] rare_state_to_idle_backdoor = 8'b00100000;
+  bit [NumRareMainFsmStates - 1:0] rare_state_to_idle_checklist = '{default: 1'b0};
+  bit [NumRareMainFsmStates - 1:0] rare_state_to_idle_backdoor = '{
+    NumRareMainFsmStates - 3: 1'b1, // StartupHTStart
+    default: 1'b0
+  };
 
   constraint dly_to_access_intr_c {
     dly_to_access_intr dist {
@@ -97,8 +103,8 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
   constraint dly_to_reenable_dut_c {
     dly_to_reenable_dut dist {
       [1      :10]       :/ 10,
-      [101    :100]      :/ 3,
-      [1001   :1000]     :/ 1
+      [11     :100]      :/ 3,
+      [101    :1000]     :/ 1
     };
   }
 
@@ -127,67 +133,74 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
     // instantaneous likelihood of failure is designed to be independent of history.
     m_rng_push_seq.reset_rng();
     super.disable_dut();
-  endtask;
+  endtask
 
 
   virtual task try_apply_base_configuration(entropy_src_dut_cfg newcfg,
                                             realtime pause,
+                                            ref bit stop_early,
                                             output bit completed);
-
     int hi_thresh, lo_thresh;
     mubi4_t threshold_scope = newcfg.ht_threshold_scope;
+    mubi4_t rng_bit_enable = newcfg.rng_bit_enable;
+    int fips_window_size, bypass_window_size, window_size;
 
     completed = 0;
 
-    // TODO: Separate sigmas for bypass and FIPS operation
+    // The threshold_rec() function below always expects the health test window size in bits. The
+    // bypass window is specified in bits. In contrast, the FIPS window is specified in symbols and
+    // the `rng_bit_enable` setting effectively manipulates the symbol size.
+    bypass_window_size = newcfg.bypass_window_size;
+    fips_window_size   = newcfg.fips_window_size *
+                             (rng_bit_enable == MuBi4True ? 1 : `RNG_BUS_WIDTH);
+    window_size = newcfg.fips_enable == MuBi4True ? fips_window_size : bypass_window_size;
 
     if (!newcfg.default_ht_thresholds) begin
       // AdaptP thresholds
       `uvm_info(`gfn, "Setting ADAPTP thresholds", UVM_DEBUG)
-      m_rng_push_seq.threshold_rec(newcfg.fips_window_size, adaptp_ht,
+      m_rng_push_seq.threshold_rec(window_size, adaptp_ht,
                                    threshold_scope != MuBi4True,
+                                   rng_bit_enable == MuBi4True,
                                    newcfg.adaptp_sigma, lo_thresh, hi_thresh);
-      ral.adaptp_hi_thresholds.fips_thresh.set(hi_thresh[15:0]);
-      ral.adaptp_lo_thresholds.fips_thresh.set(lo_thresh[15:0]);
-      m_rng_push_seq.threshold_rec(newcfg.bypass_window_size, adaptp_ht,
-                                   threshold_scope != MuBi4True,
-                                   newcfg.adaptp_sigma, lo_thresh, hi_thresh);
-      ral.adaptp_hi_thresholds.bypass_thresh.set(hi_thresh[15:0]);
-      ral.adaptp_lo_thresholds.bypass_thresh.set(lo_thresh[15:0]);
-      csr_update(.csr(ral.adaptp_hi_thresholds));
-      csr_update(.csr(ral.adaptp_lo_thresholds));
+      ral.adaptp_hi_threshold.set(hi_thresh[15:0]);
+      ral.adaptp_lo_threshold.set(lo_thresh[15:0]);
+      csr_update(.csr(ral.adaptp_hi_threshold));
+      if (stop_early || cfg.under_reset) return;
+      csr_update(.csr(ral.adaptp_lo_threshold));
+      if (stop_early || cfg.under_reset) return;
 
       // Bucket thresholds
-      `uvm_info(`gfn, "Setting BUCKET thresholds", UVM_DEBUG)
-      m_rng_push_seq.threshold_rec(newcfg.fips_window_size, bucket_ht, 0,
-                                   newcfg.bucket_sigma, lo_thresh, hi_thresh);
-      ral.bucket_thresholds.fips_thresh.set(hi_thresh[15:0]);
-      m_rng_push_seq.threshold_rec(newcfg.bypass_window_size, bucket_ht, 0,
-                                   newcfg.bucket_sigma, lo_thresh, hi_thresh);
-      ral.bucket_thresholds.bypass_thresh.set(hi_thresh[15:0]);
-      csr_update(.csr(ral.bucket_thresholds));
+      // Disable the bucket health test if rng_bit_enable is not set to MuBi4False.
+      if (rng_bit_enable != MuBi4False) begin
+        ral.bucket_threshold.set(16'hffff);
+      end else begin
+        `uvm_info(`gfn, "Setting BUCKET thresholds", UVM_DEBUG)
+        m_rng_push_seq.threshold_rec(window_size, bucket_ht, 0, 0,
+                                    newcfg.bucket_sigma, lo_thresh, hi_thresh);
+        ral.bucket_threshold.set(hi_thresh[15:0]);
+      end
+      csr_update(.csr(ral.bucket_threshold));
+      if (stop_early || cfg.under_reset) return;
 
       // Markov Thresholds
       `uvm_info(`gfn, "Setting MARKOV thresholds", UVM_DEBUG)
-      m_rng_push_seq.threshold_rec(newcfg.fips_window_size, markov_ht,
+      m_rng_push_seq.threshold_rec(window_size, markov_ht,
                                    threshold_scope != MuBi4True,
+                                   rng_bit_enable == MuBi4True,
                                    newcfg.markov_sigma, lo_thresh, hi_thresh);
-      ral.markov_hi_thresholds.fips_thresh.set(hi_thresh[15:0]);
-      ral.markov_lo_thresholds.fips_thresh.set(lo_thresh[15:0]);
-      m_rng_push_seq.threshold_rec(newcfg.bypass_window_size, markov_ht,
-                                   threshold_scope != MuBi4True,
-                                   newcfg.markov_sigma, lo_thresh, hi_thresh);
-      ral.markov_hi_thresholds.bypass_thresh.set(hi_thresh[15:0]);
-      ral.markov_lo_thresholds.bypass_thresh.set(lo_thresh[15:0]);
-      csr_update(.csr(ral.markov_hi_thresholds));
-      csr_update(.csr(ral.markov_lo_thresholds));
+      ral.markov_hi_threshold.set(hi_thresh[15:0]);
+      ral.markov_lo_threshold.set(lo_thresh[15:0]);
+      csr_update(.csr(ral.markov_hi_threshold));
+      if (stop_early || cfg.under_reset) return;
+      csr_update(.csr(ral.markov_lo_threshold));
+      if (stop_early || cfg.under_reset) return;
     end
 
     // configure the rest of the variables afterwards so that sw_regupd & module_enable
     // get written last
     // Note there is no need to disable the dut again for the remaining registers
     // it has already been done above.
-    super.try_apply_base_configuration(.newcfg(newcfg), .pause(pause), .completed(completed));
+    super.try_apply_base_configuration(newcfg, pause, stop_early, completed);
   endtask
 
   task pre_start();
@@ -195,7 +208,7 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
     // The DUT thresholds can be configured in coordination with the expected noise properties of
     // the RNG (which can also be parametrized to introduce bias or other non-idealities).  However
     // the RNG sequence then needs to be constructed before initializing the DUT, so that we can
-    // query it for recommended thresholds when calling entropy_src_init().   So these seqeunces
+    // query it for recommended thresholds when calling entropy_src_init().   So these sequences
     // are constructed before calling super.pre_start()
     //
 
@@ -219,7 +232,6 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
   // Clears the module_enable signal and at the same time clears the
   // any interrupts that may have become stale as a result of the disable
   // operation.
-  // TODO (documentation): Make sure this get an issue to be sure it goes into SW
   task reinit_dut(bit switch_to_fips_mode = 0);
 
     // Flag to force SW update to fire.
@@ -229,7 +241,7 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
     wait_no_outstanding_access();
     if (!do_background_procs) return;
 
-    if (!`gmv(ral.me_regwen.me_regwen) || !`gmv(ral.sw_regupd.sw_regupd)) begin
+    if (!`gmv(ral.sw_regupd.sw_regupd)) begin
       `uvm_info(`gfn, "DUT is permanently locked, reset required", UVM_MEDIUM);
       do_background_procs = 0;
       return;
@@ -259,6 +271,8 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
       // useful for logging, but it may not be worth the complexity here.
     end
 
+    // Wait at least 10 clock cycles before re-enabling to give the DUT some time to settle down.
+    cfg.clk_rst_vif.wait_clks(10);
     wait_no_outstanding_access();
     enable_dut();
 
@@ -290,9 +304,30 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
     // handle the Observe FIFO first as that will have no impact on other features
     if (intr_status[ObserveFifoReady]) begin
       int bundles_found;
+      int max_bundles;
+      int timeout_ns;
+      if (cfg.rng_max_delay == 1 || `RNG_BUS_WIDTH == 16) begin
+        // When running ast/rng at the maximum rate (this is an unrealistic scenario primarily used
+        // for reaching coverage metrics) or when using larger symbol sizes, we limit the number of
+        // bits read from the Observe FIFO per call to 2 health test windows.
+        //
+        // Without a limit, the read function might keep reading the Observe FIFO forever and time
+        // out as the Observe FIFO potentially never runs empty.
+        max_bundles = 2 * (`RNG_BUS_WIDTH * `gmv(ral.health_test_windows.fips_window)) / 32;
+
+        // Also the timeout needs adjusting in this case, especially for larger symbol sizes. Assume
+        // a symbol every 10 clock cycles at most to have some ample time.
+        timeout_ns =
+            max_bundles * (32 / `RNG_BUS_WIDTH) * 10 * (cfg.clk_rst_vif.clk_period_ps / 1000);
+      end else begin
+        max_bundles = -1;
+        timeout_ns = 250us / 1ns;
+      end
       `uvm_info(`gfn, "Reading observe FIFO", UVM_DEBUG)
       // Read all currently available data
       do_entropy_data_read(.source(TlSrcObserveFIFO),
+                           .max_bundles(max_bundles),
+                           .timeout_ns(timeout_ns),
                            .bundles_found(bundles_found));
       `uvm_info(`gfn, $sformatf("Found %d observe FIFO bundles", bundles_found), UVM_FULL)
     end
@@ -350,7 +385,7 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
   task shutdown_indefinite_seqs();
     // Once the CSR access is done, we can shut down everything else
     // Note: the CSRNG agent needs to be completely shut down before
-    // shutting down the the AST/RNG.  Otherwise the CSRNG pull agent
+    // shutting down the AST/RNG.  Otherwise the CSRNG pull agent
     // will stall waiting for entropy
     `uvm_info(`gfn, "Confirming that CSRNG indefinite seq has started", UVM_HIGH)
     `uvm_info(`gfn, $sformatf("STATE: %s", m_csrng_pull_seq.get_sequence_state().name), UVM_HIGH)
@@ -399,19 +434,15 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
 
   task check_reconfig();
     string lockable_conf_regs [] = '{
-        "conf", "entropy_control", "health_test_windows", "repcnt_thresholds", "repcnts_thresholds",
-        "adaptp_hi_thresholds", "adaptp_lo_thresholds", "bucket_thresholds", "markov_hi_thresholds",
-        "markov_lo_thresholds", "fw_ov_control", "observe_fifo_thresh", "alert_threshold"
+        "conf", "entropy_control", "health_test_windows", "repcnt_threshold", "repcnts_threshold",
+        "adaptp_hi_threshold", "adaptp_lo_threshold", "bucket_threshold", "markov_hi_threshold",
+        "markov_lo_threshold", "fw_ov_control", "observe_fifo_thresh", "alert_threshold"
     };
     foreach (lockable_conf_regs[i]) begin
       bit [TL_DW - 1:0] val;
       uvm_reg csr = ral.get_reg_by_name(lockable_conf_regs[i]);
       csr_rd(.ptr(csr), .value(val));
     end
-  endtask
-
-  task post_start();
-    super.post_start();
   endtask
 
   task start_indefinite_seqs();
@@ -425,7 +456,9 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
     fork
         m_rng_push_seq.start(p_sequencer.rng_sequencer_h);
         m_csrng_pull_seq.start(p_sequencer.csrng_sequencer_h);
-        m_xht_seq.start(p_sequencer.xht_sequencer);
+        if (!cfg.xht_only_default_rsp) begin
+          m_xht_seq.start(p_sequencer.xht_sequencer);
+        end
     join_none
   endtask
 
@@ -439,13 +472,12 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
   // This task is fairly simple it only does two things:
   // 1. It writes to fw_ov_wr_data
   // 2. As needed, it turns the SHA3 conditioning on and off.
-  //    TODO: check that the behavior of this thread matches what is expected
-  //    For boot mode.
   //
   // Runs until the timer thread halts background operations
   task entropy_inject_thread();
     bit do_inject, injection_mandatory;
     bit [TL_DW - 1:0] fw_ov_value;
+    bit [TL_DW - 1:0] unused;
 
     injection_mandatory = ((cfg.dut_cfg.fw_over_enable == MuBi4True) &&
                            (cfg.dut_cfg.fw_read_enable == MuBi4True));
@@ -470,6 +502,7 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
           `DV_CHECK_MEMBER_RANDOMIZE_FATAL(dly_to_insert_entropy);
           cfg.clk_rst_vif.wait_clks(dly_to_insert_entropy);
           `uvm_info(`gfn, $sformatf("injecting entropy: %08x", fw_ov_value), UVM_FULL)
+          csr_rd(.ptr(ral.fw_ov_wr_fifo_full.fw_ov_wr_fifo_full), .value(unused));
           ral.fw_ov_wr_data.set(fw_ov_value);
           csr_update(.csr(ral.fw_ov_wr_data));
         end
@@ -484,7 +517,7 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
 
   endtask
 
-  // A thread task to continously handle interrupts
+  // A thread task to continuously handle interrupts
   // runs until the timer thread
   task interrupt_handler_thread();
     `uvm_info(`gfn, "Starting interrupt loop", UVM_LOW)
@@ -511,13 +544,33 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
   // 2. Stops background processes
   task main_timer_thread();
     realtime delta = cfg.sim_duration - $realtime();
-    `uvm_info(`gfn, "Starting main timer", UVM_LOW)
+    `uvm_info("timer",
+              $sformatf("Starting main timer. Randomised sim duration is %0dms",
+                        cfg.sim_duration_ms), UVM_LOW)
 
-    // Assumes that continue_sim has already
-    // been set to 1
+    // If delta is positive then we have more expected time to wait. We assume that continue_sim has
+    // already been initialised to 1: a separate thread that wants to end the simulation can set it
+    // to 0.
+    //
+    // Since this might be quite a long wait, send roughly 20 progress messages, giving the amount
+    // of time left to wait.
     if (delta > 0) begin
-      `DV_SPINWAIT_EXIT(#(delta);, wait(~continue_sim))
+      fork : isolation_fork begin
+        fork
+          #(delta);
+          wait(~continue_sim);
+          forever begin
+            `uvm_info("timer",
+                      $sformatf("Waiting in main_timer_thread. %0.1f %% of total.",
+                                (100 * $realtime) / cfg.sim_duration),
+                      UVM_LOW)
+            #(delta / 20);
+          end
+        join_any
+        disable fork;
+      end join
     end
+
     do_background_procs = 0;
     continue_sim = 0;
     `uvm_info(`gfn, "Exiting main timer", UVM_LOW)
@@ -593,7 +646,7 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
               msg = $sformatf("Forcing disable from state %s", rare_fsm_states[i].name());
               `uvm_info(`gfn, msg, UVM_HIGH)
               // First immediately disable the device, with an ASAP frontdoor write and if needed
-              // a  preceeding backdoor write (timed to trigger in the next cycle, for states that
+              // a preceding backdoor write (timed to trigger in the next cycle, for states that
               // almost always follow CSR operations such as enable signals)
               // Finally call disable_dut() to clean things up properly.
               if (rare_state_to_idle_backdoor[i]) begin
@@ -640,7 +693,7 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
       `DV_SPINWAIT_EXIT(m_csrng_pull_seq.wait_for_items_processed(csrng_pull_seq_seed_offset + 1);,
                         wait (!do_background_procs))
       if(do_background_procs) begin
-        // Notify the interrtupt/CSR access thread after the single boot mode seed has been
+        // Notify the interrupt/CSR access thread after the single boot mode seed has been
         // received
         `DV_CHECK_MEMBER_RANDOMIZE_FATAL(dly_to_reenable_dut)
         `DV_SPINWAIT_EXIT(cfg.clk_rst_vif.wait_clks(dly_to_reenable_dut);,
@@ -764,13 +817,22 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
         // will likely fail.
         altcfg.bypass_window_size   = cfg.dut_cfg.bypass_window_size;
         altcfg.fips_window_size     = cfg.dut_cfg.fips_window_size;
-        altcfg.ht_threshold_scope   = cfg.dut_cfg.ht_threshold_scope;
+        // Do not pass ht_threshold_scope from cfg to altcfg if it is invalid.
+        altcfg.ht_threshold_scope   = mubi4_test_invalid(cfg.dut_cfg.ht_threshold_scope) ?
+                                          altcfg.ht_threshold_scope :
+                                          cfg.dut_cfg.ht_threshold_scope;
       end
 
       // Force the DUT to not absorb the new config (to test write protect), unless
       // the configuration explicitly says to disable before reconfiguring
       if(!altcfg.preconfig_disable) begin
         enable_dut();
+      end
+
+      // The threshold_oneway CSR is RW1S. Don't set invalid MuBi values to this CSR as they would
+      // be sticky.
+      if (altcfg.which_invalid_mubi == invalid_threshold_oneway) begin
+        altcfg.ht_threshold_oneway = MuBi4False;
       end
 
       entropy_src_init(.newcfg(altcfg),
@@ -815,12 +877,19 @@ class entropy_src_rng_vseq extends entropy_src_base_vseq;
     // Don't enable here, let the main loop do that explicitly
   endtask
 
+  function void disable_entropy_drop_assertions();
+    if (cfg.rng_max_delay) begin
+      cfg.entropy_src_path_vif.disable_entroy_drop_assertions();
+    end
+  endfunction
+
   task body();
 
     do_background_procs = 1;
     continue_sim = 1;
     reset_needed = 0;
 
+    disable_entropy_drop_assertions();
     // Start sequences in the background
     start_indefinite_seqs();
 

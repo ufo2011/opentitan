@@ -1,6 +1,19 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
+
+// Running `write_test_phase` from SV causes the C side to perform
+// the checks for the new phase, so any preparation from SV needs to be
+// done prior to updating the phase. Therefore the test sequences the sv
+// and c side as follows:
+// 1. sv: Prepare any external settings,
+//        `write_test_phase`(PHASE),
+//        wait for test status change from c.
+// 2. c: check kTestPhase in switch
+// 3. c: `wait_next_test_phase`
+//    set test status and write all 1 to flash and wait for
+//    backdoor update from sv
+// 4. sv: Move to next routine and repeat #1 with the next PHASE
 
 class chip_sw_sysrst_ctrl_ulp_z3_wakeup_vseq extends chip_sw_base_vseq;
   `uvm_object_utils(chip_sw_sysrst_ctrl_ulp_z3_wakeup_vseq)
@@ -13,9 +26,8 @@ class chip_sw_sysrst_ctrl_ulp_z3_wakeup_vseq extends chip_sw_base_vseq;
     PHASE_INIT                  = 0,
     PHASE_DRIVE_ZERO            = 1,
     PHASE_WAIT_NO_WAKEUP        = 2,
-    PHASE_GLITCH_LID_OPEN       = 3,
-    PHASE_WAIT_WAKEUP           = 4,
-    PHASE_DONE                  = 5
+    PHASE_WAIT_WAKEUP           = 3,
+    PHASE_DONE                  = 4
   } test_phases_e;
 
   virtual task pre_start();
@@ -61,7 +73,8 @@ class chip_sw_sysrst_ctrl_ulp_z3_wakeup_vseq extends chip_sw_base_vseq;
   virtual function void write_test_phase(test_phases_e phase);
     bit [7:0] test_phase[1];
     test_phase[0] = phase;
-    sw_symbol_backdoor_overwrite("kTestPhase", test_phase);
+    `uvm_info(`gfn, $sformatf("Writing test phase %0d", phase), UVM_MEDIUM)
+    sw_symbol_backdoor_overwrite("kTestPhaseDV", test_phase);
   endfunction
 
   virtual function void check_wakeup_pin();
@@ -76,13 +89,19 @@ class chip_sw_sysrst_ctrl_ulp_z3_wakeup_vseq extends chip_sw_base_vseq;
     cfg.chip_vif.aon_clk_por_rst_if.wait_clks(DEBOUNCE_SW_VALUE);
   endtask
 
-  virtual task sync_with_sw();
+  virtual task sync_with_sw(input bit add_delay = 1'b1);
     `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInWfi)
     `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInTest)
+    if (add_delay) #(cfg.flash_write_latency_in_us * 1us);
   endtask
 
   virtual task body();
     super.body();
+
+    // Add status sync at the beginning of the test
+    `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInTest,
+             "wait for initial test state",
+             5_000_000)
 
     // TODO(lowRISC/opentitan:#13373): Revisit pad assignments.
     // pinmux_wkup_vif (at Iob7) is re-used for PinZ3WakeupOut
@@ -103,10 +122,7 @@ class chip_sw_sysrst_ctrl_ulp_z3_wakeup_vseq extends chip_sw_base_vseq;
     `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInWfi)
 
     glitch_lid_open();
-    write_test_phase(PHASE_GLITCH_LID_OPEN);
-    sync_with_sw();
-
-    wait_wakeup_time();
+    sync_with_sw(.add_delay(0));
     write_test_phase(PHASE_WAIT_WAKEUP);
     check_wakeup_pin();
     sync_with_sw();

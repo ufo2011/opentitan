@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,10 +11,10 @@ class chip_sw_sysrst_ctrl_ec_rst_l_vseq extends chip_sw_base_vseq;
   localparam bit [1:0] OUTPUT_ALL_SET = 2'b11;
   localparam bit [1:0] OUTPUT_NONE_SET = 2'b00;
   localparam uint TIMEOUT_VALUE = 5000000;
-  localparam int EC_RST_TIMER = 512;
+  localparam uint EC_RST_TIMER = 2000 + 1; // Default value of sysrst_ctrl.EC_RST_CTL
 
-  localparam string PWRMGR_RSTREQ_PATH = "tb.dut.top_earlgrey.u_pwrmgr_aon.rstreqs_i[0]";
-  localparam string RST_AON_NI_PATH = "tb.dut.top_earlgrey.u_sysrst_ctrl_aon.rst_aon_ni";
+  localparam string PWRMGR_RSTREQ_PATH = "tb.dut.top_earlgrey.earlgrey_pd_aon.u_pwrmgr.rstreqs_i[0]";
+  localparam string RST_AON_NI_PATH = "tb.dut.top_earlgrey.earlgrey_pd_aon.u_sysrst_ctrl.rst_aon_ni";
 
   typedef enum {
     PhaseSetup           = 0,
@@ -38,7 +38,8 @@ class chip_sw_sysrst_ctrl_ec_rst_l_vseq extends chip_sw_base_vseq;
     cfg.chip_vif.pwrb_in_if.pins_pd[0] = 1;
   endtask
 
-  virtual function void write_test_phase(input test_phases_e phase);
+  virtual function void write_test_phase(input byte phase);
+    `uvm_info(`gfn, $sformatf("Writing test phase %0d", phase), UVM_MEDIUM)
     sw_symbol_backdoor_overwrite("kTestPhase", {<<8{phase}});
   endfunction
 
@@ -66,26 +67,27 @@ class chip_sw_sysrst_ctrl_ec_rst_l_vseq extends chip_sw_base_vseq;
   virtual task sync_with_sw();
     `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInWfi)
     `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInTest)
+    // Wait some additional aon cycles for the effects of CSR writes to get past
+    // synchronizers.
+    cfg.chip_vif.aon_clk_por_rst_if.wait_clks(3);
   endtask
 
   virtual task control_ec_rst_low(int min_exp_cycles);
     int timeout_count = 0;
     `DV_WAIT(cfg.chip_vif.ec_rst_l_if.pins[0] === 0)
-    // wait until ec_rst is de-active and check the length.
-    `DV_SPINWAIT(
+    // Count the number of cycles before ec_rst_l is inactive.
     forever begin
       if (cfg.chip_vif.ec_rst_l_if.sample_pin(0) == 0) begin
         timeout_count++;
-        if (timeout_count >= EC_RST_TIMER) begin
-          ec_rst_timer_over = 1; // set this for the other thread to continue
-        end
       end else begin
         break;
       end
-      // Some amount of delay between samples of ec_rst.
-      #(AON_CYCLE_PERIOD);
-    end)
-    `DV_CHECK(timeout_count > min_exp_cycles) // check ec_rst length
+      // Use 1 cycle delay (AON CLK) between samples of ec_rst.
+      cfg.chip_vif.aon_clk_por_rst_if.wait_clks(1);
+    end
+    // Check that the active ec_rst_l cycles exceeds the expected minimum.
+    `DV_CHECK(timeout_count > min_exp_cycles)
+    ec_rst_timer_over = 1; // set this for the other thread to continue
   endtask
 
   virtual task check_ec_rst_with_transition(string path, int exp_value);
@@ -152,9 +154,10 @@ class chip_sw_sysrst_ctrl_ec_rst_l_vseq extends chip_sw_base_vseq;
         check_ec_rst_with_transition(RST_AON_NI_PATH , 1'b0);
         sync_with_sw();
         write_test_phase(PhaseCheckComboReset);
-        `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInTest)
-        `DV_WAIT(cfg.sw_test_status_vif.sw_test_status == SwTestStatusInWfi)
+        sync_with_sw();
         `DV_WAIT(ec_rst_timer_over)
+        // Wait some additional aon cycles for the synchronizers.
+        cfg.chip_vif.aon_clk_por_rst_if.wait_clks(3);
 
         write_test_phase(PhaseOverrideSetup);
         sync_with_sw();

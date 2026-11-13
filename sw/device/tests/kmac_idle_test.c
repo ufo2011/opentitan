@@ -1,23 +1,27 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sw/device/lib/base/mmio.h"
+#include "hw/top/dt/clkmgr.h"  // Generated
+#include "hw/top/dt/kmac.h"    // Generated
 #include "sw/device/lib/dif/dif_clkmgr.h"
 #include "sw/device/lib/dif/dif_kmac.h"
+#include "sw/device/lib/runtime/ibex.h"
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
+static_assert(kDtKmacCount >= 1, "this test requires at least one kmac");
+const dt_kmac_t kKmacDt = (dt_kmac_t)0;
 
 static dif_clkmgr_t clkmgr;
 static dif_kmac_t kmac;
 
 OTTF_DEFINE_TEST_CONFIG();
 
-const dif_clkmgr_hintable_clock_t kmac_clock =
-    kTopEarlgreyHintableClocksMainKmac;
+dif_clkmgr_hintable_clock_t kmac_clock;
+
+#define TIMEOUT (1000 * 1000)
 
 // Digest lengths in 32-bit words.
 #define DIGEST_LEN_SHA3_256 (256 / 32)
@@ -54,6 +58,14 @@ static void check_clock_state(dif_toggle_t expected_clock_state) {
         "Clock enabled state is not as expected (%d).", expected_clock_state);
 }
 
+static bool is_hintable_clock_enabled(const dif_clkmgr_t *clkmgr,
+                                      dif_clkmgr_hintable_clock_t clock) {
+  dif_toggle_t clock_state;
+  CHECK_DIF_OK(
+      dif_clkmgr_hintable_clock_get_enabled(clkmgr, clock, &clock_state));
+  return clock_state == kDifToggleEnabled;
+}
+
 static void do_sha3_test(void) {
   dif_kmac_operation_state_t kmac_operation_state;
   // Run SHA3 test case using single blocking absorb/squeeze operations.
@@ -71,12 +83,19 @@ static void do_sha3_test(void) {
 
   uint32_t out[DIGEST_LEN_SHA3_MAX];
   CHECK_DIF_OK(dif_kmac_squeeze(&kmac, &kmac_operation_state, out,
-                                sha3_256_test.digest_len, NULL));
+                                sha3_256_test.digest_len, /*processed=*/NULL,
+                                /*capacity=*/NULL));
 
   // Check clock state again which should still be enabled.
   check_clock_state(kDifToggleEnabled);
 
   CHECK_DIF_OK(dif_kmac_end(&kmac, &kmac_operation_state));
+
+  // On FPGA, it may take a while until the DONE command gets actually executed
+  // (see SecCmdDelay SystemVerilog parameter). However, once the clock is
+  // disabled, KMAC cannot be accessed anymore. Thus polling the KMAC status
+  // register doesn't work. Instead, wait for the clock to stop.
+  IBEX_SPIN_FOR(!is_hintable_clock_enabled(&clkmgr, kmac_clock), TIMEOUT);
 
   // Check the clock is now stopped.
   check_clock_state(kDifToggleDisabled);
@@ -92,8 +111,9 @@ static void do_sha3_test(void) {
 }
 
 bool test_main(void) {
-  CHECK_DIF_OK(dif_clkmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_CLKMGR_AON_BASE_ADDR), &clkmgr));
+  CHECK_DIF_OK(dif_clkmgr_init_from_dt(kDtClkmgr, &clkmgr));
+  CHECK_DIF_OK(dif_clkmgr_find_hintable_clock(
+      &clkmgr, dt_kmac_instance_id(kKmacDt), &kmac_clock));
 
   // Get initial hint and enable for KMAC clock and check both are enabled.
   dif_toggle_t clock_hint_state;
@@ -113,14 +133,14 @@ bool test_main(void) {
   check_clock_state(kDifToggleEnabled);
 
   // Initialize KMAC hardware.
-  CHECK_DIF_OK(
-      dif_kmac_init(mmio_region_from_addr(TOP_EARLGREY_KMAC_BASE_ADDR), &kmac));
+  static_assert(kDtKmacCount > 0, "This test requires a KMAC instance");
+  CHECK_DIF_OK(dif_kmac_init_from_dt(kKmacDt, &kmac));
 
   // Configure KMAC hardware using software entropy.
   dif_kmac_config_t config = (dif_kmac_config_t){
       .entropy_mode = kDifKmacEntropyModeSoftware,
-      .entropy_seed = {0xaa25b4bf, 0x48ce8fff, 0x5a78282a, 0x48465647,
-                       0x70410fef},
+      .entropy_seed = {0xb153e3fe, 0x09596819, 0x3e85a6e8, 0xb6dcdaba,
+                       0x50dc409c, 0x11e1ebd1},
       .entropy_fast_process = kDifToggleEnabled,
   };
   CHECK_DIF_OK(dif_kmac_configure(&kmac, config));

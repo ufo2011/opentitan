@@ -1,32 +1,42 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 {
   name:               "kmac",
+  human_name:         "KMAC Accelerator",
   one_line_desc:      "Accelerator for Keccak-based keyed hash message authentication code and SHA-3 hash functions; with SCA and FI countermeasures",
   one_paragraph_desc: '''
   OpenTitan protocols use [Keccak/SHA-3][nist-fips-202]-based cryptographic primitives for data authentication, integrity checking, and key derivation.
-  The OpenTitan KMAC hardware block is a hardware accelerator that supports Keccak-based Message Authentication Code (KMAC) and the SHA3-derived functions SHAKE and cSHAKE as defined in [NIST SP 800-185][nist-sp-800-185].
+  KMAC Accelerator supports Keccak-based Message Authentication Code (KMAC) and the SHA3-derived functions SHAKE and cSHAKE as defined in [NIST SP 800-185][nist-sp-800-185].
   The Keccak core uses first-order domain-oriented masking (DOM) to deter side-channel analysis (SCA).
   To save area, the masking can optionally be disabled using a compile-time Verilog parameter.
-  In addition, this block features several countermeasures to deter fault injection (FI) attacks.
+  In addition, KMAC Accelerator features several countermeasures to deter fault injection (FI) attacks.
 
   [nist-fips-202]: https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.202.pdf
   [nist-sp-800-185]: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-185.pdf
   '''
+  // Unique comportable IP identifier defined under KNOWN_CIP_IDS in the regtool.
+  cip_id:             "13",
   design_spec:        "../doc",
   dv_doc:             "../doc/dv",
   hw_checklist:       "../doc/checklist",
   sw_checklist:       "/sw/device/lib/dif/dif_kmac",
   revisions: [
     {
-      version:            "1.0",
+      version:            "2.0.0",
       life_stage:         "L1",
       design_stage:       "D2S",
       verification_stage: "V2S",
       dif_stage:          "S2",
-      commit_id:          "c2a8c64ccbca39707be7883dfd2f8c1100813730",
+      commit_id:          "0742a8e0ad0f0c9a50720ecfea93287035d52944",
+    },
+    {
+      version:            "3.0.0",
+      life_stage:         "L1",
+      design_stage:       "D1",
+      verification_stage: "V0",
+      dif_stage:          "S1",
     }
   ]
   clocking: [
@@ -42,7 +52,16 @@
       desc: "KMAC/SHA3 absorbing has been completed"
     }
     { name: "fifo_empty"
-      desc: "Message FIFO empty condition"
+      type: "status"
+      desc: '''
+            The message FIFO is empty.
+            This interrupt is raised only if the message FIFO is actually writable by software, i.e., if all of the following conditions are met:
+            i) The KMAC block is not exercised by a hardware application interface.
+            ii) The SHA3 block is in the Absorb state.
+            iii) Software has not yet written the Process command to finish the absorption process.
+            For the interrupt to be raised, the message FIFO must also have been full previously.
+            Otherwise, the hardware empties the FIFO faster than software can fill it and there is no point in interrupting the software to inform it about the message FIFO being empty.
+            '''
     }
     { name: "kmac_err"
       desc: "KMAC/SHA3 error occurred. ERR_CODE register shows the details"
@@ -63,6 +82,7 @@
       iii) Errors in the message, round, or key counter.
       iv) Any internal FSM entering an invalid state.
       v) An error in the redundant lfsr.
+      vi) A SHA3 core error occurs when an app interface is active.
       The KMAC unit cannot recover from such an error and needs to be reset.
       '''
     }
@@ -73,6 +93,16 @@
       default: "1"
       desc:    '''
         Disable(0) or enable(1) first-order masking of Keccak round.
+        '''
+      local:   "false"
+      expose:  "true"
+    }
+    { name:    "EnFullKmac"
+      type:    "bit"
+      default: "1"
+      desc:    '''
+        Disable(0) or enable(1) the full KMAC functionality.
+        If disabled, the module is stripped down to only support SHA3, SHAKE and cSHAKE.
         '''
       local:   "false"
       expose:  "true"
@@ -112,6 +142,23 @@
       local:   "false"
       expose:  "true"
     }
+    { name:    "NumAppIntf"
+      type:    "int"
+      default: "4"
+      desc:    "Number of application interfaces"
+      local:   "false"
+      expose:  "true"
+    }
+    { name:                "AppCfg"
+      desc:                '''Application interface configuration.
+                           Top-level connection to the application interface must follow this definition.
+                           '''
+      type:                "kmac_pkg::app_config_t"
+      unpacked_dimensions: "[KmacNumAppIntf]"
+      default:             "'{kmac_pkg::AppCfgKeyMgr, kmac_pkg::AppCfgLcCtrl, kmac_pkg::AppCfgRomCtrl, kmac_pkg::AppCfgOtbn}"
+      local:               "false"
+      expose:              "true"
+    }
     { name:    "NumWordsKey"
       type:    "int"
       default: "16"
@@ -142,29 +189,29 @@
       desc:    "Width of the hash counter in the entropy"
       local:   "true"
     }
-    { name:    "NumSeedsEntropyLfsr",
+    { name:    "NumSeedsEntropy",
       type:    "int",
-      default: "5",
-      desc:    "Number of words for the LFSR seed used for entropy generation",
+      default: "6",
+      desc:    "Number of words for the PRNG seed used for entropy generation",
       local:   "true"
     }
     { name:      "RndCnstLfsrSeed"
-      desc:      "Compile-time random data for LFSR default seed"
+      desc:      "Compile-time random data for PRNG default seed"
       type:      "kmac_pkg::lfsr_seed_t"
-      randcount: "800"
+      randcount: "288"
       randtype:  "data"
     }
     { name:      "RndCnstLfsrPerm",
-      desc:      "Compile-time random permutation for LFSR output",
+      desc:      "Compile-time random permutation for PRNG output",
       type:      "kmac_pkg::lfsr_perm_t"
       randcount: "800",
       randtype:  "perm",
     }
-    { name:      "RndCnstLfsrFwdPerm",
-      desc:      "Compile-time random permutation for forwarding LFSR state",
-      type:      "kmac_pkg::lfsr_fwd_perm_t"
-      randcount: "32",
-      randtype:  "perm",
+    { name:      "RndCnstBufferLfsrSeed"
+      desc:      "Compile-time random data for PRNG buffer default seed"
+      type:      "kmac_pkg::buffer_lfsr_seed_t"
+      randcount: "800"
+      randtype:  "data"
     }
     { name:      "RndCnstMsgPerm"
       desc:      "Compile-time random permutation for LFSR Message output"
@@ -178,14 +225,15 @@
       type:    "uni"
       name:    "keymgr_key"
       act:     "rcv"
-      package: "keymgr_pkg"
+      package: "keymgr_dpe_pkg"
     }
     { struct:  "app"
       type:    "req_rsp"
       name:    "app"
       act:     "rsp"
       package: "kmac_pkg"
-      width:   "3"
+      width:   "NumAppIntf"
+      default: "kmac_pkg::APP_REQ_DEFAULT"
     }
     { struct:  "edn"
       type:    "req_rsp"
@@ -212,6 +260,58 @@
       act:     "rcv"
       default: "lc_ctrl_pkg::Off"
       package: "lc_ctrl_pkg"
+    }
+  ]
+  features: [
+    {
+      name: "KMAC.MODE.SHA3",
+      desc: '''SHA3 hashing algorithm supporting the following security strength configurations:
+            SHA3-224, SHA3-256, SHA3-384, and SHA3-512. Compliant with NIST FIPS 202.
+            '''
+    }
+    {
+      name: "KMAC.MODE.SHAKE",
+      desc: '''SHAKE hashing algorithm supporting the following security strength configurations:
+            SHAKE128, and SHAKE256. Compliant with NIST FIPS 202.
+            '''
+    }
+    {
+      name: "KMAC.MODE.CSHAKE",
+      desc: '''cSHAKE hashing algorithm supporting the following security strength configurations:
+            cSHAKE128, and cSHAKE256. Compliant with NIST SP 800-185.
+            '''
+    }
+    {
+      name: "KMAC.MODE.KMAC",
+      desc: '''KMAC Keccak Message Authentication Code supporting the following security strength
+            configurations: KMAC128, KMAC256. Compliant with NIST SP 800-185.
+            '''
+    }
+    {
+      name: "KMAC.MODE.XOF",
+      desc: '''SHAKE, cSHAKE and KMAC modes of operation support eXtendable-Output Format (XOF)
+            as specified in NIST SP 800-185.
+            '''
+    }
+    {
+      name: "KMAC.ENDIANNESS.MESSAGE",
+      desc: "Configurable input message endianness."
+    }
+    {
+      name: "KMAC.ENDIANNESS.DIGEST",
+      desc: "Configurable output digest endianness."
+    }
+    {
+      name: "KMAC.KEY.SIDELOAD",
+      desc: "Key can be loaded directly from the keymgr."
+    }
+    {
+      name: "KMAC.ENTROPY_MODES",
+      desc: '''Entropy required for countermeasures can be configured to be provided by software or
+            EDN. In EDN mode, KMAC can be configured to set an error flag if entropy is not
+            provided within a configurable time window. The cadence of entropy requested from EDN
+            is also configurable.
+            '''
     }
   ]
   countermeasures: [
@@ -301,8 +401,7 @@
           name: "kmac_en"
           desc: '''KMAC datapath enable.
 
-                If this bit is 1, the incoming message is processed in KMAC
-                with the secret key.
+                If this bit is 1, the KMAC mode is active and the secret key is prepended to the incoming message.
                 '''
           tags: [// don't enable kmac and sha data paths - we will do that in functional tests
                  "excl:CsrNonInitTests:CsrExclWrite",
@@ -412,8 +511,9 @@
           desc: '''Entropy Mode
 
           Using this field, software can configure mode of operation of the internal pseudo-random number generator (PRNG).
-          For the hardware to actually switch to an entropy mode other than the default idle_mode, software further needs to set the !!CFG_SHADOWED.entropy_ready bit.
-          After that point, the hardware cannot be made to return to idle_mode unless the module is reset.
+
+          Note that once software has configured a value different from `idle_mode` after reset, and set the !!CFG_SHADOWED.entropy_ready bit afterwards, the PRNG configuration cannot be changed anymore (unless an EDN request timeout occurs when running in EDN mode).
+          Further writes to this field will change the value received upon reading the register, but they will be ignored by the internal hardware.
           '''
 
           enum: [
@@ -426,8 +526,6 @@
               The internal PRNG is not reseeded with fresh entropy, nor updated while the core operates.
               It should therefore not be used after this very initial stage.
               Software should setup a different mode and set !!CFG_SHADOWED.entropy_ready as early as possible.
-
-              The module cannot be made to return to idle_mode once any of the other modes have been used.
               '''
             }
             { value: "1"
@@ -440,9 +538,16 @@
               Only after that, the module can start processing commands.
               Depending on !!CFG_SHADOWED, the internal PRNG is then used for (re-)masking inputs (prefix, key, message) and intermediate results of the Keccak core.
 
-              Depending on !!ENTROPY_PERIOD, the module will periodically reseed the internal PRNG with fresh entropy from EDN.
-              Using !!CMD.entropy_req software can manually initiate the reseeding.
+              The module will then automatically reseed the internal PRNG with fresh entropy from EDN every !!ENTROPY_REFRESH_THRESHOLD_SHADOWED messages in KMAC mode.
+              More precisely, automatic reseed operations are always triggered directly after the key absorption phase.
+              How close the module is to automatically trigger a reseed operation can be inferred from !!ENTROPY_REFRESH_HASH_CNT.
+              Alternatively, software can manually initiate reseeding operations using !!CMD.entropy_req while the module is idle.
+              This will also clear !!ENTROPY_REFRESH_HASH_CNT.
 
+              Depending on the state of the system, it may take a very long or even indefinite time for the entropy to be delivered.
+              As such, the configuration values for the !!ENTROPY_REFRESH_THRESHOLD_SHADOWED and !!ENTROPY_PERIOD registers should be chosen carefully.
+              Also, if the entropy complex becomes unavailable, there is a way to leave this mode and enter the fall-back software mode.
+              For guidance, refer to [EDN Entropy Mode](programmers_guide.md#edn-entropy-mode).
               '''
             }
             { value: "2"
@@ -451,12 +556,15 @@
 
               This entropy mode is a fall-back option to be used if the entropy complex is not available.
 
-              Once the !!CFG_SHADOWED.entropy_ready bit is set after reset, the module will wait for software to write each of the !!ENTROPY_SEED_0 - !!ENTROPY_SEED_4 registers exactly once and in ascending order.
+              Once the !!CFG_SHADOWED.entropy_ready bit is set after reset, the module will wait for software to write the !!ENTROPY_SEED register 6 times.
+              Upon each write, the written value is loaded into the corresponding state chunk of the entropy generator.
               Only after that, the module can start processing commands.
               Depending on !!CFG_SHADOWED, the internal PRNG is then used for (re-)masking inputs (prefix, key, message) and intermediate results of the Keccak core.
 
-              After this point, the PRNG can no longer be reseeded by software - also after switching back into this mode from edn_mode.
-              However, it is possible to switch to edn_mode.
+              After this point, the PRNG can no longer be reseeded by software.
+              Without a full reset of the KMAC block, there is no way to further change the configured mode.
+              Further writes to this field only change the value received upon reading the register.
+              The changes are ignored by the internal hardware.
               '''
             }
           ]
@@ -494,14 +602,6 @@
                  "excl:CsrAllTests:CsrExclWrite",
                  "shadowed_reg_path:u_cfg_reg_shadowed.u_cfg_reg_shadowed_entropy_ready"]
         } // f: entropy_ready
-        { bits: "25"
-          name: err_processed
-          desc: '''When error occurs and one of the state machine stays at
-                 Error handling state, SW may process the error based on
-                 ERR_CODE, then let FSM back to the reset state
-                '''
-          tags: ["shadowed_reg_path:u_cfg_reg_shadowed.u_cfg_reg_shadowed_err_processed"]
-        } // f: err_processed
         { bits: "26"
           name: en_unsupported_modestrength
           desc: '''Enable Unsupported Mode and Strength configs.
@@ -544,9 +644,9 @@
                 the field is defined as enum.
                 '''
           enum: [
-            { value: "29"
+            { value: "7"
               name: "start"
-              desc: '''Writing 6'b011101 or dec 29 into this field when KMAC/SHA3
+              desc: '''Writing 6'b000111 or dec 7 into this field when KMAC/SHA3
                     is in idle, KMAC/SHA3 begins its operation.
 
                     If the mode is cSHAKE, before receiving the message, the
@@ -555,14 +655,14 @@
                     additionally it processes secret key block.
                     '''
             } // e: start
-            { value: "46"
+            { value: "50"
               name: "process"
-              desc: '''Writing 6'b101110 or dec 46 into this field when KMAC/SHA3
+              desc: '''Writing 6'b110010 or dec 50 into this field when KMAC/SHA3
                     began its operation and received the entire message, it
                     computes the digest or signing.
                     '''
             } // e: process
-            { value: "49"
+            { value: "46"
               name: "run"
               desc: '''The `run` field is used in the sponge squeezing stage.
                     It triggers the keccak round logic to run full 24 rounds.
@@ -572,26 +672,101 @@
                     It only affects when the kmac/sha3 operation is completed.
                     '''
             } // e: run
-            { value: "22"
+            { value: "53"
               name: "done"
-              desc: '''Writing 6'b010110 or dec 22 into this field when KMAC/SHA3
-                    squeezing is completed, KMAC/SHA3 hashing engine clears internal
-                    variables and goes back to Idle state for next command.
+              desc: '''Writing 6'b110101 or dec 53 into this field completes the
+                    operation. The KMAC/SHA3 hashing engine clears the Keccak
+                    state and internal variables and goes back to Idle state for
+                    the next command. The command also releases the KMAC HWIP
+                    when SW has claimed it with the `state_write` command.
                     '''
             } // e: done
+            { value: "28"
+              name: "stop"
+              desc: '''Writing 6'b011100 or dec 28 into this field when KMAC/SHA3
+                    is receiving the message stops the sponge absorbing stage
+                    without appending any padding. The Keccak state then holds a
+                    valid intermediate sponge state, which SW can read from
+                    !!STATE to save the context.
+
+                    The message received since the last `start` or `continue`
+                    command must be a multiple of the Keccak rate. Otherwise the
+                    absorbing stage is stopped anyway, but the exposed state is
+                    not a valid context and `ErrSwStopNotBlockAligned` is
+                    reported.
+
+                    Once !!STATUS.sha3_stopped is set, or the `kmac_done`
+                    interrupt is raised, SW reads !!STATE and completes the
+                    operation with the `done` command, which clears the Keccak
+                    state.
+
+                    This command is not available when a sideloaded key is used,
+                    as saving the context would expose the key. The command is
+                    then discarded and `ErrSwSaveRestoreSideload` is reported.
+                    '''
+            } // e: stop
+            { value: "27"
+              name: "state_write"
+              desc: '''Writing 6'b011011 or dec 27 into this field when KMAC/SHA3
+                    is idle claims the KMAC HWIP for SW such that it can write a
+                    previously saved context to the KMAC HWIP. The command also
+                    clears the Keccak state, so a restore always starts from a
+                    known state.
+
+                    SW resumes the operation with the `continue` command once the
+                    full context is written. If SW decides not to resume after
+                    all, the `done` command releases the KMAC HWIP again.
+
+                    This command is not available when a sideloaded key is used.
+                    The command is then discarded and `ErrSwSaveRestoreSideload`
+                    is reported.
+                    '''
+            } // e: state_write
+            { value: "41"
+              name: "continue"
+              desc: '''Writing 6'b101001 or dec 41 into this field after the
+                    `state_write` command resumes the sponge absorbing stage from
+                    the context that SW has written into !!STATE. Issuing it
+                    without claiming the KMAC HWIP first is discarded and reported
+                    as `ErrSwCmdSequence`.
+
+                    In contrast to the `start` command, the prefix and key are
+                    not processed again, as both are already part of the
+                    restored state. The !!KEY_SHARE0 and !!KEY_SHARE1 registers
+                    therefore do not need to be restored, but !!CFG_SHADOWED must
+                    hold the same configuration as before the context was saved.
+
+                    This command is not available when a sideloaded key is used.
+                    The command is then discarded and `ErrSwSaveRestoreSideload`
+                    is reported.
+                    '''
+            } // e: continue
           ] // enum
         } // f: cmd
         { bits: "8"
           name: "entropy_req"
-          desc: '''SW triggered Entropy Request
+          desc: '''
+                Software can set this bit to 1 to manually trigger the reseeding of the internal PRNG when running in EDN mode.
+                This will also clear !!ENTROPY_REFRESH_HASH_CNT.
 
-          If writes 1 to this field
-          '''
-        } // f: entropy_req
+                After setting this bit, the !!STATUS.entropy_ready bit should read as 0 and the !!STATUS.entropy_reseeding bit as 1 indicating that a reseed operation is ongoing.
+
+                If masking is disabled, this bit is ignored.
+                '''
+        }
         { bits: "9"
           name: "hash_cnt_clr"
-          desc: "If writes 1, it clears the hash (KMAC) counter in the entropy module"
+          desc: '''
+                Software can set this bit to 1 to manually clear !!ENTROPY_REFRESH_HASH_CNT.
+                '''
         }
+        { bits: "10"
+          name: err_processed
+          desc: '''When error occurs and one of the state machine stays at
+                 Error handling state, SW may process the error based on
+                 ERR_CODE, then let FSM back to the reset state
+                '''
+        } // f: err_processed
       ]
     } // R: CMD
     { name: "STATUS"
@@ -613,6 +788,24 @@
           name: "sha3_squeeze"
           desc: '''If 1, SHA3 completes sponge absorbing stage.
                 In this stage, SW can manually run the hashing engine.
+                '''
+        }
+        { bits: "3"
+          name: "sha3_stopped"
+          desc: '''If 1, SHA3 has stopped the sponge absorbing stage for a
+                context switch. In this stage, SW can read the !!STATE to save
+                the context. The absorbing stage is resumed by restoring the
+                !!STATE and issuing the `continue` command.
+                '''
+        }
+        { bits: "4"
+          name: "state_write"
+          desc: '''If 1, SW has claimed the KMAC HWIP with the `state_write`
+                command and writes to !!STATE are accepted. SW must poll this
+                bit after issuing the command and before writing the context.
+
+                The bit clears again when SW leaves the state with the
+                `continue` or the `done` command.
                 '''
         }
         { bits: "12:8"
@@ -639,12 +832,29 @@
           name: "fifo_full"
           desc: "Message FIFO Full indicator"
         }
-        { bits: "16",
+        { bits: "20"
+          name: "entropy_ready"
+          desc: '''If 1, the internal PRNG is ready.
+                If 0, the internal PRNG is either not configured in EDN mode or software mode, or currently performing a reseed operation via EDN or waiting for software to provide a new seed.
+
+                If masking is disabled, this bit mirrors the !!CFG_SHADOWED.entropy_ready bit.
+                '''
+          resval: "0"
+        }
+        { bits: "21"
+          name: "entropy_reseeding"
+          desc: '''If 1, the internal PRNG is currently performing a reseed operation via EDN or waiting for software to provide a new seed.
+
+                If masking is disabled, this bit always reads as 0.
+                '''
+          resval: "0"
+        }
+        { bits: "28",
           name: "ALERT_FATAL_FAULT",
           resval: "0",
           desc: '''
             No fatal fault has occurred inside the KMAC unit (0).
-            A fatal fault has occured and the KMAC unit needs to be reset (1),
+            A fatal fault has occurred and the KMAC unit needs to be reset (1),
             Examples for such faults include
             i) TL-UL bus integrity fault
             ii) storage errors in the shadow registers
@@ -653,11 +863,11 @@
             v) an error in the redundant lfsr
           '''
         }
-        { bits: "17",
+        { bits: "29",
           name: "ALERT_RECOV_CTRL_UPDATE_ERR",
           resval: "0",
           desc: '''
-            An update error has not occurred (0) or has occured (1) in the shadowed Control Register.
+            An update error has not occurred (0) or has occurred (1) in the shadowed Control Register.
             KMAC operation needs to be restarted by re-writing the Control Register.
           '''
         }
@@ -687,6 +897,8 @@
           after it sends request to EDN module. If the timer expires, the
           entropy module moves to an error state and notifies to the system.
 
+          If there is a pending EDN request during wait timer update, then this update is delayed until the EDN request is complete.
+
           If 0, the entropy module waits the EDN response always. If EDN does
           not respond in this configuration, the software shall reset the IP.
           '''
@@ -711,7 +923,6 @@
       '''
       swaccess: "ro"
       hwaccess: "hwo"
-      regwen: "CFG_REGWEN"
       fields: [
         { bits: "HashCntW-1:0"
           name: "hash_cnt"
@@ -745,36 +956,30 @@
         }
       ]
     } // R: ENTROPY_REFRESH_THRESHOLD_SHADOWED
-    { multireg: {
-        name: "ENTROPY_SEED"
-        desc: '''Entropy Seed
+    {
+      name: "ENTROPY_SEED"
+      desc: '''Entropy Seed
 
-              Entropy seed registers for the integrated entropy generator.
+            Entropy seed register for the integrated entropy generator.
 
-              If !!CFG_SHADOWED.entropy_mode is set to sw_mode, software first needs to set
-              !!CFG_SHADOWED.entropy_ready and then write the !!ENTROPY_SEED_0 -
-              !!ENTROPY_SEED_4 registers in ascending order. Software writes one 32-bit value
-              to every register which is subsequently loaded into the corresponding 32-bit LFSR
-              chunk of the entropy generator.
+            If !!CFG_SHADOWED.entropy_mode is set to sw_mode, software first needs to set !!CFG_SHADOWED.entropy_ready.
+            Then, software needs to write the !!ENTROPY_SEED register 6 times.
+            Upon each write, the written value is loaded into the corresponding state chunk of the entropy generator.
 
-              After writing all !!ENTROPY_SEED_0 registers, the entropy generator will start
-              its operation. After this point, writing these registers has no longer any
-              effect.
-              '''
-        count: "NumSeedsEntropyLfsr"
-        cname: "KMAC"
-        hwext: "true"
-        hwqe : "true"
-        swaccess: "wo"
-        hwaccess: "hro"
-        fields: [
-          { bits: "31:0"
-            name: "seed"
-            desc: "32-bit chunk of the entropy generator seed"
-          }
-        ]
-      } // R: ENTROPY_SEED
-    } // multireg: ENTROPY_SEED
+            After writing the !!ENTROPY_SEED register 6 times, the entropy generator will start its operation.
+            After this point, writing this register has no longer any effect.
+            '''
+      hwext: "true"
+      hwqe : "true"
+      swaccess: "wo"
+      hwaccess: "hro"
+      fields: [
+        { bits: "31:0"
+          name: "seed"
+          desc: "32-bit chunk of the entropy generator seed"
+        }
+      ]
+    } // R: ENTROPY_SEED
     { multireg: {
         name: "KEY_SHARE0"
         desc: '''KMAC Secret Key
@@ -918,8 +1123,10 @@
       fields: [
         { bits: "31:0",
           name: "err_code",
-          desc: '''If error interrupt occurs, this register has information of error cause.
-                Please take a look at `hw/ip/kmac/rtl/kmac_pkg.sv:err_code_e enum type.
+          desc: '''
+                If the `kmac_err` interrupt occurs, this register has information on the error cause.
+                Bits 31:24 contain the error code (please refer to `err_code_e` in `hw/ip/kmac/rtl/kmac_pkg.sv`) for the encoding, and bits 23:0 contain additional debug information.
+                This register does *not* get cleared when the `kmac_err` interrupt state gets cleared.
                 '''
           tags: [// Randomly write mem will cause this reg updated by design
                  "excl:CsrNonInitTests:CsrExclWriteCheck"]
@@ -930,13 +1137,23 @@
     { window: {
         name: "STATE"
         items: "128"  // 512B address space
-        swaccess: "ro"
+        swaccess: "rw"
         desc: '''Keccak State (1600 bit) memory.
 
               The software can get the processed digest by reading this memory
               region. Unlike MSG_FIFO, STATE memory space sees the addr[9:0].
               If Masking feature is enabled, the software reads two shares from
               this memory space.
+
+              Software can write to the register to restore a previously saved
+              context. Writes are only accepted once software claimed the KMAC
+              HWIP with the `state_write` command and while the hashing engine
+              is idle, which !!STATUS.state_write reports. Writes at any other
+              time are acknowledged on the bus and ignored.
+
+              Writes must be full 32-bit word writes. Sub-word writes are
+              answered with a bus error, as a partial write cannot be applied
+              to the Keccak state.
 
               0x400 - 0x4C7: State share
               0x500 - 0x5C7: Mask share of the state, 0 if EnMasking = 0
@@ -953,9 +1170,11 @@
         byte-write: "true"
         desc: '''Message FIFO.
 
-              Any write to this window will be appended to the FIFO. Only lower
-              2 bits `[1:0]` of the address matter to writes within the window
-              in order to handle with sub-word writes.
+              Any write operation to this window will be appended to MSG_FIFO. SW can
+              simply write bytes/words to any address within this address range.
+              Ordering and packing of the incoming bytes/words are handled
+              internally. Therefore, the least significant 12 bits of the address
+              are ignored.
               '''
       }
     } // W: MSG_FIFO

@@ -19,7 +19,7 @@ class core_ibex_vseq extends uvm_sequence;
   debug_seq                                     debug_seq_single_h;
   fetch_enable_seq                              fetch_enable_seq_h;
   core_ibex_env_cfg                             cfg;
-  bit[ibex_mem_intf_agent_pkg::DATA_WIDTH-1:0]  data;
+  bit[ibex_mem_intf_pkg::DATA_WIDTH-1:0]  data;
 
   `uvm_object_utils(core_ibex_vseq)
   `uvm_declare_p_sequencer(core_ibex_vseqr)
@@ -34,7 +34,27 @@ class core_ibex_vseq extends uvm_sequence;
   // Start the memory-model sequences, which run forever() loops to respond to bus events
   virtual task pre_body();
     instr_intf_seq.m_mem = mem;
+    instr_intf_seq.enable_spurious_response = 1'b0;
+
     data_intf_seq.m_mem  = mem;
+    if (cfg.enable_spurious_dside_responses) begin
+      bit enable_spurious_response;
+
+      `DV_CHECK_STD_RANDOMIZE_WITH_FATAL(enable_spurious_response,
+        enable_spurious_response dist {1 :/ cfg.spurious_response_pct,
+                                       0 :/ 100 - cfg.spurious_response_pct};)
+
+      data_intf_seq.enable_spurious_response = enable_spurious_response;
+
+      if (enable_spurious_response) begin
+        `uvm_info(`gfn, "Enabling spurious responses for this test", UVM_LOW)
+        // Disable protocol checking assertions that will fire when we see a spurious response
+        `DV_ASSERT_CTRL_REQ("tb_no_spurious_response", 1'b0)
+      end
+    end else begin
+      data_intf_seq.enable_spurious_response = 1'b0;
+    end
+
     fork
       instr_intf_seq.start(p_sequencer.instr_if_seqr);
       data_intf_seq.start(p_sequencer.data_if_seqr);

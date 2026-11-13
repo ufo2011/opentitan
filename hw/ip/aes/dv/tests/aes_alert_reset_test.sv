@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,9 +25,12 @@ class aes_alert_reset_test extends aes_base_test;
     cfg.ctr_weight               = 10;
     cfg.ofb_weight               = 10;
     cfg.cfb_weight               = 10;
+    cfg.gcm_weight               = `EN_GCM ? 10 : 0;
 
     cfg.message_len_min          = 7;    // one block (16bytes=128bits)
     cfg.message_len_max          = 300;
+    cfg.aad_len_min              = 0;
+    cfg.aad_len_max              = 300;
     cfg.manual_operation_pct     = 0;
     cfg.use_key_mask             = 0;
 
@@ -35,7 +38,7 @@ class aes_alert_reset_test extends aes_base_test;
     cfg.fixed_key_en             = 0;
 
     cfg.fixed_operation_en       = 0;
-    cfg.fixed_operation          = 0;
+    cfg.fixed_operation          = aes_pkg::AES_ENC;
 
     cfg.fixed_keylen_en          = 0;
     cfg.fixed_keylen             = 3'b001;

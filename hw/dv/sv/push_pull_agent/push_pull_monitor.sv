@@ -1,10 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 class push_pull_monitor #(parameter int HostDataWidth = 32,
                           parameter int DeviceDataWidth = HostDataWidth)
-  extends dv_base_monitor #(
+  extends dv_reactive_monitor #(
     .ITEM_T (push_pull_item#(HostDataWidth, DeviceDataWidth)),
     .CFG_T  (push_pull_agent_cfg#(HostDataWidth, DeviceDataWidth)),
     .COV_T  (push_pull_agent_cov#(HostDataWidth, DeviceDataWidth))
@@ -21,9 +21,11 @@ class push_pull_monitor #(parameter int HostDataWidth = 32,
 
   task run_phase(uvm_phase phase);
     @(posedge cfg.vif.rst_n);
+    cfg.in_reset = 0;
     fork
       monitor_reset();
-      collect_trans(phase);
+      // Calling super.run_phase is equivalent to calling collect_trans()
+      super.run_phase(phase);
       // Collect partial pull reqs for the reactive pull device agent.
       collect_pull_req();
       collect_cov();
@@ -49,7 +51,7 @@ class push_pull_monitor #(parameter int HostDataWidth = 32,
   // Collect fully-completed transactions.
   //
   // TODO : sample covergroups
-  virtual protected task collect_trans(uvm_phase phase);
+  virtual protected task collect_trans();
     if (cfg.agent_type == PushAgent) begin
       forever begin
         @(cfg.vif.mon_cb);
@@ -92,7 +94,7 @@ class push_pull_monitor #(parameter int HostDataWidth = 32,
       @(cfg.vif.mon_cb);
       `WAIT_FOR_RESET
       if (cfg.vif.mon_cb.req) begin
-        `uvm_info(`gfn, $sformatf("[%0s] pull req detected", cfg.agent_type), UVM_HIGH)
+        `uvm_info(`gfn, $sformatf("[%0s] pull req detected", cfg.agent_type.name()), UVM_HIGH)
         // TODO: sample any covergroups
         item = push_pull_item#(HostDataWidth, DeviceDataWidth)::type_id::create("item");
         item.h_data = cfg.vif.mon_cb.h_data;
@@ -138,7 +140,7 @@ class push_pull_monitor #(parameter int HostDataWidth = 32,
     item.h_data = cfg.vif.mon_cb.h_data;
     `uvm_info(`gfn,
               $sformatf("[%0s] transaction detected: h_data[0x%0x], d_data[0x%0x]",
-                        cfg.agent_type, item.h_data, item.d_data), UVM_HIGH)
+                        cfg.agent_type.name(), item.h_data, item.d_data), UVM_HIGH)
     analysis_port.write(item);
   endfunction
 

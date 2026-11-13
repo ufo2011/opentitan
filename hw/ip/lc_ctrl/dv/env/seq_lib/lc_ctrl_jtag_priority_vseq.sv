@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 // Verify the JTAG has priority over TL for the Mutex
@@ -132,7 +132,8 @@ class lc_ctrl_jtag_priority_vseq extends lc_ctrl_jtag_access_vseq;
               "csr_read_mutex_claim: claiming mutex for interface %s", mutex_owner_read.name()),
               UVM_MEDIUM)
 
-    `DV_SPINWAIT(claim_mutex_simultaneous();)
+    `DV_SPINWAIT(claim_mutex_simultaneous();, "wait for simultaneous mutex claim",
+                 20_000_000)
 
     // Check that JTAG has control of the mutex
     csr_rd_check(.ptr(m_claim_transition_if), .compare_value(CLAIM_TRANS_VAL),

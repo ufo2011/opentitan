@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,6 @@ class sysrst_ctrl_scoreboard extends cip_base_scoreboard #(
 
   // Intr checks
   local bit [NUM_MAX_INTERRUPTS-1:0] intr_exp;
-  local bit [NUM_MAX_INTERRUPTS-1:0] intr_exp_at_addr_phase;
 
   virtual  sysrst_ctrl_cov_if   cov_if;           // handle to sysrst_ctrl coverage interface
 
@@ -29,8 +28,6 @@ class sysrst_ctrl_scoreboard extends cip_base_scoreboard #(
 
   function void build_phase(uvm_phase phase);
     super.build_phase(phase);
-    // TODO: remove once support alert checking
-    do_alert_check = 0;
     if (!uvm_config_db#(virtual sysrst_ctrl_cov_if)::get(null, "*.env" ,
         "sysrst_ctrl_cov_if", cov_if)) begin
       `uvm_fatal(`gfn, $sformatf("FAILED TO GET HANDLE TO COVER IF"))
@@ -74,11 +71,8 @@ class sysrst_ctrl_scoreboard extends cip_base_scoreboard #(
     bit            data_phase_read = (!write && channel == DataChannel);
     bit            data_phase_write = (write && channel == DataChannel);
 
-    // if access was to a valid csr, get the csr handle
-    if (csr_addr inside {cfg.ral_models[ral_name].csr_addrs}) begin
-      csr = cfg.ral_models[ral_name].default_map.get_reg_by_offset(csr_addr);
-      `DV_CHECK_NE_FATAL(csr, null)
-    end else begin
+    csr = cfg.ral_models[ral_name].get_default_map().get_reg_by_offset(csr_addr);
+    if (csr == null) begin
       `uvm_fatal(`gfn, $sformatf("Access unexpected addr 0x%0h", csr_addr))
     end
 
@@ -89,7 +83,7 @@ class sysrst_ctrl_scoreboard extends cip_base_scoreboard #(
 
     // process the csr req
     // for write, update local variable and fifo at address phase
-    // for read, update predication at address phase and compare at data phase
+    // for read, update prediction at address phase and compare at data phase
     case (csr.get_name())
       // add individual case item for each csr
       "intr_state": begin
@@ -111,7 +105,6 @@ class sysrst_ctrl_scoreboard extends cip_base_scoreboard #(
         end
       end
       "intr_enable": begin
-        // FIXME
       end
       "intr_test": begin
         bit intr_test_val = get_field_val(cfg.ral.intr_test.event_detected, item.a_data);
@@ -135,7 +128,8 @@ class sysrst_ctrl_scoreboard extends cip_base_scoreboard #(
       "com_det_ctl_0","com_det_ctl_1","com_det_ctl_2","com_det_ctl_3": begin
          if (addr_phase_write) begin
            string csr_name = csr.get_name();
-           string str_idx = csr_name.getc(csr_name.len - 1);
+           // get the last character
+           string str_idx = csr_name.substr(csr_name.len - 1, csr_name.len - 1);
            int idx = str_idx.atoi();
            cov_if.cg_combo_detect_det_sample (idx,
              get_field_val(ral.com_det_ctl[idx].detection_timer, item.a_data)
@@ -236,9 +230,19 @@ class sysrst_ctrl_scoreboard extends cip_base_scoreboard #(
       end
       "alert_test": begin
       end
-      // TODO: need support pre-condition
-      "com_pre_sel_ctl_0", "com_pre_sel_ctl_1", "com_pre_sel_ctl_2", "com_pre_sel_ctl_3",
+      "com_pre_sel_ctl_0", "com_pre_sel_ctl_1", "com_pre_sel_ctl_2", "com_pre_sel_ctl_3": begin
+        // covered in sequence
+      end
       "com_pre_det_ctl_0", "com_pre_det_ctl_1", "com_pre_det_ctl_2", "com_pre_det_ctl_3": begin
+         if (addr_phase_write) begin
+           string csr_name = csr.get_name();
+           // get the last character
+           string str_idx = csr_name.substr(csr_name.len - 1, csr_name.len - 1);
+           int idx = str_idx.atoi();
+           cov_if.cg_combo_precondition_det_sample (idx,
+             get_field_val(ral.com_pre_det_ctl[idx].precondition_timer, item.a_data)
+           );
+         end
       end
       default: begin
        `uvm_error(`gfn, $sformatf("invalid csr: %0s", csr.get_full_name()))

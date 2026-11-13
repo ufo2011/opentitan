@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -64,7 +64,7 @@ interface sw_logger_if #(
   // Holds the log data structure.
   typedef struct {
     string             name;         // Name of the SW image.
-    log_severity_e     severity;     // There are 4 - info, warining, error and fatal.
+    log_severity_e     severity;     // There are 4 - info, warning, error and fatal.
     log_verbosity_e    verbosity;    // Verbosity of info logs - currently unsupported.
     string             file;         // Name of the C file invoking the log.
     int                line;         // Line no in the C file from where the log originated.
@@ -94,6 +94,7 @@ interface sw_logger_if #(
   // Indicate when the log was printed and what was the final string.
   event  printed_log_event;
   arg_t  printed_log;
+  arg_t  printed_format;
   arg_t  printed_arg [];
 
   // Sets the sw_name with the provided path.
@@ -145,7 +146,7 @@ interface sw_logger_if #(
   /* helper methods */
   /******************/
   // function that parses the log data file
-  // returns 1 if log data is avaiable, else false
+  // returns 1 if log data is available, else false
   function automatic bit parse_sw_log_file();
     bit result;
 
@@ -155,8 +156,9 @@ interface sw_logger_if #(
       fd = $fopen(sw_log_db_files[sw], "r");
       if (!fd) begin
         `dv_info($sformatf("Failed to open sw log db file %s.", sw_log_db_files[sw]))
-        return 1'b0;
+        continue;
       end
+      `dv_info($sformatf("Loading sw log db file %s ...", sw_log_db_files[sw]))
 
       while (!$feof(fd)) begin
         string        field;
@@ -240,7 +242,7 @@ interface sw_logger_if #(
   endfunction
 
   // Get the sw log fields by parsing line-by-line.
-  // The ref arg value is used to return the retrived field.
+  // The ref arg value is used to return the retrieved field.
   // Function returns the successfulness of the operation.
   function automatic bit get_sw_log_field(int fd, string field, ref string value);
     byte   lf    = 8'ha;
@@ -312,7 +314,7 @@ interface sw_logger_if #(
   function automatic string get_str_at_addr(string sw, addr_data_t addr);
     if (sw_rodata[sw].exists(addr)) return sw_rodata[sw][addr];
     // The string could start midway from an existing addr entry.
-    foreach (sw_rodata[sw][str_addr]) begin
+    foreach (sw_rodata[sw, str_addr]) begin
       addr_data_t limit = sw_rodata[sw][str_addr].len() - 1;
       if (addr inside {[str_addr : str_addr + limit]}) begin
         return sw_rodata[sw][str_addr].substr(addr - str_addr, limit);
@@ -389,6 +391,7 @@ interface sw_logger_if #(
   // print the log captured from the SW.
   function automatic void print_sw_log(sw_log_t sw_log);
     string log_header = sw_log.name;
+    string original_format = sw_log.format;
     if (sw_log.file != "") begin
       // Append the SW file and line to the header.
       log_header = {log_header, "(", sw_log.file, ":",
@@ -531,9 +534,51 @@ interface sw_logger_if #(
       $fwrite(sw_logs_output_fd, "[%15t]: [%0s] %0s\n", $time, log_header, sw_log.format);
     end
 
+    printed_format = original_format;
     printed_log = sw_log.format;
     printed_arg = sw_log.arg;
     ->printed_log_event;
   endfunction
+
+  // Wait for printed_log to match msg
+  //
+  // This task will exit immediately if the log already matches. Otherwise, it will wait for a call
+  // to print_sw_log with that message.
+  //
+  // The task has a timeout argument which defaults to ten milliseconds. If this is nonzero, there
+  // is a timeout with that length.
+  //
+  // To add extra information to timeout error messages, the caller may supply a nonempty
+  // description of the thing we are waiting for. This might be "a thing to happen", giving an error
+  // message that includes "... waiting for a thing to happen".
+  task automatic wait_for_log_message(string       msg,
+                                      int unsigned timeout_ns = 10_000_000, // 10ms
+                                      string       exp_event_description = "");
+    if (string'(printed_log) == msg) return;
+
+    fork : isolation_fork begin
+      fork
+        // Because printed_log_event always gets triggered when printed_log is updated, we can just
+        // check after each time the event is triggered.
+        while (string'(printed_log) != msg) @printed_log_event;
+
+        begin
+          string expected_event;
+
+          if (timeout_ns == 0) wait(0);
+          else #(timeout_ns * 1ns);
+
+          expected_event = (exp_event_description == "") ?
+                           $sformatf("printed_log to be '%0s'", msg) :
+                           $sformatf("%0s (seen when printed_log becomes '%0s')",
+                                     exp_event_description, msg);
+
+          `dv_fatal($sformatf("Timed out after %0d ns waiting for %0s.",
+                              timeout_ns, expected_event))
+        end
+      join_any
+      disable fork;
+    end join
+  endtask
 
 endinterface

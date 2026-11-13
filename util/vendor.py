@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
 '''A tool to copy source code from upstream into this repository.
 
-For an introduction to using this tool, see doc/ug/vendor_hw.md in this
-repository (on the internet at https://docs.opentitan.org/doc/ug/vendor_hw/).
+For an introduction to using this tool, see doc/contributing/hw/vendor.md in this
+repository (on the internet at https://opentitan.org/book/doc/contributing/hw/vendor.html).
 
-For full documentation, see doc/rm/vendor_in_tool.md (on the internet at
-https://docs.opentitan.org/doc/rm/vendor_in_tool).
+For full documentation, see util/doc/vendor.md (on the internet at
+https://opentitan.org/book/util/doc/vendor.html).
 
 '''
 
@@ -29,7 +29,7 @@ import hjson
 
 EXCLUDE_ALWAYS = ['.git']
 
-LOCK_FILE_HEADER = """// Copyright lowRISC contributors.
+LOCK_FILE_HEADER = """// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -293,7 +293,13 @@ class Mapping1:
                         Path('.') if have_patch_dir else None)
 
     @staticmethod
-    def apply_patch(basedir, patchfile):
+    def apply_patch(basepath, patchfile):
+        # Sometimes basepath is actually a file to which the patch should be applied.
+        # In that case, make basedir point to the containing directory instead of the file.
+        if os.path.isfile(basepath):
+            basedir = os.path.dirname(basepath)
+        else:
+            basedir = basepath
         cmd = ['git', 'apply', '--directory', str(basedir), '-p1',
                str(patchfile)]
         if verbose:

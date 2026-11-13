@@ -1,10 +1,12 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-load("//rules:opentitan.bzl", "opentitan_flash_binary")
+load("//rules/opentitan:defs.bzl", "opentitan_binary")
 
 package(default_visibility = ["//visibility:public"])
+
+load("//hw/top:defs.bzl", "opentitan_require_top")
 
 alias(
     name = "aes_serial_aes_testutils",
@@ -15,11 +17,17 @@ alias(
     visibility = ["//visibility:private"],
 )
 
-opentitan_flash_binary(
+opentitan_binary(
     name = "aes_serial",
+    testonly = True,
     srcs = ["aes_serial.c"],
+    exec_env = [
+        "//hw/top_earlgrey:fpga_cw305",
+        "//hw/top_earlgrey:fpga_cw340",
+    ],
+    target_compatible_with = opentitan_require_top(("earlgrey", "englishbreakfast")),
     deps = [
-        "//hw/top_earlgrey/sw/autogen:top_earlgrey",
+        "//hw/top:top_lib",
         "//sw/device/lib/base:memory",
         "//sw/device/lib/dif:aes",
         "//sw/device/lib/runtime:log",
@@ -27,49 +35,68 @@ opentitan_flash_binary(
         "//sw/device/lib/testing/test_framework:check",
         "//sw/device/lib/testing/test_framework:ottf_ld_silicon_creator_slot_a",
         "//sw/device/lib/testing/test_framework:ottf_main",
+        "//sw/device/sca/lib:aes",
         "//sw/device/sca/lib:prng",
-        "//sw/device/sca/lib:sca",
         "//sw/device/sca/lib:simple_serial",
+        "//sw/device/tests/penetrationtests/firmware/lib:pentest_lib",
     ],
 )
 
-opentitan_flash_binary(
+opentitan_binary(
     name = "kmac_serial",
+    testonly = True,
     srcs = ["kmac_serial.c"],
+    exec_env = [
+        "//hw/top_earlgrey:fpga_cw305",
+        "//hw/top_earlgrey:fpga_cw340",
+    ],
+    target_compatible_with = opentitan_require_top("earlgrey"),
     deps = [
-        "//hw/top_earlgrey/sw/autogen:top_earlgrey",
+        "//hw/top:top_lib",
         "//sw/device/lib/base:memory",
         "//sw/device/lib/dif:kmac",
         "//sw/device/lib/runtime:log",
         "//sw/device/lib/testing/test_framework:ottf_ld_silicon_creator_slot_a",
         "//sw/device/lib/testing/test_framework:ottf_main",
         "//sw/device/sca/lib:prng",
-        "//sw/device/sca/lib:sca",
         "//sw/device/sca/lib:simple_serial",
+        "//sw/device/tests/penetrationtests/firmware/lib:pentest_lib",
     ],
 )
 
-opentitan_flash_binary(
+opentitan_binary(
     name = "sha3_serial",
+    testonly = True,
     srcs = ["sha3_serial.c"],
+    exec_env = [
+        "//hw/top_earlgrey:fpga_cw305",
+        "//hw/top_earlgrey:fpga_cw340",
+    ],
+    target_compatible_with = opentitan_require_top("earlgrey"),
     deps = [
-        "//hw/top_earlgrey/sw/autogen:top_earlgrey",
+        "//hw/top:top_lib",
         "//sw/device/lib/base:memory",
         "//sw/device/lib/dif:kmac",
         "//sw/device/lib/runtime:log",
         "//sw/device/lib/testing/test_framework:ottf_ld_silicon_creator_slot_a",
         "//sw/device/lib/testing/test_framework:ottf_main",
         "//sw/device/sca/lib:prng",
-        "//sw/device/sca/lib:sca",
         "//sw/device/sca/lib:simple_serial",
+        "//sw/device/tests/penetrationtests/firmware/lib:pentest_lib",
     ],
 )
 
-opentitan_flash_binary(
+opentitan_binary(
     name = "ecc384_serial",
+    testonly = True,
     srcs = ["ecc384_serial.c"],
+    exec_env = [
+        "//hw/top_earlgrey:fpga_cw305",
+        "//hw/top_earlgrey:fpga_cw340",
+    ],
+    target_compatible_with = opentitan_require_top("earlgrey"),
     deps = [
-        "//hw/top_earlgrey/sw/autogen:top_earlgrey",
+        "//hw/top:top_lib",
         "//sw/device/lib/base:memory",
         "//sw/device/lib/crypto/drivers:otbn",
         "//sw/device/lib/runtime:ibex",
@@ -78,17 +105,23 @@ opentitan_flash_binary(
         "//sw/device/lib/testing/test_framework:ottf_ld_silicon_creator_slot_a",
         "//sw/device/lib/testing/test_framework:ottf_main",
         "//sw/device/sca/lib:prng",
-        "//sw/device/sca/lib:sca",
         "//sw/device/sca/lib:simple_serial",
+        "//sw/device/tests/penetrationtests/firmware/lib:pentest_lib",
         "//sw/otbn/crypto:p384_ecdsa_sca",
     ],
 )
 
-opentitan_flash_binary(
-    name = "ecc_serial",
-    srcs = ["ecc_serial.c"],
+opentitan_binary(
+    name = "ecc256_sign_serial",
+    testonly = True,
+    srcs = ["ecc256_sign_serial.c"],
+    exec_env = [
+        "//hw/top_earlgrey:fpga_cw305",
+        "//hw/top_earlgrey:fpga_cw340",
+    ],
+    target_compatible_with = opentitan_require_top("earlgrey"),
     deps = [
-        "//hw/top_earlgrey/sw/autogen:top_earlgrey",
+        "//hw/top:top_lib",
         "//sw/device/lib/base:abs_mmio",
         "//sw/device/lib/base:memory",
         "//sw/device/lib/crypto/drivers:otbn",
@@ -98,8 +131,8 @@ opentitan_flash_binary(
         "//sw/device/lib/testing/test_framework:ottf_ld_silicon_creator_slot_a",
         "//sw/device/lib/testing/test_framework:ottf_main",
         "//sw/device/sca/lib:prng",
-        "//sw/device/sca/lib:sca",
         "//sw/device/sca/lib:simple_serial",
+        "//sw/device/tests/penetrationtests/firmware/lib:pentest_lib",
         "//sw/otbn/crypto:p256_ecdsa_sca",
     ],
 )

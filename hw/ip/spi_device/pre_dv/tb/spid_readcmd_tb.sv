@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -846,7 +846,8 @@ module tb;
     .b_rdata_o  (spi_mem_rdata),
     .b_rerror_o (spi_mem_rerror),
 
-    .cfg_i      ('0)
+    .cfg_i      (prim_ram_2p_pkg::RAM_2P_CFG_REQ_DEFAULT),
+    .cfg_o      ()
   );
 
 

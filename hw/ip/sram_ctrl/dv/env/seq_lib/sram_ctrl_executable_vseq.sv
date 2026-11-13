@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@ class sram_ctrl_executable_vseq extends sram_ctrl_multiple_keys_vseq;
     super.pre_start();
   endtask
 
-  task req_mem_init(bit wait_done);
+  task req_mem_init(bit wait_done = 1);
     super.req_mem_init(wait_done);
     randomize_and_drive_ifetch_en();
   endtask
@@ -35,6 +35,8 @@ class sram_ctrl_executable_vseq extends sram_ctrl_multiple_keys_vseq;
     csr_wr(ral.exec, en_exec_csr);
     cfg.exec_vif.drive_lc_hw_debug_en(hw_debug_en);
     cfg.exec_vif.drive_otp_en_sram_ifetch(en_sram_ifetch);
+    // Wait a few cycles for synchronizers to settle.
+    cfg.clk_rst_vif.wait_clks(4);
   endtask
 
 endclass

@@ -1,4 +1,4 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,13 @@ cc_library(
     ],
     hdrs = [
         "coremark.h",
+    ],
+    copts = [
+        "-Wno-implicit-fallthrough",
+        "-Wno-strict-prototypes",
+        "-Wno-implicit-int-conversion",
+        "-Wno-sign-conversion",
+        "-Wno-shorten-64-to-32",
     ],
     includes = ["."],
     deps = [

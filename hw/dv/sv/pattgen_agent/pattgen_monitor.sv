@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,10 +24,10 @@ class pattgen_monitor extends dv_base_monitor #(
 
   virtual task run_phase(uvm_phase phase);
     wait(cfg.vif.rst_ni);
-    collect_trans(phase);
+    collect_trans();
   endtask : run_phase
 
-  virtual protected task collect_trans(uvm_phase phase);
+  virtual protected task collect_trans();
     for (uint i = 0; i < NUM_PATTGEN_CHANNELS; i++) begin
       fork
         automatic uint channel = i;
@@ -118,7 +118,7 @@ class pattgen_monitor extends dv_base_monitor #(
     end
   endtask : monitor_ready_to_end
 
-  // collect bits alligned by polarized clock
+  // collect bits aligned by polarized clock
   virtual task get_pattgen_bit(uint channel, output bit bit_o);
     bit stop_thread = 1'b0;
 

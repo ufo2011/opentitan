@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 #include "sw/device/tests/entropy_src_kat_impl.h"
@@ -8,10 +8,9 @@
 #include "sw/device/lib/dif/dif_base.h"
 #include "sw/device/lib/dif/dif_entropy_src.h"
 #include "sw/device/lib/runtime/log.h"
+#include "sw/device/lib/testing/entropy_src_testutils.h"
 #include "sw/device/lib/testing/entropy_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
-
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"  // Generated.
 
 enum {
   /**
@@ -63,23 +62,26 @@ static void flush_sha3_conditioner(dif_entropy_src_t *entropy_src) {
 
   // Read (and discard) the resulting seed.
   uint32_t got[kEntropyFifoBufferSize];
-  for (size_t i = 0; i < ARRAYSIZE(got); ++i) {
+  size_t total = 0;
+  do {
     dif_result_t op_result =
-        dif_entropy_src_non_blocking_read(entropy_src, &got[i]);
+        dif_entropy_src_non_blocking_read(entropy_src, &got[total]);
     if (op_result == kDifUnavailable) {
       fail_count++;
       CHECK(fail_count < kKatTestTimeoutAttempts);
     } else {
       CHECK_DIF_OK(op_result);
+      total++;
     }
-  }
+  } while (total < ARRAYSIZE(got));
 }
 
 void entropy_src_kat_test(dif_entropy_src_t *entropy_src) {
-  entropy_testutils_stop_all();
-  entropy_testutils_fw_override_enable(entropy_src, kEntropyFifoBufferSize,
-                                       /*route_to_firmware=*/true,
-                                       /*bypass_conditioner=*/false);
+  CHECK_STATUS_OK(entropy_testutils_stop_all());
+  CHECK_STATUS_OK(entropy_src_testutils_fw_override_enable(
+      entropy_src, kEntropyFifoBufferSize,
+      /*route_to_firmware=*/true,
+      /*bypass_conditioner=*/false));
 
   // Though most of the entropy_src state is cleared on disable, the
   // SHA3 conditioner accumulates entropy even from aborted seeds. For
@@ -100,15 +102,15 @@ void entropy_src_kat_test(dif_entropy_src_t *entropy_src) {
 
   // Load the input data.
   do {
-    op_result = dif_entropy_src_observe_fifo_write(
+    op_result = dif_entropy_src_fw_ov_data_write(
         entropy_src, kInputMsg + total, ARRAYSIZE(kInputMsg) - total, &count);
-    total += count;
     if (op_result == kDifIpFifoFull) {
       fail_count++;
       CHECK(fail_count < kKatTestTimeoutAttempts);
     } else {
       fail_count = 0;
       CHECK_DIF_OK(op_result);
+      total += count;
     }
   } while (total < ARRAYSIZE(kInputMsg));
 
@@ -117,15 +119,17 @@ void entropy_src_kat_test(dif_entropy_src_t *entropy_src) {
 
   fail_count = 0;
   uint32_t got[kEntropyFifoBufferSize];
-  for (size_t i = 0; i < ARRAYSIZE(got); ++i) {
-    op_result = dif_entropy_src_non_blocking_read(entropy_src, &got[i]);
+  total = 0;
+  do {
+    op_result = dif_entropy_src_non_blocking_read(entropy_src, &got[total]);
     if (op_result == kDifUnavailable) {
       fail_count++;
       CHECK(fail_count < kKatTestTimeoutAttempts);
     } else {
       CHECK_DIF_OK(op_result);
+      total++;
     }
-  }
+  } while (total < ARRAYSIZE(got));
 
   const uint32_t kExpectedDigest[kEntropyFifoBufferSize] = {
       0x1c88164a, 0x5ff456e1, 0x0845dbdf, 0xbe233f8e, 0x7a5a4c1b, 0x5d31356a,

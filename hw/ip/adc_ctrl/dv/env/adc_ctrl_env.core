@@ -1,5 +1,5 @@
 CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 name: "lowrisc:dv:adc_ctrl_env:0.1"
@@ -11,6 +11,7 @@ filesets:
       - lowrisc:dv:cip_lib
     files:
       - adc_ctrl_env_pkg.sv
+      - adc_ctrl_filter_cfg.sv: {is_include_file: true}
       - adc_ctrl_env_cfg.sv: {is_include_file: true}
       - adc_ctrl_env_var_filter_cfg.sv : {is_include_file: true}
       - adc_ctrl_env_cov.sv: {is_include_file: true}
@@ -21,7 +22,7 @@ filesets:
       - seq_lib/adc_ctrl_base_vseq.sv: {is_include_file: true}
       - seq_lib/adc_ctrl_common_vseq.sv: {is_include_file: true}
       - seq_lib/adc_ctrl_smoke_vseq.sv: {is_include_file: true}
-      - seq_lib/adc_ctrl_random_ramp_vseq.sv: {is_include_file: true}
+      - seq_lib/adc_ctrl_channel_ramp_vseq.sv: {is_include_file: true}
       - seq_lib/adc_ctrl_filters_polled_vseq.sv: {is_include_file: true}
       - seq_lib/adc_ctrl_filters_interrupt_vseq.sv: {is_include_file: true}
       - seq_lib/adc_ctrl_filters_wakeup_vseq.sv: {is_include_file: true}
@@ -40,10 +41,11 @@ generate:
     parameters:
       name: adc_ctrl
       ip_hjson: ../../data/adc_ctrl.hjson
+    position: prepend
 
 targets:
   default:
     filesets:
       - files_dv
     generate:
-      - ral
+      - "!chip_level ? (ral)"

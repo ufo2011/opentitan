@@ -1,5 +1,5 @@
 CAPI=2:
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,8 +16,11 @@ filesets:
       - lowrisc:prim:assert
       - lowrisc:prim:buf
       - lowrisc:prim:flop
+      - lowrisc:prim:flop_2sync
+      - lowrisc:prim:xor2
+      - lowrisc:prim:sec_anchor
+      - lowrisc:prim:mubi_pkg
     files:
-      - rtl/prim_mubi_pkg.sv
 % for n in range(1, n_max_nibbles+1):
       - rtl/prim_mubi${4*n}_sender.sv
       - rtl/prim_mubi${4*n}_sync.sv
@@ -29,8 +32,6 @@ filesets:
     depend:
       # common waivers
       - lowrisc:lint:common
-    files:
-    file_type: vlt
 
   files_ascentlint_waiver:
     depend:
@@ -45,12 +46,18 @@ filesets:
       # common waivers
       - lowrisc:lint:common
 
+  files_slang_waiver:
+    depend:
+      # common waivers
+      - lowrisc:lint:common
+
 targets:
   default: &default_target
     filesets:
       - tool_verilator   ? (files_verilator_waiver)
       - tool_ascentlint  ? (files_ascentlint_waiver)
       - tool_veriblelint ? (files_veriblelint_waiver)
+      - tool_slang       ? (files_slang_waiver)
       - files_rtl
 
   lint:

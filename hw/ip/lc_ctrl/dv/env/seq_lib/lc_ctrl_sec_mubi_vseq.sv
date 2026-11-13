@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -15,7 +15,7 @@ class lc_ctrl_sec_mubi_vseq extends lc_ctrl_errors_vseq;
     $onehot(
         {
           err_inj.clk_byp_rsp_mubi_err,
-          err_inj.flash_rma_rsp_mubi_err,
+          err_inj.nvm_rma_rsp_mubi_err,
           err_inj.otp_secrets_valid_mubi_err,
           err_inj.otp_test_tokens_valid_mubi_err,
           err_inj.otp_rma_token_valid_mubi_err

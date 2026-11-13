@@ -1,10 +1,10 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sw/device/silicon_creator/lib/epmp_defs.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey_memory.h"
+#include "hw/top/top_memory.h"
 
 /**
  * Helper macro to move v into the correct position to set the pmp{N*4+i}cfg
@@ -15,7 +15,7 @@
  *   li   t0, CFG_INDEX(5 % 4, v)
  *   csrw pmpcfg1, t0
  */
-#define CFG_INDEX(i, v) ((v) << (i*8))
+#define CFG_INDEX(i, v) ((v) << ((i)*8))
 
 /**
  * Encode address for Top-Of-Range addressing mode.
@@ -61,26 +61,35 @@ rom_epmp_init:
   la   t0, _epmp_text_tor_hi
   csrw pmpaddr1, t0
 
-  // ROM
-  li   t0, NAPOT(TOP_EARLGREY_ROM_BASE_ADDR, TOP_EARLGREY_ROM_SIZE_BYTES)
+  // At chip reset entry 2 of the epmp register was responsible for read /
+  // executable permissions for the first 2KiB of ROM (see ibex_pmp_reset_pkg.sv).
+  // To avoid a deadlock, entry 1 must cover the initial section of the ROM before
+  // entry 2 is modified. Otherwise the executable permission for this file will
+  // be lost.
+  li   t0, CFG_INDEX(1  % 4, EPMP_CFG_A_TOR   | EPMP_CFG_LRX) | /* ROM TEXT    */ \
+           CFG_INDEX(2  % 4, EPMP_CFG_A_TOR   | EPMP_CFG_LR)    /* ROM         */
+  csrw pmpcfg0, t0
+
+  // ROM the lower bound for TOR is pmpaddr1, already set above to the end of ROM TEXT.
+  li   t0, TOR(TOP_ROM_CTRL_ROM_BASE_ADDR + TOP_ROM_CTRL_ROM_SIZE_BYTES)
   csrw pmpaddr2, t0
 
   // ROM_EXT TEXT (configured after signature verification)
   csrw pmpaddr3, zero // ROM_EXT TEXT low
   csrw pmpaddr4, zero // ROM_EXT TEXT high
 
-  // eFLASH
-  li   t0, NAPOT(TOP_EARLGREY_EFLASH_BASE_ADDR, TOP_EARLGREY_EFLASH_SIZE_BYTES)
+  // NVM
+  li   t0, NAPOT(TOP_NVM_BASE_ADDR, TOP_NVM_SIZE_BYTES)
   csrw pmpaddr5, t0
 
   // MMIO
-  li   t0, TOR(TOP_EARLGREY_MMIO_BASE_ADDR)
+  li   t0, TOR(TOP_MMIO_BASE_ADDR)
   csrw pmpaddr10, t0
-  li   t0, TOR(TOP_EARLGREY_MMIO_BASE_ADDR + TOP_EARLGREY_MMIO_SIZE_BYTES)
+  li   t0, TOR(TOP_MMIO_BASE_ADDR + TOP_MMIO_SIZE_BYTES)
   csrw pmpaddr11, t0
 
   // Debug ROM
-  li   t0, NAPOT(TOP_EARLGREY_RV_DM_MEM_BASE_ADDR, TOP_EARLGREY_RV_DM_MEM_SIZE_BYTES)
+  li   t0, NAPOT(TOP_RV_DM_MEM_BASE_ADDR, TOP_RV_DM_MEM_SIZE_BYTES)
   csrw pmpaddr13, t0
 
   // Stack guard
@@ -88,18 +97,21 @@ rom_epmp_init:
   csrw pmpaddr14, t0
 
   // RAM
-  li   t0, NAPOT(TOP_EARLGREY_RAM_MAIN_BASE_ADDR, TOP_EARLGREY_RAM_MAIN_SIZE_BYTES)
+  li   t0, NAPOT(TOP_SRAM_CTRL_MAIN_RAM_BASE_ADDR, TOP_SRAM_CTRL_MAIN_RAM_SIZE_BYTES)
   csrw pmpaddr15, t0
 
-  // Set PMP configuration registers.
-  li   t0, CFG_INDEX(1  % 4, EPMP_CFG_A_TOR   | EPMP_CFG_LRX) | /* ROM TEXT    */ \
-           CFG_INDEX(2  % 4, EPMP_CFG_A_NAPOT | EPMP_CFG_LR)    /* ROM         */
-  li   t1, CFG_INDEX(5  % 4, EPMP_CFG_A_NAPOT | EPMP_CFG_LR)    /* eFLASH      */
+  // Secondary RAM
+  li   t0, NAPOT(TOP_SRAM_CTRL_SEC_RAM_BASE_ADDR, TOP_SRAM_CTRL_SEC_RAM_SIZE_BYTES)
+  csrw pmpaddr12, t0
+
+  // Set the remaining PMP configuration registers (pmpcfg0 was already set
+  // above).
+  li   t1, CFG_INDEX(5  % 4, EPMP_CFG_A_NAPOT | EPMP_CFG_LR)    /* NVM         */
   li   t2, CFG_INDEX(11 % 4, EPMP_CFG_A_TOR   | EPMP_CFG_LRW)   /* MMIO        */
-  li   t3, CFG_INDEX(13 % 4, EPMP_CFG_A_NAPOT | EPMP_CFG_LRWX)| /* Debug ROM   */ \
-           CFG_INDEX(14 % 4, EPMP_CFG_A_NA4   | EPMP_CFG_L)   | /* Stack Guard */ \
-           CFG_INDEX(15 % 4, EPMP_CFG_A_NAPOT | EPMP_CFG_LRW)   /* RAM         */
-  csrw pmpcfg0, t0
+  li   t3, CFG_INDEX(12 % 4, EPMP_CFG_A_NAPOT | EPMP_CFG_LRW) | /* Secondary RAM */ \
+           CFG_INDEX(13 % 4, EPMP_CFG_A_NAPOT | EPMP_CFG_LRWX)| /* Debug ROM     */ \
+           CFG_INDEX(14 % 4, EPMP_CFG_A_NA4   | EPMP_CFG_L)   | /* Stack Guard   */ \
+           CFG_INDEX(15 % 4, EPMP_CFG_A_NAPOT | EPMP_CFG_LRW)   /* RAM           */
   csrw pmpcfg1, t1
   csrw pmpcfg2, t2
   csrw pmpcfg3, t3

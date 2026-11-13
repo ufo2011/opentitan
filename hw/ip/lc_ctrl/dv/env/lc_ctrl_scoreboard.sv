@@ -1,12 +1,14 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 `define GMV32(csr) 32'(`gmv(csr))
 
+`uvm_analysis_imp_decl(_kmac_req)
+
 class lc_ctrl_scoreboard extends cip_base_scoreboard #(
   .CFG_T(lc_ctrl_env_cfg),
-  .RAL_T(lc_ctrl_reg_block),
+  .RAL_T(lc_ctrl_regs_reg_block),
   .COV_T(lc_ctrl_env_cov)
 );
   `uvm_component_utils(lc_ctrl_scoreboard)
@@ -22,15 +24,16 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
   protected uint m_otp_prog_cnt;
   event check_lc_output_ev;
 
+  // An import for request packets sent to KMAC
+  uvm_analysis_imp_kmac_req #(kmac_app_req_packet_item, lc_ctrl_scoreboard) m_kmac_req_imp;
+
   // TLM agent fifos
   uvm_tlm_analysis_fifo #(push_pull_item #(
     .HostDataWidth  (OTP_PROG_HDATA_WIDTH),
     .DeviceDataWidth(OTP_PROG_DDATA_WIDTH)
   )) otp_prog_fifo;
-  uvm_tlm_analysis_fifo #(kmac_app_item) kmac_app_req_fifo;
-  uvm_tlm_analysis_fifo #(kmac_app_item) kmac_app_rsp_fifo;
-  uvm_tlm_analysis_fifo #(alert_esc_seq_item) esc_wipe_secrets_fifo;
-  uvm_tlm_analysis_fifo #(alert_esc_seq_item) esc_scrap_state_fifo;
+  uvm_tlm_analysis_fifo #(esc_seq_item) esc_wipe_secrets_fifo;
+  uvm_tlm_analysis_fifo #(esc_seq_item) esc_scrap_state_fifo;
   uvm_tlm_analysis_fifo #(jtag_riscv_item) jtag_riscv_fifo;
 
   `uvm_component_new
@@ -38,8 +41,7 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
   function void build_phase(uvm_phase phase);
     super.build_phase(phase);
     otp_prog_fifo = new("otp_prog_fifo", this);
-    kmac_app_req_fifo = new("kmac_app_req_fifo", this);
-    kmac_app_rsp_fifo = new("kmac_app_rsp_fifo", this);
+    m_kmac_req_imp = new("m_kmac_req_imp", this);
     esc_wipe_secrets_fifo = new("esc_wipe_secrets_fifo", this);
     esc_scrap_state_fifo = new("esc_scrap_state_fifo", this);
     jtag_riscv_fifo = new("jtag_riscv_fifo", this);
@@ -55,8 +57,6 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
     fork
       check_lc_output();
       process_otp_prog_rsp();
-      process_kmac_app_req();
-      process_kmac_app_rsp();
       if (cfg.jtag_riscv_map != null) process_jtag_riscv();
     join_none
   endtask
@@ -64,10 +64,10 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
   virtual task check_lc_output();
     forever begin
       @(posedge cfg.pwr_lc_vif.pins[LcPwrDoneRsp] && cfg.en_scb) begin
-        // TODO: add coverage
         dec_lc_state_e lc_state = dec_lc_state(lc_state_e'(cfg.lc_ctrl_vif.otp_i.state));
-        lc_outputs_t   exp_lc_o = EXP_LC_OUTPUTS[int'(lc_state)];
-        string         err_msg = $sformatf("LC_St %0s", lc_state.name);
+        lc_outputs_t    exp_lc_o = EXP_LC_OUTPUTS[int'(lc_state)];
+        lc_keymgr_div_t exp_div_o = cfg.parameters_cfg.get_exp_div(lc_state);
+        string          err_msg = $sformatf("LC_St %0s", lc_state.name);
         cfg.clk_rst_vif.wait_n_clks(1);
 
         // lc_creator_seed_sw_rw_en_o is ON only when device has NOT been personalized or RMA state
@@ -79,15 +79,21 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
           exp_lc_o.lc_seed_hw_rd_en_o = lc_ctrl_pkg::Off;
         end
 
+        // lc_rma_state_o is OFF when not in RMA state
+        if (lc_state != DecLcStRma) begin
+          exp_lc_o.lc_rma_state_o = lc_ctrl_pkg::Off;
+        end
+
         // lc_seed_hw_rd_en copies otp_secrets_valid in certain states
         if (cfg.err_inj.otp_secrets_valid_mubi_err && lc_state_e'(cfg.lc_ctrl_vif.otp_i.state)
             inside {LcStProd, LcStProdEnd, LcStDev}) begin
           exp_lc_o.lc_seed_hw_rd_en_o = cfg.otp_secrets_valid;
-          exp_lc_o.lc_creator_seed_sw_rw_en_o = ~cfg.otp_secrets_valid;
+          exp_lc_o.lc_creator_seed_sw_rw_en_o = lc_tx_t'(~cfg.otp_secrets_valid);
         end
 
         if (cfg.escalate_injected) begin
           exp_lc_o = EXP_LC_OUTPUTS[int'(DecLcStEscalate)];
+          exp_div_o = cfg.parameters_cfg.keymgr_div_invalid;
         end
 
         fork
@@ -95,7 +101,8 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
             // Delay a some of cycles to allow escalate to be recognised
             if (cfg.escalate_injected) cfg.clk_rst_vif.wait_clks(5);
             ->check_lc_output_ev;
-            check_lc_outputs(exp_lc_o, {$sformatf("Called from line: %0d, ", `__LINE__), err_msg});
+            check_lc_outputs(exp_lc_o, exp_div_o,
+                             {$sformatf("Called from line: %0d, ", `__LINE__), err_msg});
           end
         join_none
 
@@ -167,39 +174,43 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
     end
   endtask
 
-  // verilog_format: off - avoid bad formatting
-  virtual task process_kmac_app_req();
-    forever begin
-      bit [127:0] token_data;
-      kmac_app_item item_rcv;
-      kmac_app_req_fifo.get(item_rcv);
-      `uvm_info(`gfn, item_rcv.sprint(uvm_default_line_printer), UVM_HIGH)
+  function void write_kmac_req(kmac_app_req_packet_item packet);
+    bit [127:0]   token_data;
+    byte unsigned req_bytes[$];
+    int unsigned  nonzero_share1_indices[$];
 
-      // Should be 16 bytes of data
-      `DV_CHECK_EQ_FATAL(item_rcv.byte_data_q.size(), 16)
-      // Unpack token data from request
-      for(int i=0; i<16; i++) begin
-        token_data[i*8 +: 8] = item_rcv.byte_data_q[i];
-      end
-      `uvm_info(`gfn, $sformatf("process_kmac_app_req: token received %h", token_data), UVM_MEDIUM)
+    packet.get_share_byte_queue(0, req_bytes);
+    if (packet.get_reqs_with_nonzero_share(1, nonzero_share1_indices)) begin
+      `uvm_error(get_full_name(),
+                 $sformatf("Packet had %0d requests with a nonzero share1 (indices: %0p).",
+                           nonzero_share1_indices.size(), nonzero_share1_indices))
+    end
 
-      if (cfg.en_scb) begin
-        `DV_CHECK_EQ(token_data, {`GMV32(ral.transition_token[3]),
-                                  `GMV32(ral.transition_token[2]),
-                                  `GMV32(ral.transition_token[1]),
-                                  `GMV32(ral.transition_token[0])})
+    if (req_bytes.size() != 16) begin
+      `uvm_error(get_full_name(),
+                 $sformatf("Expected a 16 byte KMAC request but actually saw length %0d.",
+                           req_bytes.size()))
+      return;
+    end
+
+    // Unpack token data from request
+    for(int i=0; i<16; i++) begin
+      token_data[i*8 +: 8] = req_bytes[i];
+    end
+    `uvm_info(`gfn, $sformatf("process_kmac_app_req: token received %h", token_data), UVM_MEDIUM)
+
+    if (cfg.en_scb) begin
+      bit [127:0] exp_token;
+      exp_token = {`GMV32(ral.transition_token[3]), `GMV32(ral.transition_token[2]),
+                   `GMV32(ral.transition_token[1]), `GMV32(ral.transition_token[0])};
+      if (token_data != exp_token) begin
+        `uvm_error(get_full_name(),
+                   $sformatf({"Token data doesn't match the transition token registers. ",
+                              "Value sent to KMAC was 0x%0h. Registers contain 0x%0h."},
+                             token_data, exp_token))
       end
     end
-  endtask
-  // verilog_format: on
-
-  virtual task process_kmac_app_rsp();
-    forever begin
-      kmac_app_item item_rcv;
-      kmac_app_rsp_fifo.get(item_rcv);
-      `uvm_info(`gfn, item_rcv.sprint(uvm_default_line_printer), UVM_HIGH)
-    end
-  endtask
+  endfunction
 
   virtual task process_jtag_riscv();
     jtag_riscv_item      jt_item;
@@ -221,8 +232,8 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
         tl_item.d_opcode = (jt_item.op === DmiRead) ? tlul_pkg::Get : tlul_pkg::PutFullData;
 
 
-        process_tl_access(tl_item, AddrChannel, "lc_ctrl_reg_block");
-        process_tl_access(tl_item, DataChannel, "lc_ctrl_reg_block");
+        process_tl_access(tl_item, AddrChannel, "lc_ctrl_regs_reg_block");
+        process_tl_access(tl_item, DataChannel, "lc_ctrl_regs_reg_block");
 
 
       end
@@ -231,6 +242,7 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
 
   // check lc outputs, default all off
   virtual function void check_lc_outputs(lc_outputs_t exp_o = '{default: lc_ctrl_pkg::Off},
+                                         lc_keymgr_div_t exp_div_o = '0,
                                          string msg = "expect all output OFF");
     `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_dft_en_o, exp_o.lc_dft_en_o, msg)
     `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_nvm_debug_en_o, exp_o.lc_nvm_debug_en_o, msg)
@@ -242,27 +254,26 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
     `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_iso_part_sw_rd_en_o, exp_o.lc_iso_part_sw_rd_en_o, msg)
     `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_iso_part_sw_wr_en_o, exp_o.lc_iso_part_sw_wr_en_o, msg)
     `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_seed_hw_rd_en_o, exp_o.lc_seed_hw_rd_en_o, msg)
+    `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_rma_state_o, exp_o.lc_rma_state_o, msg)
     `DV_CHECK_EQ(cfg.lc_ctrl_vif.lc_creator_seed_sw_rw_en_o, exp_o.lc_creator_seed_sw_rw_en_o, msg)
     `DV_CHECK_EQ(cfg.lc_ctrl_vif.clk_byp_req_o, exp_clk_byp_req, msg)
+    `DV_CHECK_EQ(cfg.lc_ctrl_vif.keymgr_div_o, exp_div_o, msg)
   endfunction
 
   virtual task process_tl_access(tl_seq_item item, tl_channels_e channel, string ral_name);
-    uvm_reg        csr;
-    bit            do_read_check = 1'b0;
-    bit            write = item.is_write();
-    uvm_reg_addr_t csr_addr = cfg.ral_models[ral_name].get_word_aligned_addr(item.a_addr);
-    lc_outputs_t   exp = '{default: lc_ctrl_pkg::Off};
+    uvm_reg         csr;
+    bit             do_read_check = 1'b0;
+    bit             write = item.is_write();
+    uvm_reg_addr_t  csr_addr = cfg.ral_models[ral_name].get_word_aligned_addr(item.a_addr);
+    lc_outputs_t    exp = '{default: lc_ctrl_pkg::Off};
+    lc_keymgr_div_t exp_div = cfg.parameters_cfg.keymgr_div_invalid;
+    bit             addr_phase_read = (!write && channel == AddrChannel);
+    bit             addr_phase_write = (write && channel == AddrChannel);
+    bit             data_phase_read = (!write && channel == DataChannel);
+    bit             data_phase_write = (write && channel == DataChannel);
 
-    bit            addr_phase_read = (!write && channel == AddrChannel);
-    bit            addr_phase_write = (write && channel == AddrChannel);
-    bit            data_phase_read = (!write && channel == DataChannel);
-    bit            data_phase_write = (write && channel == DataChannel);
-
-    // if access was to a valid csr, get the csr handle
-    if (csr_addr inside {cfg.ral_models[ral_name].csr_addrs}) begin
-      csr = cfg.ral_models[ral_name].default_map.get_reg_by_offset(csr_addr);
-      `DV_CHECK_NE_FATAL(csr, null)
-    end else begin
+    csr = cfg.ral_models[ral_name].get_default_map().get_reg_by_offset(csr_addr);
+    if (csr == null) begin
       `uvm_fatal(`gfn, $sformatf("Access unexpected addr 0x%0h", csr_addr))
     end
 
@@ -277,6 +288,12 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
               if (item.a_data[0]) exp_clk_byp_req = lc_ctrl_pkg::On;
               else                exp_clk_byp_req = lc_ctrl_pkg::Off;
             end
+          end
+          // In case the volatile unlock feature is disabled, the register is hardwired to zero.
+          // Since the RAL models this as an RW register, we have to override that model here.
+          if (!`SEC_VOLATILE_RAW_UNLOCK_EN) begin
+            bit [DataWidth-1:0] mask = 'h2;
+            item.a_data &= ~mask;
           end
         end
         default: begin
@@ -333,13 +350,22 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
                           .value(predict_otp_vendor_test_status()), .kind(UVM_PREDICT_READ)))
         end
 
-        "hw_rev": begin
+        "hw_revision0": begin
           `DV_CHECK_FATAL(
-              ral.hw_rev.chip_rev.predict(
-              .value(LcCtrlChipRev[lc_ctrl_reg_pkg::HwRevFieldWidth-1:0]), .kind(UVM_PREDICT_READ)))
+              ral.hw_revision0.silicon_creator_id.predict(
+              .value(LcCtrlSiliconCreatorId[lc_ctrl_reg_pkg::SiliconCreatorIdWidth-1:0]),
+              .kind(UVM_PREDICT_READ)))
           `DV_CHECK_FATAL(
-              ral.hw_rev.chip_gen.predict(
-              .value(LcCtrlChipGen[lc_ctrl_reg_pkg::HwRevFieldWidth-1:0]), .kind(UVM_PREDICT_READ)))
+              ral.hw_revision0.product_id.predict(
+              .value(LcCtrlProductId[lc_ctrl_reg_pkg::ProductIdWidth-1:0]),
+              .kind(UVM_PREDICT_READ)))
+        end
+
+        "hw_revision1": begin
+          `DV_CHECK_FATAL(
+              ral.hw_revision1.revision_id.predict(
+              .value(LcCtrlRevisionId[lc_ctrl_reg_pkg::RevisionIdWidth-1:0]),
+              .kind(UVM_PREDICT_READ)))
         end
 
         default: begin
@@ -390,7 +416,7 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
           begin
             // Wait for escalate to be recognise
             if (cfg.err_inj.security_escalation_err) cfg.clk_rst_vif.wait_clks(5);
-            check_lc_outputs(exp, $sformatf("Called from line: %0d", `__LINE__));
+            check_lc_outputs(exp, exp_div, $sformatf("Called from line: %0d", `__LINE__));
           end
         join_none
       end
@@ -515,7 +541,7 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
     const lc_cnt_e LcCntIn = lc_cnt_e'(cfg.lc_ctrl_vif.otp_i.count);
     // Incremented LcCntIn - next() works because of encoding method
     const lc_cnt_e LcCntInInc = LcCntIn.next();
-    // TODO needs expanding for JTAG registers
+    // ICEBOX(#18078) - unclear what this TODO refers to (needs expanding for JTAG registers)
     const
     lc_state_e
     LcTargetState = encode_lc_state(
@@ -537,7 +563,10 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
     end
 
     // Transition to SCRAP state always programs LcCnt24
-    if (LcTargetState == LcStScrap) lc_cnt_exp = LcCnt24;
+    if (LcTargetState == LcStScrap) begin
+      lc_cnt_exp = LcCnt24;
+      lc_state_exp = LcStScrap;
+    end
 
     `uvm_info(`gfn, $sformatf(
               "predict_otp_prog_req: state=%s count=%s", lc_state_exp.name(), lc_cnt_exp.name),
@@ -580,8 +609,8 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
   // this function check if the triggered alert is expected
   // to turn off this check, user can set `do_alert_check` to 0
   // We overload this to trigger events in the config object when an alert is triggered
-  virtual function void process_alert(string alert_name, alert_esc_seq_item item);
-    if (item.alert_handshake_sta == AlertReceived) begin
+  virtual function void process_alert(string alert_name, alert_seq_item item);
+    if (item.m_alert_handshake_sta == AlertReceived) begin
       case (alert_name)
         "fatal_prog_error": begin
           ->cfg.fatal_prog_error_ev;
@@ -608,6 +637,9 @@ class lc_ctrl_scoreboard extends cip_base_scoreboard #(
     // Clear OTP program count
     m_otp_prog_cnt = 0;
     exp_clk_byp_req = lc_ctrl_pkg::Off;
+
+    // Update the JTAG DTM register model with the reset
+    cfg.m_jtag_dtm_ral.reset(kind);
   endfunction
 
   function void check_phase(uvm_phase phase);

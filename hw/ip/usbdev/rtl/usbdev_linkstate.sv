@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -18,7 +18,7 @@ module usbdev_linkstate (
   input  logic usb_pullup_en_i,
   input  logic rx_idle_det_i,
   input  logic rx_j_det_i,
-  input  logic sof_valid_i,
+  input  logic sof_detected_i,
   input  logic resume_link_active_i, // pulse
 
   output logic link_disconnect_o,  // level
@@ -178,7 +178,7 @@ module usbdev_linkstate (
         // Park here before starting to count towards not seeing SOF. Wait for
         // the end of resume signaling before expecting SOF. The host will
         // return the link to idle after a low-speed EOP. Instead of trying to
-        // capture the termination of resume signaling direclty, wait for
+        // capture the termination of resume signaling directly, wait for
         // any J / idle symbol (or a bus reset).
         LinkResuming: begin
           if (rx_j_det_i | ev_reset) begin
@@ -190,11 +190,11 @@ module usbdev_linkstate (
         // Active but not yet seen a frame
         // One reason for getting stuck here is the host thinks it is a LS link
         // which could happen if the flipped bit does not match the actual pins
-        // Annother is the SI is bad so good data is not recovered from the link
+        // Another is the SI is bad so good data is not recovered from the link
         LinkActiveNoSOF: begin
           if (ev_bus_inactive) begin
             link_state_d = LinkSuspended;
-          end else if (sof_valid_i) begin
+          end else if (sof_detected_i) begin
             link_state_d = LinkActive;
           end
         end
@@ -238,7 +238,7 @@ module usbdev_linkstate (
   /////////////////////
   // Reset detection //
   /////////////////////
-  //  Here we clean up the SE0 signal and generate a signle ev_reset at
+  //  Here we clean up the SE0 signal and generate a single ev_reset at
   //  the end of a valid reset
 
   always_comb begin : proc_rst_fsm
@@ -367,7 +367,7 @@ module usbdev_linkstate (
     if (!rst_ni) begin
       missed_sof_count <= '0;
     end else begin
-      if (sof_valid_i || !link_active_o || link_reset) begin
+      if (sof_detected_i || !link_active_o || link_reset) begin
         missed_sof_count <= '0;
       end else if (sof_missed_o && !host_lost_o) begin
         missed_sof_count <= missed_sof_count + 1;
@@ -380,7 +380,7 @@ module usbdev_linkstate (
     if (!rst_ni) begin
       missing_sof_timer <= '0;
     end else begin
-      if (sof_missed_o || sof_valid_i || !link_active_o || link_reset) begin
+      if (sof_missed_o || sof_detected_i || !link_active_o || link_reset) begin
         missing_sof_timer <= '0;
       end else if (us_tick_i) begin
         missing_sof_timer <= missing_sof_timer + 1;

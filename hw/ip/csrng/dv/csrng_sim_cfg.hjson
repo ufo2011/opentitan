@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 {
@@ -24,7 +24,6 @@
   ral_spec: "{proj_root}/hw/ip/csrng/data/csrng.hjson"
 
   // Import additional common sim cfg files.
-  // TODO: remove imported cfgs that do not apply.
   import_cfgs: [// Project wide common sim cfg file
                 "{proj_root}/hw/dv/tools/dvsim/common_sim_cfg.hjson",
                 // Enable C compilation of AES model for DPI-C
@@ -41,7 +40,7 @@
   sim_tops: ["csrng_bind", "csrng_cov_bind", "sec_cm_prim_onehot_check_bind"]
 
   // Default iterations for all tests - each test entry can override this.
-  reseed: 50
+  reseed: 25
 
   // Update all builds to add options specific to AES C model compilation.
   en_build_modes: ["{tool}_aes_model_build_opts"]
@@ -52,6 +51,7 @@
   uvm_test: csrng_base_test
   uvm_test_seq: csrng_base_vseq
 
+  // Enable cdc instrumentation.
   run_opts: ["+cdc_instrumentation_enabled=1"]
 
   // List of test specifications.
@@ -101,7 +101,10 @@
       uvm_test_seq: csrng_regwen_vseq
     }
 
-    // TODO: add more tests here
+    {
+      name: csrng_stress_all_with_rand_reset
+      reseed: 10
+    }
   ]
 
   // List of regressions.

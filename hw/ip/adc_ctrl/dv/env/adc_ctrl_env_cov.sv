@@ -1,9 +1,9 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Covergoups that are dependent on run-time parameters that may be available
+ * Covergroups that are dependent on run-time parameters that may be available
  * only in build_phase can be defined here
  * Covergroups may also be wrapped inside helper classes if needed.
  */
@@ -20,12 +20,12 @@ class adc_ctrl_filter_cg_wrapper #(
   covergroup adc_ctrl_filter_cg(
       int channel, int filter
   ) with function sample (
-      adc_ctrl_filter_cfg_t cfg, bit is_interrupt = 0, bit is_wakeup = 0, bit clk_gate = 0
+      adc_ctrl_filter_cfg cfg, bit is_interrupt = 0, bit is_wakeup = 0, bit clk_gate = 0
   );
     option.name = $sformatf("adc_ctrl_filter_cg_%0d_%0d", channel, filter);
     option.per_instance = 1;
 
-    cond_cp: coverpoint cfg.cond;
+    match_outside_cp: coverpoint cfg.match_outside;
     min_v_cp: coverpoint cfg.min_v {
       bins minimum = {0};
       bins values[NUMBER_VALUES] = {[1 : (2 ** FILTER_WIDTH - 2)]};
@@ -36,14 +36,14 @@ class adc_ctrl_filter_cg_wrapper #(
       bins values[NUMBER_VALUES] = {[1 : (2 ** FILTER_WIDTH - 2)]};
       bins maximum = {2 ** FILTER_WIDTH - 1};
     }
-    en_cp: coverpoint cfg.en;
+    en_cp: coverpoint cfg.enabled;
     interrupt_cp: coverpoint is_interrupt;
     wakeup_cp: coverpoint is_wakeup;
     clk_gate_cp: coverpoint clk_gate;
-    intr_min_v_cond_xp: cross interrupt_cp, min_v_cp, cond_cp;
-    intr_max_v_cond_xp: cross interrupt_cp, max_v_cp, cond_cp;
-    wakeup_min_v_cond_xp: cross wakeup_cp, min_v_cp, cond_cp;
-    wakeup_max_v_cond_xp: cross wakeup_cp, max_v_cp, cond_cp;
+    intr_min_v_cond_xp: cross interrupt_cp, min_v_cp, match_outside_cp;
+    intr_max_v_cond_xp: cross interrupt_cp, max_v_cp, match_outside_cp;
+    wakeup_min_v_cond_xp: cross wakeup_cp, min_v_cp, match_outside_cp;
+    wakeup_max_v_cond_xp: cross wakeup_cp, max_v_cp, match_outside_cp;
     wakeup_gated_xp : cross wakeup_cp, clk_gate_cp;
   endgroup
 
@@ -81,7 +81,7 @@ class adc_ctrl_env_cov extends cip_base_env_cov #(
       [ADC_CTRL_CHANNELS] [ADC_CTRL_NUM_FILTERS];
 
 
-  function new(string name = "adc_ctrl_env_cov", uvm_component parent = null);
+  function new(string name, uvm_component parent = null);
     super.new(name, parent);
     adc_ctrl_testmode_cg = new();
   endfunction
@@ -96,7 +96,7 @@ class adc_ctrl_env_cov extends cip_base_env_cov #(
   endfunction : build_phase
 
   // Sample filter coverage
-  virtual function void sample_filter_cov(int channel, int filter, adc_ctrl_filter_cfg_t cfg,
+  virtual function void sample_filter_cov(int channel, int filter, adc_ctrl_filter_cfg cfg,
                                           bit is_interrupt = 0, bit is_wakeup = 0,
                                           bit clk_gate = 0);
     adc_ctrl_filter_cg_wrapper_insts[channel][filter].adc_ctrl_filter_cg.sample(cfg, is_interrupt,

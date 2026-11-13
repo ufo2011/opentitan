@@ -3,16 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "spike_cosim.h"
-#include "riscv/config.h"
-#include "riscv/decode.h"
-#include "riscv/devices.h"
-#include "riscv/log_file.h"
-#include "riscv/processor.h"
-#include "riscv/simif.h"
 
 #include <cassert>
 #include <iostream>
 #include <sstream>
+
+#include "riscv/config.h"
+#include "riscv/decode.h"
+#include "riscv/devices.h"
+#include "riscv/log_file.h"
+#include "riscv/mmu.h"
+#include "riscv/processor.h"
+#include "riscv/simif.h"
 
 // For a short time, we're going to support building against version
 // ibex-cosim-v0.2 (20a886c) and also ibex-cosim-v0.3 (9af9730). Unfortunately,
@@ -35,8 +37,12 @@ SpikeCosim::SpikeCosim(const std::string &isa_string, uint32_t start_pc,
                        uint32_t start_mtvec, const std::string &trace_log_path,
                        bool secure_ibex, bool icache_en,
                        uint32_t pmp_num_regions, uint32_t pmp_granularity,
-                       uint32_t mhpm_counter_num)
-    : nmi_mode(false), pending_iside_error(false), insn_cnt(0) {
+                       uint32_t mhpm_counter_num, uint32_t dm_start_addr,
+                       uint32_t dm_end_addr)
+    : nmi_mode(false),
+      pending_iside_error(false),
+      insn_cnt(0),
+      mhpm_counter_num(mhpm_counter_num) {
   FILE *log_file = nullptr;
   if (trace_log_path.length() != 0) {
     log = std::make_unique<log_file_t>(trace_log_path.c_str());
@@ -48,18 +54,27 @@ SpikeCosim::SpikeCosim(const std::string &isa_string, uint32_t start_pc,
       std::make_unique<processor_t>(isa_string.c_str(), "MU", DEFAULT_VARCH,
                                     this, 0, false, log_file, std::cerr);
 #else
-  isa_parser = std::make_unique<isa_parser_t>(isa_string.c_str(), "MU");
 
+#ifdef COSIM_SIGSEGV_WORKAROUND
+  isa_parser = new isa_parser_t(isa_string.c_str(), "MU");
+  processor = std::make_unique<processor_t>(isa_parser, DEFAULT_VARCH, this, 0,
+                                            false, log_file, std::cerr);
+#else
+  isa_parser = std::make_unique<isa_parser_t>(isa_string.c_str(), "MU");
   processor = std::make_unique<processor_t>(
       isa_parser.get(), DEFAULT_VARCH, this, 0, false, log_file, std::cerr);
+#endif
+
 #endif
 
   processor->set_pmp_num(pmp_num_regions);
   processor->set_mhpm_counter_num(mhpm_counter_num);
   processor->set_pmp_granularity(1 << (pmp_granularity + 2));
   processor->set_ibex_flags(secure_ibex, icache_en);
+  processor->set_debug_module_range(dm_start_addr, dm_end_addr);
 
-  initial_proc_setup(start_pc, start_mtvec, mhpm_counter_num);
+  bool rv32b_enabled = isa_string.find("Zb") != std::string::npos;
+  initial_proc_setup(start_pc, start_mtvec, mhpm_counter_num, rv32b_enabled);
 
   if (log) {
     processor->set_debug(true);
@@ -76,8 +91,9 @@ bool SpikeCosim::mmio_load(reg_t addr, size_t len, uint8_t *bytes) {
   bool dut_error = false;
 
   // Incoming access may be an iside or dside access. Use PC to help determine
-  // which.
-  uint32_t pc = processor->get_state()->pc;
+  // which. PC is 64 bits in spike, we only care about the bottom 32-bit so mask
+  // off the top bits.
+  uint64_t pc = processor->get_state()->pc & 0xffffffff;
   uint32_t aligned_addr = addr & 0xfffffffc;
 
   if (pending_iside_error && (aligned_addr == pending_iside_err_addr)) {
@@ -85,17 +101,14 @@ bool SpikeCosim::mmio_load(reg_t addr, size_t len, uint8_t *bytes) {
     // assume it's an iside access and produce an error.
     pending_iside_error = false;
     dut_error = true;
-  } else if (addr < pc || addr >= (pc + 8)) {
+  } else {
     // Spike may attempt to access up to 8-bytes from the PC when fetching, so
-    // only check as a dside access when it falls outside that range.
+    // only check as a dside access when it falls outside that range
+    bool in_iside_range = (addr >= pc && addr < pc + 8);
 
-    // Otherwise check if the aligned PC matches with the aligned address or an
-    // incremented aligned PC (to capture the unaligned 4-byte instruction
-    // case). Assume a successful iside access if either of these checks are
-    // true, otherwise assume a dside access and check against DUT dside
-    // accesses.  If the RTL produced a bus error for the access, or the
-    // checking failed produce a memory fault in spike.
-    dut_error = (check_mem_access(false, addr, len, bytes) != kCheckMemOk);
+    if (!in_iside_range) {
+      dut_error = (check_mem_access(false, addr, len, bytes) != kCheckMemOk);
+    }
   }
 
   return !(bus_error || dut_error);
@@ -159,7 +172,7 @@ bool SpikeCosim::backdoor_read_mem(uint32_t addr, size_t len,
 //   The state.last_inst_pc also remains with the sentinel value PC_INVALID.
 // - If we catch a trap_t&, then the take_trap() fn updates the state of the
 //   processor, and when we call step() again we start executing in the new
-//   context of the trap (trap andler, new MSTATUS, debug rom, etc. etc.)
+//   context of the trap (trap handler, new MSTATUS, debug rom, etc. etc.)
 bool SpikeCosim::step(uint32_t write_reg, uint32_t write_reg_data, uint32_t pc,
                       bool sync_trap, bool suppress_reg_write) {
   assert(write_reg < 32);
@@ -189,7 +202,7 @@ bool SpikeCosim::step(uint32_t write_reg, uint32_t write_reg_data, uint32_t pc,
     // we do the stop, so we can restore it after the step (as spike won't
     // suppressed the register write).
     //
-    // First check retired instruciton to ensure load suppression is correct
+    // First check retired instruction to ensure load suppression is correct
     if (!check_suppress_reg_write(write_reg, pc, suppressed_write_reg)) {
       return false;
     }
@@ -205,6 +218,9 @@ bool SpikeCosim::step(uint32_t write_reg, uint32_t write_reg_data, uint32_t pc,
   // (If the current step causes a synchronous trap, it will be
   //  recorded against the current pc)
   initial_spike_pc = (processor->get_state()->pc & 0xffffffff);
+  // A trap on a stepped instruction enters debug mode within this step, but
+  // the cpuctrlsts update depends on the mode the trap was taken in.
+  bool initial_spike_debug_mode = processor->get_state()->debug_mode;
   processor->step(1);
 
   // ISS
@@ -221,7 +237,7 @@ bool SpikeCosim::step(uint32_t write_reg, uint32_t write_reg_data, uint32_t pc,
   //    - PC_INVALID == true
   //    - current state is that of the trapping instruction
   // DUT
-  // - If the dut encounters an async trap (which can be thought of as occuring
+  // - If the dut encounters an async trap (which can be thought of as occurring
   //   between instructions), an rvfi_item will be generated for the the first
   //   retired instruction of the trap handler.
   // - If the dut encounters a sync trap, an rvfi_item will be generated for the
@@ -254,8 +270,8 @@ bool SpikeCosim::step(uint32_t write_reg, uint32_t write_reg_data, uint32_t pc,
     if (pending_sync_exception) {
       if (!sync_trap) {
         std::stringstream err_str;
-        err_str << "Synchronous trap was expected at ISS PC: "
-                << std::hex << processor->get_state()->pc
+        err_str << "Synchronous trap was expected at ISS PC: " << std::hex
+                << processor->get_state()->pc
                 << " but the DUT didn't report one at PC " << pc;
         errors.emplace_back(err_str.str());
         return false;
@@ -265,7 +281,7 @@ bool SpikeCosim::step(uint32_t write_reg, uint32_t write_reg_data, uint32_t pc,
         return false;
       }
 
-      handle_cpuctrl_exception_entry();
+      handle_cpuctrl_exception_entry(initial_spike_debug_mode);
 
       // This is all the checking possible when consider a
       // synchronously-trapping instruction that never retired.
@@ -287,9 +303,8 @@ bool SpikeCosim::step(uint32_t write_reg, uint32_t write_reg_data, uint32_t pc,
 
   if (pending_iside_error) {
     std::stringstream err_str;
-    err_str << "DUT generated an iside error for address: "
-            << std::hex << pending_iside_err_addr
-            << " but the ISS didn't produce one";
+    err_str << "DUT generated an iside error for address: " << std::hex
+            << pending_iside_err_addr << " but the ISS didn't produce one";
     errors.emplace_back(err_str.str());
     return false;
   }
@@ -322,8 +337,8 @@ bool SpikeCosim::check_retired_instr(uint32_t write_reg,
   if ((processor->get_state()->last_inst_pc & 0xffffffff) != dut_pc) {
     std::stringstream err_str;
     err_str << "PC mismatch, DUT retired : " << std::hex << dut_pc
-            << " , but the ISS retired: "
-            << std::hex << processor->get_state()->last_inst_pc;
+            << " , but the ISS retired: " << std::hex
+            << (processor->get_state()->last_inst_pc & 0xffffffff);
     errors.emplace_back(err_str.str());
     return false;
   }
@@ -378,18 +393,17 @@ bool SpikeCosim::check_retired_instr(uint32_t write_reg,
   return true;
 }
 
-bool SpikeCosim::check_sync_trap(uint32_t write_reg,
-                                 uint32_t dut_pc, uint32_t initial_spike_pc) {
+bool SpikeCosim::check_sync_trap(uint32_t write_reg, uint32_t dut_pc,
+                                 uint32_t initial_spike_pc) {
   // Check if an synchronously-trapping instruction matches
   // between Spike and the DUT.
 
   // Check that both spike and DUT trapped on the same pc
   if (initial_spike_pc != dut_pc) {
     std::stringstream err_str;
-    err_str << "PC mismatch at synchronous trap, DUT at pc: "
-            << std::hex << dut_pc
-            << "while ISS pc is at : "
-            << std::hex << initial_spike_pc;
+    err_str << "PC mismatch at synchronous trap, DUT at pc: " << std::hex
+            << dut_pc << "while ISS pc is at : " << std::hex
+            << initial_spike_pc;
     errors.emplace_back(err_str.str());
     return false;
   }
@@ -402,6 +416,12 @@ bool SpikeCosim::check_sync_trap(uint32_t write_reg,
             << "but DUT wrote to register: x" << std::dec << write_reg;
     errors.emplace_back(err_str.str());
     return false;
+  }
+
+  if ((processor->get_state()->mcause->read() == 0x5) ||
+      (processor->get_state()->mcause->read() == 0x7)) {
+    // We have a load or store access fault, apply fixup for misaligned accesses
+    misaligned_pmp_fixup();
   }
 
   // If we see an internal NMI, that means we receive an extra memory intf item.
@@ -517,8 +537,8 @@ void SpikeCosim::leave_nmi_mode() {
 #endif
 }
 
-void SpikeCosim::handle_cpuctrl_exception_entry() {
-  if (!processor->get_state()->debug_mode) {
+void SpikeCosim::handle_cpuctrl_exception_entry(bool debug_mode_at_trap) {
+  if (!debug_mode_at_trap) {
     bool old_sync_exc_seen = change_cpuctrlsts_sync_exc_seen(true);
     if (old_sync_exc_seen) {
       set_cpuctrlsts_double_fault_seen();
@@ -549,12 +569,20 @@ void SpikeCosim::set_cpuctrlsts_double_fault_seen() {
 }
 
 void SpikeCosim::initial_proc_setup(uint32_t start_pc, uint32_t start_mtvec,
-                                    uint32_t mhpm_counter_num) {
+                                    uint32_t mhpm_counter_num,
+                                    bool rv32b_enabled) {
   processor->get_state()->pc = start_pc;
   processor->get_state()->mtvec->write(start_mtvec);
 
   processor->get_state()->csrmap[CSR_MARCHID] =
       std::make_shared<const_csr_t>(processor.get(), CSR_MARCHID, IBEX_MARCHID);
+
+  uint32_t misa_val = processor->get_csr(CSR_MISA);
+  if (rv32b_enabled) {
+    misa_val |= 1 << 1;
+  }
+  processor->get_state()->csrmap[CSR_MISA] =
+      std::make_shared<const_csr_t>(processor.get(), CSR_MISA, misa_val);
 
   processor->set_mmu_capability(IMPL_MMU_SBARE);
 
@@ -570,12 +598,108 @@ void SpikeCosim::initial_proc_setup(uint32_t start_pc, uint32_t start_mtvec,
   }
 }
 
-void SpikeCosim::set_mip(uint32_t mip) {
-  processor->get_state()->mip->write_with_mask(0xffffffff, mip);
+void SpikeCosim::set_mip(uint32_t pre_mip, uint32_t post_mip) {
+  uint32_t new_mip = pre_mip;
+  uint32_t old_mip = processor->get_state()->mip->read();
+
+  processor->get_state()->mip->write_with_mask(0xffffffff, post_mip);
+  processor->get_state()->mip->write_pre_val(pre_mip);
+
+  if (processor->get_state()->debug_mode ||
+      (processor->halt_request == processor_t::HR_REGULAR) ||
+      (!get_field(processor->get_csr(CSR_MSTATUS), MSTATUS_MIE) &&
+       processor->get_state()->prv == PRV_M)) {
+    // Return now if new MIP won't trigger an interrupt handler either because
+    // we're in or heading to debug mode or interrupts are disabled.
+    return;
+  }
+
+  uint32_t old_enabled_irq = old_mip & processor->get_state()->mie->read();
+  uint32_t new_enabled_irq = new_mip & processor->get_state()->mie->read();
+
+  // Check to see if new MIP will trigger an interrupt (which occurs when new
+  // MIP produces an enabled interrupt for the first time).
+  if ((old_enabled_irq == 0) && (new_enabled_irq != 0)) {
+    // Early interrupt handle if the interrupt is triggered.
+    early_interrupt_handle();
+  }
+}
+
+void SpikeCosim::early_interrupt_handle() {
+  // Execute a spike step on the assumption an interrupt will occur so no new
+  // instruction is executed just the state altered to reflect the interrupt.
+  uint32_t initial_spike_pc = (processor->get_state()->pc & 0xffffffff);
+  processor->step(1);
+
+  if (processor->get_state()->last_inst_pc != PC_INVALID) {
+    std::stringstream err_str;
+    err_str << "Attempted step for interrupt, expecting no instruction would "
+            << "be executed but saw one. PC before: " << std::hex
+            << initial_spike_pc
+            << " PC after: " << (processor->get_state()->pc & 0xffffffff);
+    errors.emplace_back(err_str.str());
+  }
+}
+
+// Ibex splits misaligned accesses into two separate requests. They
+// independently undergo PMP access checks. It is possible for one to fail (so
+// no request produced for that half of the access) whilst the other succeeds
+// (producing a request for that half of the access).
+//
+// Spike splits misaligned accesses up into bytes and will apply PMP access
+// checks byte by byte in a linear order. As soon as a byte sees a PMP
+// permission failure the rest of the misaligned access is aborted.
+//
+// This results in mismatches as in some misaligned access cases Ibex will
+// produce a request and spike will not.
+//
+// This fixup detects this condition and removes the Ibex access from
+// pending_dside_accesses to avoid a mismatch. This removed access is checked
+// against PMP using the spike MMU to check spike agrees it passes PMP checks.
+//
+// There may be a better way to handle this (e.g. altering spike behaviour to
+// match Ibex) so for now a warning is generated in fixup cases so they can be
+// easily identified.
+void SpikeCosim::misaligned_pmp_fixup() {
+  if (pending_dside_accesses.size() != 0) {
+    auto &top_pending_access = pending_dside_accesses.front();
+    auto &top_pending_access_info = top_pending_access.dut_access_info;
+
+    // If top access is the second half of a misaligned access where the first
+    // half saw an error we have the PMP fixup case
+    if (top_pending_access_info.misaligned_second &&
+        top_pending_access_info.misaligned_first_saw_error) {
+      mmu_t *mmu = processor->get_mmu();
+
+      // Check if the second half of the access (which Ibex produces a request
+      // for and spike does not) passes PMP
+      if (!mmu->pmp_ok(top_pending_access_info.addr, 4,
+                       top_pending_access_info.store ? STORE : LOAD,
+                       top_pending_access_info.m_mode_access ? PRV_M : PRV_U)) {
+        // Raise an error if the second half shouldn't have passed PMP
+        std::stringstream err_str;
+        err_str << "Saw second half of a misaligned access which not have "
+                << "generated a memory request as it does not pass a PMP check,"
+                << " address: " << std::hex << top_pending_access_info.addr;
+        errors.emplace_back(err_str.str());
+      } else {
+        // Output warning on stdout so we're aware which tests this is happening
+        // in
+        std::cout << "WARNING: Cosim dropping second half of misaligned access "
+                  << "as first half saw an error and second half passed PMP "
+                  << "check, address: " << std::hex
+                  << top_pending_access_info.addr << std::endl;
+        std::cout << std::dec;
+
+        pending_dside_accesses.erase(pending_dside_accesses.begin());
+      }
+    }
+  }
 }
 
 void SpikeCosim::set_nmi(bool nmi) {
-  if (nmi && !nmi_mode && !processor->get_state()->debug_mode) {
+  if (nmi && !nmi_mode && !processor->get_state()->debug_mode &&
+      processor->halt_request != processor_t::HR_REGULAR) {
     processor->get_state()->nmi = true;
     nmi_mode = true;
 
@@ -585,11 +709,14 @@ void SpikeCosim::set_nmi(bool nmi) {
     mstack.mpie = get_field(processor->get_csr(CSR_MSTATUS), MSTATUS_MPIE);
     mstack.epc = processor->get_csr(CSR_MEPC);
     mstack.cause = processor->get_csr(CSR_MCAUSE);
+
+    early_interrupt_handle();
   }
 }
 
 void SpikeCosim::set_nmi_int(bool nmi_int) {
-  if (nmi_int && !nmi_mode && !processor->get_state()->debug_mode) {
+  if (nmi_int && !nmi_mode && !processor->get_state()->debug_mode &&
+      processor->halt_request != processor_t::HR_REGULAR) {
     processor->get_state()->nmi_int = true;
     nmi_mode = true;
 
@@ -599,6 +726,8 @@ void SpikeCosim::set_nmi_int(bool nmi_int) {
     mstack.mpie = get_field(processor->get_csr(CSR_MSTATUS), MSTATUS_MPIE);
     mstack.epc = processor->get_csr(CSR_MEPC);
     mstack.cause = processor->get_csr(CSR_MCAUSE);
+
+    early_interrupt_handle();
   }
 }
 
@@ -690,7 +819,33 @@ void SpikeCosim::fixup_csr(int csr_num, uint32_t csr_val) {
       if (any_interrupt && int_interrupt) {
         new_val |= 0x7fffffe0;
       }
+#ifdef OLD_SPIKE
+      processor->set_csr(csr_num, new_val);
+#else
+      processor->put_csr(csr_num, new_val);
+#endif
+      break;
+    }
+    case CSR_MTVEC: {
+      uint32_t mtvec_and_mask = 0xffffff00;
+      uint32_t mtvec_or_mask = 0x1;
 
+      // For Ibex, mtvec.MODE is set to vectored and
+      // mtvec.BASE must be 256-byte aligned
+      reg_t new_val = (csr_val & mtvec_and_mask) | mtvec_or_mask;
+#ifdef OLD_SPIKE
+      processor->set_csr(csr_num, new_val);
+#else
+      processor->put_csr(csr_num, new_val);
+#endif
+      break;
+    }
+    case CSR_MCOUNTEREN: {
+      // Bits 3..3+mhpm_counter_num-1 correspond to implemented HPM counters
+      reg_t hpm_mask = ((1 << mhpm_counter_num) - 1) << 3;
+      // Bit 0 and 2 are for mcycle and minstret which are always implemented
+      // Bit 1 is for time which is not implemented, hence the mask 0x5
+      reg_t new_val = csr_val & (0x5 | hpm_mask);
 #ifdef OLD_SPIKE
       processor->set_csr(csr_num, new_val);
 #else
@@ -887,7 +1042,7 @@ SpikeCosim::check_mem_result_e SpikeCosim::check_mem_access(
     }
 
     // For any misaligned access that sees an error immediately indicate to
-    // spike the error has occured, so ensure the top pending access gets
+    // spike the error has occurred, so ensure the top pending access gets
     // removed.
     pending_access_done = true;
   }
@@ -913,10 +1068,10 @@ bool SpikeCosim::pc_is_debug_ebreak(uint32_t pc) {
   uint32_t dcsr = processor->get_csr(CSR_DCSR);
 
   // ebreak debug entry is controlled by the ebreakm (bit 15) and ebreaku (bit
-  // 12) fields of DCSR. If the appropriate bit of the current privlege level
+  // 12) fields of DCSR. If the appropriate bit of the current privilege level
   // isn't set ebreak won't enter debug so return false.
-  if ((processor->get_state()->prv == PRV_M) && ((dcsr & 0x1000) == 0) ||
-      (processor->get_state()->prv == PRV_U) && ((dcsr & 0x8000) == 0)) {
+  if (((processor->get_state()->prv == PRV_M) && ((dcsr & 0x1000) == 0)) ||
+      ((processor->get_state()->prv == PRV_U) && ((dcsr & 0x8000) == 0))) {
     return false;
   }
 

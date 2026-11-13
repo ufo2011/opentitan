@@ -1,10 +1,11 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gpiodpi.h"
 
 #ifdef __linux__
+#include <linux/limits.h>
 #include <pty.h>
 #elif __APPLE__
 #include <util.h>
@@ -14,6 +15,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +25,9 @@
 
 // The number of ticks of host_to_device_tick between making syscalls.
 #define TICKS_PER_SYSCALL 2048
+
+// This module currently is capable of implementing 32 GPIOs.
+#define NUM_GPIO 32
 
 // This file does a lot of bit setting and getting; these macros are intended to
 // make that a little more readable.
@@ -234,13 +239,19 @@ uint32_t gpiodpi_host_to_device_tick(void *ctx_void, svBitVecVal *gpio_oe,
           case 'L': {
             ++gpio_text;
             int idx = parse_dec(&gpio_text);
-            if (!GET_BIT(gpio_oe[0], idx)) {
+            if (idx < NUM_GPIO) {
+              if (GET_BIT(gpio_oe[0], idx)) {
+                fprintf(stderr,
+                        "GPIO: Host tried to pull output pin low: pin %2d\n",
+                        idx);
+              }
+              CLR_BIT(ctx->driven_pin_values, idx);
+              set_bit_val(&ctx->weak_pins, idx, weak);
+            } else {
               fprintf(stderr,
-                      "GPIO: Host tried to pull disabled pin low: pin %2d\n",
+                      "GPIO: Host tried to pull invalid pin low: pin %2d\n",
                       idx);
             }
-            CLR_BIT(ctx->driven_pin_values, idx);
-            set_bit_val(&ctx->weak_pins, idx, weak);
             weak = false;
             break;
           }
@@ -248,13 +259,19 @@ uint32_t gpiodpi_host_to_device_tick(void *ctx_void, svBitVecVal *gpio_oe,
           case 'H': {
             ++gpio_text;
             int idx = parse_dec(&gpio_text);
-            if (!GET_BIT(gpio_oe[0], idx)) {
+            if (idx < NUM_GPIO) {
+              if (GET_BIT(gpio_oe[0], idx)) {
+                fprintf(stderr,
+                        "GPIO: Host tried to pull output pin high: pin %2d\n",
+                        idx);
+              }
+              SET_BIT(ctx->driven_pin_values, idx);
+              set_bit_val(&ctx->weak_pins, idx, weak);
+            } else {
               fprintf(stderr,
-                      "GPIO: Host tried to pull disabled pin high: pin %2d\n",
+                      "GPIO: Host tried to pull invalid pin high: pin %2d\n",
                       idx);
             }
-            SET_BIT(ctx->driven_pin_values, idx);
-            set_bit_val(&ctx->weak_pins, idx, weak);
             weak = false;
             break;
           }

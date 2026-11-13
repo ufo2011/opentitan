@@ -39,16 +39,22 @@ def find_cov_dbs(start_dir: pathlib.Path, simulator: str) -> Set[pathlib.Path]:
 
 
 def merge_cov_vcs(md: RegressionMetadata, cov_dirs: Set[pathlib.Path]) -> int:
-    logging.info("Generating merged coverage directory")
     cmd = (['urg', '-full64',
             '-format', 'both',
-            '-dbname', str(md.cov_dir/'merged.vdb'),
-            '-report', str(md.cov_dir/'report'),
-            '-log', str(md.cov_dir/'merge.log'),
+            '-dbname', str(md.dir_cov/'merged.vdb'),
+            '-report', str(md.dir_cov/'report'),
+            '-log', str(md.dir_cov/'merge.log'),
             '-dir'] +
-           list(cov_dirs))
-    return run_one(md.verbose, cmd, redirect_stdstreams='/dev/null')
+           [str(cov_dir) for cov_dir in list(cov_dirs)])
 
+    with LockedMetadata(md.dir_metadata, __file__) as md:
+        md.cov_merge_log = md.dir_cov / 'merge.log'
+        md.cov_merge_stdout = md.dir_cov / 'merge.log.stdout'
+        md.cov_merge_cmds = [cmd]
+
+    with open(md.cov_merge_stdout, 'wb') as fd:
+        logging.info("Generating merged coverage directory")
+        return run_one(md.verbose, cmd, redirect_stdstreams=fd)
 
 def merge_cov_xlm(md: RegressionMetadata, cov_dbs: Set[pathlib.Path]) -> int:
     """Merge xcelium-generated coverage using the OT scripts.
@@ -60,7 +66,7 @@ def merge_cov_xlm(md: RegressionMetadata, cov_dbs: Set[pathlib.Path]) -> int:
 
     imc_cmd = ["imc", "-64bit", "-licqueue"]
 
-    # Update the metdadata file with the commands we're about to run
+    # Update the metadata file with the commands we're about to run
     with LockedMetadata(md.dir_metadata, __file__) as md:
 
         md.cov_merge_db_list = md.dir_cov / 'cov_db_runfile'

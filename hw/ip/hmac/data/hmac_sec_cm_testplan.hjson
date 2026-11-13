@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,6 +28,12 @@
       desc: "Verify the countermeasure(s) BUS.INTEGRITY."
       stage: V2S
       tests: ["hmac_tl_intg_err"]
+    }
+    {
+      name: sec_cm_key_sideload
+      desc: "Verify the countermeasure(s) KEY.SIDELOAD."
+      stage: V2S
+      tests: ["N/A"]
     }
   ]
 }

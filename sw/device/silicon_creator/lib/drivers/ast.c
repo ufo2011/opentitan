@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,9 +10,10 @@
 #include "sw/device/lib/base/multibits.h"
 #include "sw/device/silicon_creator/lib/drivers/otp.h"
 
+#include "hw/top/ast_regs.h"
+#include "hw/top/otp_ctrl_regs.h"
+#include "hw/top/sensor_ctrl_regs.h"
 #include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
-#include "otp_ctrl_regs.h"
-#include "sensor_ctrl_regs.h"
 
 #ifndef OT_PLATFORM_RV32
 // Provide a definition for off-target unit tests.
@@ -20,7 +21,8 @@ const uint32_t kAstCheckPollCpuCycles = 10000;
 #endif
 
 enum {
-  kBase = TOP_EARLGREY_SENSOR_CTRL_BASE_ADDR,
+  kBaseSensorCtrl = TOP_EARLGREY_SENSOR_CTRL_BASE_ADDR,
+  kBaseAst = TOP_EARLGREY_AST_BASE_ADDR,
 };
 
 rom_error_t ast_check(lifecycle_state_t lc_state) {
@@ -44,7 +46,7 @@ rom_error_t ast_check(lifecycle_state_t lc_state) {
       HARDENED_CHECK_EQ(lc_state, kLcStateProdEnd);
       break;
     default:
-      HARDENED_UNREACHABLE();
+      HARDENED_TRAP();
   }
 
   // OTP can be configured to skip AST initialization. In this situation we do
@@ -74,8 +76,10 @@ rom_error_t ast_check(lifecycle_state_t lc_state) {
   return res;
 }
 
+OT_WARN_UNUSED_RESULT
 static bool done_bit_get(void) {
-  uint32_t reg = abs_mmio_read32(kBase + SENSOR_CTRL_STATUS_REG_OFFSET);
+  uint32_t reg =
+      abs_mmio_read32(kBaseSensorCtrl + SENSOR_CTRL_STATUS_REG_OFFSET);
   return bitfield_bit32_read(reg, SENSOR_CTRL_STATUS_AST_INIT_DONE_BIT);
 }
 
@@ -87,8 +91,8 @@ hardened_bool_t ast_init_done(void) {
   // the result of each attempt. `res` should be `kHardenedBoolTrue` if all
   // attempts return true.
   hardened_bool_t res = 0x631;
-  res |= done_bit_get() << 3;
-  res |= done_bit_get() << 8;
+  res |= (hardened_bool_t)done_bit_get() << 3;
+  res |= (hardened_bool_t)done_bit_get() << 8;
 
   if (res != kHardenedBoolTrue) {
     return kHardenedBoolFalse;

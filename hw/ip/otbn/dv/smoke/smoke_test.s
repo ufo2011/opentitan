@@ -1,11 +1,11 @@
-/* Copyright lowRISC contributors. */
+/* Copyright lowRISC contributors (OpenTitan project). */
 /* Licensed under the Apache License, Version 2.0, see LICENSE for details. */
 /* SPDX-License-Identifier: Apache-2.0 */
 
 # OTBN Smoke test, runs various instructions which are expected to produce the
 # final register state see in smoke_expected.txt
 
-.section .text
+.section .text.start
 
 # x2 = 0xd0beb513
 lui x2, 0xd0beb
@@ -13,6 +13,13 @@ add x2, x2, 0x513
 # x3 = 0xa0be911a
 lui x3, 0xa0be9
 add x3, x3, 0x11a
+
+# Test the INSN_CNT register read
+csrrs x4, INSN_CNT, x0
+addi x5, x0, 4
+beq x4, x5, _insn_cnt_ok
+unimp
+_insn_cnt_ok:
 
 # x4 = x2 + x3 = 0x717d462d
 add x4, x2, x3
@@ -95,43 +102,48 @@ add x21, x21, 0x123
 
 test_label_3:
 
-# use mod WSR to load bignum registers with base li psuedo-instruction
+# use mod WSR to load bignum registers with base li pseudo-instruction
 # mod = 0x78fccc06_2228e9d6_89c9b54f_887cf14e_c79af825_69be586e_9866bb3b_53769ada
 li x23, 0x78fccc06
-csrrw x0, 0x7d7, x23
+csrrw x0, mod7, x23
 li x23, 0x2228e9d6
-csrrw x0, 0x7d6, x23
+csrrw x0, mod6, x23
 li x23, 0x89c9b54f
-csrrw x0, 0x7d5, x23
+csrrw x0, mod5, x23
 li x23, 0x887cf14e
-csrrw x0, 0x7d4, x23
+csrrw x0, mod4, x23
 li x23, 0xc79af825
-csrrw x0, 0x7d3, x23
+csrrw x0, mod3, x23
 li x23, 0x69be586e
-csrrw x0, 0x7d2, x23
+csrrw x0, mod2, x23
 li x23, 0x9866bb3b
-csrrw x0, 0x7d1, x23
+csrrw x0, mod1, x23
 li x23, 0x53769ada
-csrrw x0, 0x7d0, x23
+csrrw x0, mod0, x23
 
 # x22 = 0x89c9b54f
-csrrs x23, 0x7d5, x0
+csrrs x23, mod5, x0
 
 # Note that some instructions used the fixed inputs (from w1 and w2) others use
-# results from previous instructions. When debugging an failure it is recommened
+# results from previous instructions. When debugging an failure it is recommended
 # you first look at the failure from the lowest numbered register as failures
 # can cascade into later instructions.
 
 # w1 = mod = 0x78fccc06_2228e9d6_89c9b54f_887cf14e_c79af825_69be586e_9866bb3b_53769ada
 bn.wsrr w1, 0x0 /* MOD */
 
-# Request an RND value with a write to CSR RND_PREFETCH
-csrrw x0, 0x7d8, x0
-
-# sim environment provides a fixed value for RND (in other environment RND isn't
-# fixed so this test will have a different final state)
 # w2 = rnd = 0xAAAAAAAA_99999999_AAAAAAAA_99999999_AAAAAAAA_99999999_AAAAAAAA_99999999
-bn.wsrr w2, 0x1 /* RND */
+.ifdef deterministic
+  la x25, rnd_value
+  li x26, 2
+  bn.lid x26, 0(x25)
+.else
+  # Request an RND value with a write to CSR RND_PREFETCH
+  csrrw x0, rnd_prefetch, x0
+  # sim environment provides a fixed value for RND (in other environment RND isn't
+  # fixed so this test will have a different final state)
+  bn.wsrr w2, 0x1 /* RND */
+.endif
 
 # w3 = w1 + w2 = 0x23a776b0_bbc28370_34745ffa_22168ae8_7245a2d0_0357f208_431165e5_ed103473
 bn.add w3, w1, w2
@@ -185,7 +197,7 @@ bn.addc w15, w10, w11, FG0
 bn.subb w17, w3, w4, FG1
 
 # x24 = {fg1, fg0} = 0x52
-csrrs x24, 0x7c8, x0
+csrrs x24, flags, x0
 
 # w18 = w1 + (w2 << 136) = 0x23a7769f_bbc28381_34745fe9_22168a4e_c79af825_69be586e_9866bb3b_53769ada
 bn.add w18, w1, w2 << 136
@@ -320,30 +332,73 @@ jal x1, call_stack_3
 
 call_stack_3:
 
-# w1 = KEY_S0L = 0xdeadbeef_deadbeef_deadbeef_deadbeef_deadbeef_deadbeef_deadbeef_deadbeef
-# w2 = w2 + w1 = w2 + KEY_S0L = 0x8958699a_78475889_8958699a_78475889_8958699a_78475889_8958699a_78475888
-bn.wsrr w1, 0x4
-bn.add w2, w2, w1
+.ifnotdef deterministic
+  # w1 = KEY_S0L = 0xdeadbeef_deadbeef_deadbeef_deadbeef_deadbeef_deadbeef_deadbeef_deadbeef
+  # w2 = w2 + w1 = w2 + KEY_S0L = 0x8958699a_78475889_8958699a_78475889_8958699a_78475889_8958699a_78475888
+  bn.wsrr w1, 0x4
+  bn.add w2, w2, w1
 
-# w1 = KEY_S0H = 0xdeadbeef_deadbeef_deadbeef_deadbeef
-# w2 = w2 + w1 = w2 + KEY_S0H = 0x8958699a_78475889_8958699a_7847588a_6806288a_56f51779_6806288a_56f51777
-bn.wsrr w1, 0x5
-bn.add w2, w2, w1
+  # w1 = KEY_S0H = 0xdeadbeef_deadbeef_deadbeef_deadbeef_deadbeef_deadbeef_deadbeef_deadbeef
+  # w2 = w2 + w1 = w2 + KEY_S0H = 0x6806288a_56f51779_6806288a_56f51779_6806288a_56f51779_6806288a_56f51777
+  bn.wsrr w1, 0x5
+  bn.add w2, w2, w1
 
-# w1 = KEY_S1L = 0xbaadf00d_baadf00d_baadf00d_baadf00d_baadf00d_baadf00d_baadf00d_baadf00d
-# w2 = w2 + w1 = w2 + KEY_S1L = 0x440659a8_32f54897_440659a8_32f54898_22b41898_11a30787_22b41898_11a30784
-bn.wsrr w1, 0x6
-bn.add w2, w2, w1
+  # w1 = KEY_S1L = 0xbaadf00d_baadf00d_baadf00d_baadf00d_baadf00d_baadf00d_baadf00d_baadf00d
+  # w2 = w2 + w1 = w2 + KEY_S1L = 0x22b41898_11a30787_22b41898_11a30787_22b41898_11a30787_22b41898_11a30784
+  bn.wsrr w1, 0x6
+  bn.add w2, w2, w1
 
-# w1 = KEY_S1H = 0xbaadf00d_baadf00d_baadf00d_baadf00d
-# w2 = w2 + w1 = w2 + KEY_S1H = 0x440659a8_32f54897_440659a8_32f54898_dd6208a5_cc50f794_dd6208a5_cc50f791
-bn.wsrr w1, 0x7
-bn.add w2, w2, w1
+  # w1 = KEY_S1H = 0xbaadf00d_baadf00d_baadf00d_baadf00d_baadf00d_baadf00d_baadf00d_baadf00d
+  # w2 = w2 + w1 = w2 + KEY_S1H = 0xdd6208a5_cc50f794_dd6208a5_cc50f794_dd6208a5_cc50f794_dd6208a5_cc50f791
+  bn.wsrr w1, 0x7
+  bn.add w2, w2, w1
+.endif
 
-# Set unused registers to zero. Without this, they would keep the random value assigned during
-# secure wipe, which cannot be compared against an expected value.
-xor x30, x30, x30
+# Write to MAI register
+# Clear output register to known state
+bn.wsrw MAI_RES_S0, w10
+bn.wsrw MAI_RES_S1, w11
+# Write inputs
+bn.wsrw MAI_IN0_S0, w12
+bn.wsrw MAI_IN0_S1, w13
+bn.wsrw MAI_IN1_S0, w14
+bn.wsrw MAI_IN1_S1, w15
 
+# Read registers from MAI
+bn.wsrr w10, MAI_RES_S0
+bn.wsrr w11, MAI_RES_S1
+bn.wsrr w12, MAI_IN0_S0
+bn.wsrr w13, MAI_IN0_S1
+bn.wsrr w14, MAI_IN1_S0
+bn.wsrr w15, MAI_IN1_S1
+
+# Execute SecAdd on MAI
+li x30, 0x2f
+csrrw x0, MAI_CTRL, x30
+
+# Poll for completion of MAI execution
+jal x1, mai_poll_busy
+
+# Read back results from MAI
+bn.wsrr w30, MAI_RES_S0
+bn.wsrr w31, MAI_RES_S1
+# SecAdd result: in0[k] = w12[k] ^ w13[k], in1[k] = w14[k] ^ w15[k],
+# w30[k] = in0[k] + in1[k] mod 2^32 for each 32-bit coefficient k.
+# in0 = 0x8d09995b_664e0f38_de9ee010_e8d217a0_98ef0d70_8f12b880_edbbce4e_b598fc3d
+# in1 = 0x829cd609_0d4d9cc5_679b8549_5bdaeab7_00000188_f54fd377_00000388_d5df575e
+# w30 = in0 + in1 mod 2^32 per lane = 0x0fa66f64_739babfd_463a6559_44ad0257_98ef0ef8_84628bf7_edbbd1d6_8b78539b
+bn.xor w30, w30, w31
+# w31 = 0x00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000
+bn.xor w31, w31, w31
+
+# Read from URND in the OTBN Verilator smoke test and 0x0 when running on the FPGA or chip-level test
+.ifnotdef deterministic
+  csrrs x30, urnd, x0
+.else
+  xor x30, x30, x30
+.endif
+
+jal x1, reg_dump
 ecall
 
 test_fn_1:
@@ -356,12 +411,94 @@ test_fn_2:
   addi x22, x22, 3
   jalr x0, x1, 0
 
+# Helper function to poll the MAI status
+mai_poll_busy:
+  csrrs x30, MAI_STATUS, x0
+  andi x30, x30, 0x1
+  bne x30, x0, mai_poll_busy
+  ret
+
+
+# This function dumps both the register files
+# into gpr_state and wdr_state.
+# The registers aren't clobbered by this function.
+reg_dump:
+  # Dump all the GPRs into gpr_state
+  la x1, gpr_state # (using the x1 to hold a temporary value)
+  sw x2, 0(x1)
+
+  la x2, gpr_state
+  sw  x3,   4(x2) #  1 * 4
+  sw  x4,   8(x2) #  2 * 4
+  sw  x5,  12(x2) #  3 * 4
+  sw  x6,  16(x2) #  4 * 4
+  sw  x7,  20(x2) #  5 * 4
+  sw  x8,  24(x2) #  6 * 4
+  sw  x9,  28(x2) #  7 * 4
+  sw x10,  32(x2) #  8 * 4
+  sw x11,  36(x2) #  9 * 4
+  sw x12,  40(x2) # 10 * 4
+  sw x13,  44(x2) # 11 * 4
+  sw x14,  48(x2) # 12 * 4
+  sw x15,  52(x2) # 13 * 4
+  sw x16,  56(x2) # 14 * 4
+  sw x17,  60(x2) # 15 * 4
+  sw x18,  64(x2) # 16 * 4
+  sw x19,  68(x2) # 17 * 4
+  sw x20,  72(x2) # 18 * 4
+  sw x21,  76(x2) # 19 * 4
+  sw x22,  80(x2) # 20 * 4
+  sw x23,  84(x2) # 21 * 4
+  sw x24,  88(x2) # 22 * 4
+  sw x25,  92(x2) # 23 * 4
+  sw x26,  96(x2) # 24 * 4
+  sw x27, 100(x2) # 25 * 4
+  sw x28, 104(x2) # 26 * 4
+  sw x29, 108(x2) # 27 * 4
+  sw x30, 112(x2) # 28 * 4
+  sw x31, 116(x2) # 29 * 4
+
+  # Dump all the WDRs into wdr_state
+  li x2, 0
+  la x3, wdr_state
+  li x1, 32 # (using the x1 to hold a temporary value)
+  loop x1, 2
+  bn.sid x2++, 0(x3)
+  addi x3, x3, 32
+
+  # Restore the value of x2 and x3 to the value they had
+  # before this function.
+  la x2, gpr_state
+  lw x3, 4(x2)
+  lw x2, 0(x2)
+
+  ret
+
 .section .data
-.word 0x1234abcd
-.word 0xbaadf00d
-.word 0xcafed00d
-.word 0xdeadbeef
-.word 0xfacefeed
-.word 0xaaaaaaaa
-.word 0xbbbbbbbb
-.word 0xcccccccc
+  .word 0x1234abcd
+  .word 0xbaadf00d
+  .word 0xcafed00d
+  .word 0xdeadbeef
+  .word 0xfacefeed
+  .word 0xaaaaaaaa
+  .word 0xbbbbbbbb
+  .word 0xcccccccc
+
+.ifdef deterministic
+.balign 32
+rnd_value:
+  .rept 4
+  .word 0x99999999
+  .word 0xaaaaaaaa
+  .endr
+.endif
+
+.global gpr_state
+.balign 32
+gpr_state:
+  .zero (32 / 4) * 30 # not including x0 and x1
+
+.global wdr_state
+.balign 32
+wdr_state:
+  .zero (256 / 4) * 32

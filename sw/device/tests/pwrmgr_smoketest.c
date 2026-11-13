@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,13 @@
 #include "sw/device/lib/testing/test_framework/check.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
+static_assert(kDtPwrmgrCount == 1, "this test expects exactly one pwrmgr");
+static const dt_pwrmgr_t kPwrmgrDt = 0;
+static_assert(kDtRstmgrCount == 1, "this test expects exactly one rstmgr");
+static const dt_rstmgr_t kRstmgrDt = 0;
+static_assert(kDtAonTimerCount >= 1,
+              "this test expects at least one aon_timer");
+static const dt_aon_timer_t kAonTimerDt = 0;
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -27,52 +33,56 @@ bool test_main(void) {
   //
   // Adjust the threshold for Verilator since it runs on different clock
   // frequencies.
-  uint32_t wakeup_threshold = kDeviceType == kDeviceSimVerilator ? 300 : 30;
+  uint64_t wakeup_threshold = kDeviceType == kDeviceSimVerilator ? 300 : 30;
 
   // Initialize pwrmgr
   dif_pwrmgr_t pwrmgr;
-  CHECK_DIF_OK(dif_pwrmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_PWRMGR_AON_BASE_ADDR), &pwrmgr));
+  CHECK_DIF_OK(dif_pwrmgr_init_from_dt(kPwrmgrDt, &pwrmgr));
+
+  dif_pwrmgr_request_sources_t wakeup_sources;
+  CHECK_DIF_OK(dif_pwrmgr_find_request_source(
+      &pwrmgr, kDifPwrmgrReqTypeWakeup, dt_aon_timer_instance_id(kAonTimerDt),
+      kDtAonTimerWakeupWkupReq, &wakeup_sources));
 
   // Initialize rstmgr since this will check some registers.
   dif_rstmgr_t rstmgr;
-  CHECK_DIF_OK(dif_rstmgr_init(
-      mmio_region_from_addr(TOP_EARLGREY_RSTMGR_AON_BASE_ADDR), &rstmgr));
+  CHECK_DIF_OK(dif_rstmgr_init_from_dt(kRstmgrDt, &rstmgr));
 
   dif_aon_timer_t aon_timer;
-  CHECK_DIF_OK(dif_aon_timer_init(
-      mmio_region_from_addr(TOP_EARLGREY_AON_TIMER_AON_BASE_ADDR), &aon_timer));
+  CHECK_DIF_OK(dif_aon_timer_init_from_dt(kAonTimerDt, &aon_timer));
 
   // Assuming the chip hasn't slept yet, wakeup reason should be empty.
 
   // Notice we are clearing rstmgr's RESET_INFO, so after the aon wakeup there
   // is only one bit set.
-  if (pwrmgr_testutils_is_wakeup_reason(&pwrmgr, 0)) {
+  if (UNWRAP(pwrmgr_testutils_is_wakeup_reason(&pwrmgr, 0)) == true) {
     LOG_INFO("POR reset");
 
-    CHECK(rstmgr_testutils_reset_info_any(&rstmgr, kDifRstmgrResetInfoPor));
+    CHECK(UNWRAP(
+        rstmgr_testutils_reset_info_any(&rstmgr, kDifRstmgrResetInfoPor)));
 
     // Prepare rstmgr for a reset.
-    rstmgr_testutils_pre_reset(&rstmgr);
+    CHECK_STATUS_OK(rstmgr_testutils_pre_reset(&rstmgr));
 
-    aon_timer_testutils_wakeup_config(&aon_timer, wakeup_threshold);
+    CHECK_STATUS_OK(
+        aon_timer_testutils_wakeup_config(&aon_timer, wakeup_threshold));
     // Deep sleep.
-    pwrmgr_testutils_enable_low_power(&pwrmgr,
-                                      kDifPwrmgrWakeupRequestSourceFive, 0);
+    CHECK_STATUS_OK(
+        pwrmgr_testutils_enable_low_power(&pwrmgr, wakeup_sources, 0));
 
     // Enter low power mode.
     LOG_INFO("Issue WFI to enter sleep");
     wait_for_interrupt();
 
-  } else if (pwrmgr_testutils_is_wakeup_reason(
-                 &pwrmgr, kDifPwrmgrWakeupRequestSourceFive)) {
+  } else if (UNWRAP(pwrmgr_testutils_is_wakeup_reason(
+                 &pwrmgr, wakeup_sources)) == true) {
     LOG_INFO("Wakeup reset");
 
-    CHECK(rstmgr_testutils_is_reset_info(&rstmgr,
-                                         kDifRstmgrResetInfoLowPowerExit));
+    CHECK(UNWRAP(rstmgr_testutils_is_reset_info(
+        &rstmgr, kDifRstmgrResetInfoLowPowerExit)));
     LOG_INFO("Aon timer wakeup detected");
-    rstmgr_testutils_post_reset(&rstmgr, kDifRstmgrResetInfoLowPowerExit, 0, 0,
-                                0, 0);
+    CHECK_STATUS_OK(rstmgr_testutils_post_reset(
+        &rstmgr, kDifRstmgrResetInfoLowPowerExit, 0, 0, 0, 0));
 
     return true;
   } else {

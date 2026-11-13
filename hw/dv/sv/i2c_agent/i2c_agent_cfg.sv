@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,13 @@ class i2c_agent_cfg extends dv_base_agent_cfg;
   timing_cfg_t    timing_cfg;
   bit host_stretch_test_mode = 0;
 
+  uvm_event got_nack;
+
   virtual i2c_if  vif;
+
+  // Performance Monitoring Variables
+  uvm_event start_perf_monitor, stop_perf_monitor;
+  time period_q[$];
 
   bit     host_scl_start;
   bit     host_scl_stop;
@@ -24,10 +30,10 @@ class i2c_agent_cfg extends dv_base_agent_cfg;
   // test should not update timing parameter.
   // This variable indicates target DUT receives the end of the transaction
   // and allow tb to program a new timing parameter.
+  // TODO(#23920) Remove this.
   bit     got_stop = 0;
 
-  int     sent_rd_byte = 0;
-  int     rcvd_rd_byte = 0;
+  int     rcvd_rd_byte = 0; // Increment each time the agent reads a byte.
 
   // this variables can be configured from host test
   uint i2c_host_min_data_rw = 1;
@@ -40,24 +46,39 @@ class i2c_agent_cfg extends dv_base_agent_cfg;
   bit     host_scl_pause = 0;
   int     host_scl_pause_cyc = 0;
 
-  // ack followed by stop test mode
-  bit     allow_ack_stop = 0;
-  bit     ack_stop_det = 0;
-  bit     allow_bad_addr = 0;
-  // target address is stored when dut is programmed
+  // ack-stop test mode
+  // This mode is used to generate stimulus that expects the assertion of the 'unexp_stop' irq
+  bit     allow_ack_stop = 0; // Enable the test mode, including generating the modified stimulus
+  bit     ack_stop_det = 0; // The monitor asserts this when an ack-then-stop stimulus has occurred
+
+  ////////////////
+  // Addressing //
+  ////////////////
+
+  // Store the DUT's programmed target addresses
   bit [6:0] target_addr0;
   bit [6:0] target_addr1;
-  // store history of good and bad read target address
-  // '1' good. '0' bad
+
+  // i2c_target_bad_addr //////////////////////
+  //
+  // Store history of good and bad read target addresses ( '1' = good, '0' = bad )
+  // This is used by the env's scoreboard to adjust its expectations, and also
+  // to adjust the stimulus for reads, so we don't put data into the TXFIFO that will
+  // never be read out.
+  // Note. that this queue is only queried immediately before writing to the TXFIFO, and we only
+  // push new values to the queue when the monitor decodes the address.
+  // TODO(#23920) Remove knowledge of the DUT Addresses from the i2c_agent
   bit       read_addr_q[$];
-  bit       valid_addr;
-  bit       is_read;
+  /////////////////////////////////////////////
 
-  // when this is set, driver can send 's' or 'p' in the middle of txn
-  bit       hot_glitch;
+  ////////////
+  // Resets //
+  ////////////
 
-  // reset agent only without resetting dut
-  bit       agent_rst = 0;
+  // reset driver only without resetting dut
+  bit       driver_rst = 0;
+  // reset monitor only without resetting dut
+  bit       monitor_rst = 0;
 
   `uvm_object_utils_begin(i2c_agent_cfg)
     `uvm_field_int(en_monitor,                                UVM_DEFAULT)
@@ -83,6 +104,18 @@ class i2c_agent_cfg extends dv_base_agent_cfg;
     `uvm_field_int(i2c_host_max_data_rw,                      UVM_DEFAULT)
   `uvm_object_utils_end
 
-  `uvm_object_new
+  function new(string name = "");
+    super.new(name);
+    got_nack = new("got_nack");
+    start_perf_monitor = new("start_perf_monitor");
+    stop_perf_monitor = new("stop_perf_monitor");
+  endfunction
+
+
+  // TODO(#23920) Remove knowledge of the DUT Addresses from the i2c_agent
+  function bit is_target_addr(bit [6:0] addr);
+    return (addr == target_addr0 || addr == target_addr1);
+  endfunction
+
 
 endclass : i2c_agent_cfg

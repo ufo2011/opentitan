@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,15 +6,15 @@ use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 use thiserror::Error;
-use zerocopy::AsBytes;
+use zerocopy::{Immutable, IntoBytes};
 
 use crate::app::TransportWrapper;
 use crate::bootstrap::{Bootstrap, BootstrapOptions, UpdateProtocol};
 use crate::impl_serializable_error;
 use crate::io::spi::Transfer;
-use crate::transport::Capability;
+use crate::transport::{Capability, ProgressIndicator};
 
-#[derive(AsBytes, Debug, Default)]
+#[derive(Immutable, IntoBytes, Debug, Default)]
 #[repr(C)]
 struct FrameHeader {
     hash: [u8; Frame::HASH_LEN],
@@ -22,7 +22,7 @@ struct FrameHeader {
     flash_offset: u32,
 }
 
-#[derive(AsBytes, Debug)]
+#[derive(Immutable, IntoBytes, Debug)]
 #[repr(C)]
 struct Frame {
     header: FrameHeader,
@@ -227,7 +227,7 @@ impl UpdateProtocol for Legacy {
         container: &Bootstrap,
         transport: &TransportWrapper,
         payload: &[u8],
-        progress: &dyn Fn(u32, u32),
+        progress: &dyn ProgressIndicator,
     ) -> Result<()> {
         let spi = container.spi_params.create(transport, "BOOTSTRAP")?;
 
@@ -251,6 +251,7 @@ impl UpdateProtocol for Legacy {
         // recent re-transmission.
         let mut becoming_optimistic = false;
 
+        progress.new_stage("", payload.len());
         loop {
             if consecutive_errors > Self::MAX_CONSECUTIVE_ERRORS {
                 return Err(LegacyBootstrapError::RepeatedErrors.into());
@@ -267,7 +268,7 @@ impl UpdateProtocol for Legacy {
             std::thread::sleep(self.inter_frame_delay);
 
             // Write the frame and read back the ack of a previously transmitted frame.
-            progress(frame.header.flash_offset, frame.data.len() as u32);
+            progress.progress(frame.header.flash_offset as usize - Frame::FLASH_BASE_ADDRESS);
             let mut response = [0u8; std::mem::size_of::<Frame>()];
             spi.run_transaction(&mut [Transfer::Both(frame.as_bytes(), &mut response)])?;
 
@@ -311,6 +312,7 @@ impl UpdateProtocol for Legacy {
                 becoming_optimistic = first_unacked_index > 1;
             }
         }
+        progress.progress(payload.len());
         eprintln!("success");
         Ok(())
     }

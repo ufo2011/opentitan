@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,24 +8,18 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
   `uvm_object_new
 
   // Ext component cfgs
-  rand push_pull_agent_cfg#(.HostDataWidth(RNG_BUS_WIDTH))
+  rand push_pull_agent_cfg#(.HostDataWidth(`RNG_BUS_WIDTH))
        m_rng_agent_cfg;
   rand push_pull_agent_cfg#(.HostDataWidth(FIPS_CSRNG_BUS_WIDTH))
        m_csrng_agent_cfg;
-  rand push_pull_agent_cfg#(.HostDataWidth(0))
-       m_aes_halt_agent_cfg;
   entropy_src_xht_agent_cfg m_xht_agent_cfg;
 
   // Additional reset interface for the csrng.
   virtual clk_rst_if    csrng_rst_vif;
-  virtual pins_if#(8)   otp_en_es_fw_read_vif;
-  virtual pins_if#(8)   otp_en_es_fw_over_vif;
 
   // Configuration for DUT CSRs (held in a separate object for easy re-randomization)
   entropy_src_dut_cfg dut_cfg;
 
-  // handle to entropy_src assert interface
-  virtual entropy_src_assert_if entropy_src_assert_vif;
   // handle to entropy_src path interface
   virtual entropy_src_path_if   entropy_src_path_vif;
 
@@ -47,13 +41,16 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
   // When selecting fixed duration, the total simulated duration of the test is approximately
   // equal to cfg.sim_duration
   //
-  // TODO: Randomize & constrain the following values
+  // sim_duration_ms is used as a random value to set sim_duration in post_randomize().
   realtime sim_duration;
+  rand int unsigned sim_duration_ms;
 
   // Mean time before hard RNG failure
-  realtime hard_mtbf;
+  // Default: Negative, meaning no random reconfigs.
+  realtime hard_mtbf = -1;
   // Mean time before "soft" RNG failure (still functions but less entropy per bit)
-  realtime soft_mtbf;
+  // Default: Negative, meaning no random reconfigs.
+  realtime soft_mtbf = -1;
 
   // Mean time between unexpected configuration update events
   // Default: Negative, meaning no random reconfigs
@@ -76,6 +73,9 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
   // RNG data.  For other tests (which rely on fixed RNG sequences) we leave handshaking enabled.
   bit      rng_ignores_backpressure = 0;
 
+  // The number of seeds that are consumed via the CSRNG interface or the entopy_data register are
+  // recorded by the scoreboard.
+  int      total_seeds_consumed = 0;
 
   /////////////////////
   // Knobs & Weights //
@@ -84,13 +84,9 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
   // Knob to inject entropy even if the DUT is configured to not accept it
   uint          spurious_inject_entropy_pct;
 
-  // Constraint knobs for OTP-driven inputs
-  uint          otp_en_es_fw_read_pct, otp_en_es_fw_read_inval_pct,
-                otp_en_es_fw_over_pct, otp_en_es_fw_over_inval_pct;
-
-  // Behavioral constrint knob: dictates how often each sequence
+  // Behavioral constraint knob: dictates how often each sequence
   // performs a survey of the health test diagnostics.
-  // (100% corresponds to a full diagnostic chack after every HT alert,
+  // (100% corresponds to a full diagnostic check after every HT alert,
   // If less than 100%, this full-diagnostic is skipped after some alerts)
   uint          do_check_ht_diag_pct;
 
@@ -110,16 +106,19 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
 
   // When expecting an alert, the cip scoreboarding routines expect a to see the
   // alert within alert_max_delay clock cycles.
-  int      alert_max_delay;
+  int alert_max_delay = 5;
+
+  // host_delay_max value for the RNG agent. This can be overwritten using a plusarg.
+  int rng_max_delay = 12;
+
+  // Whether to keep the default response on the XHT interface at all time.
+  bit xht_only_default_rsp = 1;
 
   ///////////////////////
   // Randomized fields //
   ///////////////////////
 
-  // OTP variables.
-  rand logic [7:0]              otp_en_es_fw_read, otp_en_es_fw_over;
-
-  rand bit                      spurious_inject_entropy;
+  rand bit spurious_inject_entropy;
 
   // Random values for interrupt, alert and error tests
   rand fatal_err_e      which_fatal_err;
@@ -129,27 +128,34 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
   rand ht_fail_e        which_ht_fail;
   rand cntr_e           which_cntr;
   rand which_ht_e       which_ht;
+  rand state_e          which_ht_state;
 
   rand uint  which_cntr_replicate;
 
   rand uint  which_bin;
+  rand uint  which_ht_inst;
 
   rand bit   induce_targeted_transition;
+  // Read the entropy over the entropy_data register if this is set.
+  rand mubi4_t es_route_sw;
+
+  // fw_ov_rd_cnt is the number of words read from the observe FIFO.
+  rand int   fw_ov_rd_cnt;
 
   /////////////////
   // Constraints //
   /////////////////
-
-  constraint otp_en_es_fw_read_c {
-    `DV_MUBI8_DIST(otp_en_es_fw_read, otp_en_es_fw_read_pct,
-                                      100 - otp_en_es_fw_read_pct - otp_en_es_fw_read_inval_pct,
-                                      otp_en_es_fw_read_inval_pct)
+  constraint sim_duration_ms_c {
+    13 <= sim_duration_ms && sim_duration_ms <= 14;
   }
 
-  constraint otp_en_es_fw_over_c {
-    `DV_MUBI8_DIST(otp_en_es_fw_over, otp_en_es_fw_over_pct,
-                                      100 - otp_en_es_fw_over_pct - otp_en_es_fw_over_inval_pct,
-                                      otp_en_es_fw_over_inval_pct)
+  constraint which_ht_state_c {
+    which_ht_state dist {
+      BootHTRunning :/ 25,
+      BootPhaseDone :/ 25,
+      StartupFail1  :/ 25,
+      ContHTRunning :/ 25
+    };
   }
 
   constraint spurious_inject_entropy_c {spurious_inject_entropy dist {
@@ -162,18 +168,22 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
   constraint which_err_code_c {
     which_err_code dist {
       sfifo_esrng_err   :/ 2,
-      sfifo_observe_err :/ 3,
+      sfifo_distr_err   :/ 2,
+      sfifo_observe_err :/ 2,
       sfifo_esfinal_err :/ 2,
       es_ack_sm_err     :/ 2,
       es_main_sm_err    :/ 2,
       es_cntr_err       :/ 60,
-      fifo_write_err    :/ 2,
-      fifo_read_err     :/ 3,
-      fifo_state_err    :/ 3};}
+      fifo_read_err     :/ 4,
+      fifo_state_err    :/ 4,
+      fifo_cntr_err     :/ 4};}
 
-  constraint which_cntr_replicate_c {which_cntr_replicate inside {[0:RNG_BUS_WIDTH-1]};}
-  int        num_bins = 2**RNG_BUS_WIDTH;
+  constraint which_cntr_replicate_c {which_cntr_replicate inside {[0:`RNG_BUS_WIDTH-1]};}
+  int        num_bins = 2**entropy_src_pkg::bucket_ht_data_width(`RNG_BUS_WIDTH);
   constraint which_bin_c {which_bin inside {[0:num_bins-1]};}
+  constraint which_ht_inst_c {which_ht_inst inside {
+    [0:entropy_src_pkg::num_bucket_ht_inst(`RNG_BUS_WIDTH)-1]};
+  }
 
   // Choose the counter to probe by the number of bins or channels with each counter
   constraint which_cntr_c {which_cntr dist {
@@ -181,63 +191,62 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
     repcnt_ht_cntr  :/ 4,
     repcnts_ht_cntr :/ 1,
     adaptp_ht_cntr  :/ 4,
+    adaptps_ht_cntr :/ 1,
     bucket_ht_cntr  :/ 16,
     markov_ht_cntr  :/ 4};}
 
   // Write errors no longer apply to the esfinal or esrng fifos
   // so exclude those combinations when targetting a specific fifo or error condition
   constraint which_fifo_err_c {
-    which_err_code inside {sfifo_esrng_err, sfifo_esfinal_err} ->
+    which_err_code inside {sfifo_esrng_err, sfifo_distr_err, sfifo_esfinal_err} ->
       which_fifo_err inside {read, state};
-    which_err_code == fifo_write_err -> which_fifo_err == write;
     which_err_code == fifo_read_err -> which_fifo_err == read;
-    which_err_code == fifo_state_err -> which_fifo_err == state;
+    which_err_code inside {fifo_state_err, fifo_cntr_err} -> which_fifo_err == state;
   }
 
   constraint which_fifo_c {
-    which_err_code == fifo_write_err -> which_fifo == sfifo_observe;
     which_err_code == sfifo_observe_err -> which_fifo == sfifo_observe;
     which_err_code == sfifo_esrng_err -> which_fifo == sfifo_esrng;
+    which_err_code == sfifo_distr_err -> which_fifo == sfifo_distr;
     which_err_code == sfifo_esfinal_err -> which_fifo == sfifo_esfinal;
+    which_err_code == fifo_cntr_err -> which_fifo inside {sfifo_observe, sfifo_esrng, sfifo_distr,
+                                                          sfifo_esfinal};
   }
 
   constraint induce_targeted_transition_c {induce_targeted_transition dist {
     1                         :/ induce_targeted_transition_pct,
     0                         :/ (100 - induce_targeted_transition_pct) };}
 
+  constraint es_route_sw_c {es_route_sw inside {MuBi4False, MuBi4True};}
+
+  // We need to make sure that we can read out 1024 contiguous symbols, that's why
+  // we set the probability for the last value to 40 pct (this is exactly 1024 symbols
+  // when using all lanes).
+  constraint fw_ov_rd_cnt_c {fw_ov_rd_cnt dist {
+    1                              :/ 40,
+    [2:(1024*`RNG_BUS_WIDTH/32-1)] :/ 20,
+    1024*`RNG_BUS_WIDTH/32         :/ 40 };}
+
   ///////////////
   // Functions //
   ///////////////
 
-  virtual function void initialize(bit [31:0] csr_base_addr = '1);
+  virtual function void initialize(bit inherit_ral_models = 1'b0);
     list_of_alerts = entropy_src_env_pkg::LIST_OF_ALERTS;
     tl_intg_alert_name = "fatal_alert";
-    super.initialize(csr_base_addr);
+    super.initialize(inherit_ral_models);
 
     dut_cfg = entropy_src_dut_cfg::type_id::create("dut_cfg");
 
     // create agent config objs
-    m_rng_agent_cfg       = push_pull_agent_cfg#(.HostDataWidth(RNG_BUS_WIDTH))::
+    m_rng_agent_cfg       = push_pull_agent_cfg#(.HostDataWidth(`RNG_BUS_WIDTH))::
                             type_id::create("m_rng_agent_cfg");
     m_csrng_agent_cfg     = push_pull_agent_cfg#(.HostDataWidth(FIPS_CSRNG_BUS_WIDTH))::
                             type_id::create("m_csrng_agent_cfg");
-    m_aes_halt_agent_cfg  = push_pull_agent_cfg#(.HostDataWidth(0))::
-                            type_id::create("m_aes_halt_agent_cfg");
     m_xht_agent_cfg       = entropy_src_xht_agent_cfg::type_id::create("m_xht_agent_cfg");
 
     // set num_interrupts & num_alerts
-    begin
-      uvm_reg rg = ral.get_reg_by_name("intr_state");
-      if (rg != null) begin
-        num_interrupts = ral.intr_state.get_n_used_bits();
-      end
-    end
-
-    // get entropy_src assert interface handle
-    if (!uvm_config_db#(virtual entropy_src_assert_if)::
-        get(null, "*.env" , "entropy_src_assert_vif", entropy_src_assert_vif)) begin
-      `uvm_fatal(`gfn, $sformatf("FAILED TO GET HANDLE TO ASSERT IF"))
-    end
+    num_interrupts = ral.intr_state.get_n_used_bits();
 
     // only support 1 outstanding TL item
     m_tl_agent_cfg.max_outstanding_req = 1;
@@ -250,10 +259,6 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
 
     str = {
         str,
-        $sformatf("\n\t |***** otp_en_es_fw_read           :         'h%02h *****| \t",
-                  otp_en_es_fw_read),
-        $sformatf("\n\t |***** otp_en_es_fw_over           :         'h%02h *****| \t",
-                  otp_en_es_fw_over),
         $sformatf("\n\t |***** seed_cnt                    : %12d *****| \t",
                   seed_cnt),
         $sformatf("\n\t |***** sim_duration                : %9.2f ms *****| \t",
@@ -261,19 +266,6 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
     };
 
     str = {str, "\n\t |----------------- knobs ------------------------------| \t"};
-
-    str = {
-        str,
-        $sformatf("\n\t |***** otp_en_es_fw_read_pct       : %12d *****| \t",
-                  otp_en_es_fw_read_pct),
-        $sformatf("\n\t |***** otp_en_es_fw_read_inval_pct : %12d *****| \t",
-                  otp_en_es_fw_read_inval_pct),
-        $sformatf("\n\t |***** otp_en_es_fw_over_pct       : %12d *****| \t",
-                  otp_en_es_fw_over_pct),
-        $sformatf("\n\t |***** otp_en_es_fw_over_inval_pct : %12d *****| \t",
-                  otp_en_es_fw_over_inval_pct)
-    };
-
     str = {str, "\n\t |******************************************************| \t"};
     str = {str, dut_cfg.convert2string()};
 
@@ -281,8 +273,9 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
   endfunction
 
   function void post_randomize();
-    dut_cfg.randomize();
+    void'(dut_cfg.randomize());
     super.post_randomize();
+    sim_duration = sim_duration_ms * 1ms;
   endfunction
 
   function void pre_randomize();
@@ -292,12 +285,6 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
 
   function void check_knob_vals();
     `DV_CHECK(spurious_inject_entropy_pct <= 100);
-    `DV_CHECK(otp_en_es_fw_read_pct <= 100);
-    `DV_CHECK(otp_en_es_fw_read_inval_pct <= 100);
-    `DV_CHECK((otp_en_es_fw_read_pct + otp_en_es_fw_read_inval_pct) <= 100);
-    `DV_CHECK(otp_en_es_fw_over_inval_pct <= 100);
-    `DV_CHECK((otp_en_es_fw_over_pct + otp_en_es_fw_over_inval_pct) <= 100);
-    `DV_CHECK(otp_en_es_fw_over_pct <= 100);
     `DV_CHECK(do_check_ht_diag_pct <= 100);
     `DV_CHECK(induce_targeted_transition_pct <= 100);
   endfunction
@@ -307,7 +294,7 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
   // to get more coverage in a given run.
   function bit generates_seeds(mubi4_t route_software, mubi4_t entropy_data_reg_enable);
     if (route_software == MuBi4True) begin
-      return (otp_en_es_fw_read == MuBi8True) && (entropy_data_reg_enable == MuBi4True);
+      return entropy_data_reg_enable == MuBi4True;
     end
     return 1;
   endfunction
@@ -315,7 +302,7 @@ class entropy_src_env_cfg extends cip_base_env_cfg #(.RAL_T(entropy_src_reg_bloc
   // Similar to generates_seeds(), returns true if a configuration should be able to
   // generate observe_data
   function bit generates_observe_data(mubi4_t fw_read_enable);
-     return (otp_en_es_fw_over == MuBi8True) && (fw_read_enable == MuBi4True);
+     return fw_read_enable == MuBi4True;
   endfunction
 
 endclass

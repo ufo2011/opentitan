@@ -1,8 +1,19 @@
-# Copyright lowRISC contributors.
+# Copyright lowRISC contributors (OpenTitan project).
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
+load("//hw/top:defs.bzl", "opentitan_require_top")
+
 package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "aes",
+    srcs = ["aes.c"],
+    hdrs = ["aes.h"],
+    deps = [
+        "//sw/device/lib/base:memory",
+    ],
+)
 
 cc_library(
     name = "prng",
@@ -23,39 +34,16 @@ cc_library(
     name = "simple_serial",
     srcs = ["simple_serial.c"],
     hdrs = ["simple_serial.h"],
+    target_compatible_with = opentitan_require_top("earlgrey"),
     deps = [
         ":prng",
-        "//hw/top_earlgrey/sw/autogen:top_earlgrey",
+        "//hw/top:top_lib",
         "//sw/device/lib/arch:device",
         "//sw/device/lib/base:macros",
         "//sw/device/lib/base:memory",
         "//sw/device/lib/dif:base",
         "//sw/device/lib/dif:uart",
         "//sw/device/lib/runtime:print",
-    ],
-)
-
-cc_library(
-    name = "sca",
-    srcs = ["sca.c"],
-    hdrs = ["sca.h"],
-    deps = [
-        "//hw/top_earlgrey/sw/autogen:top_earlgrey",
-        "//sw/device/lib/arch:device",
-        "//sw/device/lib/base:bitfield",
-        "//sw/device/lib/base:macros",
-        "//sw/device/lib/dif:clkmgr",
-        "//sw/device/lib/dif:csrng",
-        "//sw/device/lib/dif:edn",
-        "//sw/device/lib/dif:entropy_src",
-        "//sw/device/lib/dif:gpio",
-        "//sw/device/lib/dif:pinmux",
-        "//sw/device/lib/dif:rv_timer",
-        "//sw/device/lib/dif:uart",
-        "//sw/device/lib/runtime:hart",
-        "//sw/device/lib/runtime:irq",
-        "//sw/device/lib/runtime:print",
-        "//sw/device/lib/testing:pinmux_testutils",
-        "//sw/device/lib/testing/test_framework:ottf_start",
+        "//sw/device/tests/penetrationtests/firmware/lib:pentest_lib",
     ],
 )

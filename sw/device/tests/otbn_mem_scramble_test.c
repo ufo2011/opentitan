@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,17 @@
 #include "sw/device/lib/runtime/log.h"
 #include "sw/device/lib/testing/otbn_testutils.h"
 #include "sw/device/lib/testing/test_framework/check.h"
+#include "sw/device/lib/testing/test_framework/ottf_alerts.h"
 #include "sw/device/lib/testing/test_framework/ottf_main.h"
 
-#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
+static_assert(kDtOtbnCount >= 1,
+              "This test requires at least one OTBN instance");
+// rv_core_ibex wrapper around the Ibex CPU provides additional functionality.
+static_assert(kDtRvCoreIbexCount >= 1,
+              "This test requires at least one rv_core_ibex instance");
+
+static dt_otbn_t kTestOtbn = (dt_otbn_t)0;
+static dt_rv_core_ibex_t kTestRvCoreIbex = (dt_rv_core_ibex_t)0;
 
 OTTF_DEFINE_TEST_CONFIG();
 
@@ -81,7 +89,10 @@ static volatile bool has_irq_fired;
 /**
  * This overrides the default OTTF load integrity handler.
  */
-void ottf_load_integrity_error_handler(void) { has_irq_fired = true; }
+void ottf_load_integrity_error_handler(uint32_t *exc_info) {
+  OT_DISCARD(exc_info);
+  has_irq_fired = true;
+}
 
 /**
  * Get `num` distinct random numbers in the range [0, `max`] from
@@ -183,14 +194,11 @@ static void otbn_check_mem_words(const dif_otbn_t *otbn, const int num,
 bool test_main(void) {
   // Init OTBN DIF.
   dif_otbn_t otbn;
-  mmio_region_t otbn_addr = mmio_region_from_addr(TOP_EARLGREY_OTBN_BASE_ADDR);
-  CHECK_DIF_OK(dif_otbn_init(otbn_addr, &otbn));
+  CHECK_DIF_OK(dif_otbn_init_from_dt(kTestOtbn, &otbn));
 
   // Init Ibex DIF.
   dif_rv_core_ibex_t ibex;
-  mmio_region_t ibex_addr =
-      mmio_region_from_addr(TOP_EARLGREY_RV_CORE_IBEX_CFG_BASE_ADDR);
-  CHECK_DIF_OK(dif_rv_core_ibex_init(ibex_addr, &ibex));
+  CHECK_DIF_OK(dif_rv_core_ibex_init_from_dt(kTestRvCoreIbex, &ibex));
 
   uint32_t imem_offsets[kNumAddrs];
   uint32_t dmem_offsets[kNumAddrs];
@@ -205,7 +213,7 @@ bool test_main(void) {
   get_rand_words(&ibex, kNumAddrs, dmem_offsets, max);
 
   // Wait for OTBN to be idle.
-  otbn_testutils_wait_for_done(&otbn, kDifOtbnErrBitsNoError);
+  CHECK_STATUS_OK(otbn_testutils_wait_for_done(&otbn, kDifOtbnErrBitsNoError));
 
   // Write random address offsets.
   otbn_write_mem_words(&otbn, kNumAddrs, imem_offsets, dif_otbn_imem_write);
@@ -229,9 +237,14 @@ bool test_main(void) {
 
   // Re-scramble IMEM and DMEM by fetching new scrambling keys from OTP.
   CHECK_DIF_OK(dif_otbn_write_cmd(&otbn, kDifOtbnCmdSecWipeImem));
-  otbn_testutils_wait_for_done(&otbn, kDifOtbnErrBitsNoError);
+  CHECK_STATUS_OK(otbn_testutils_wait_for_done(&otbn, kDifOtbnErrBitsNoError));
   CHECK_DIF_OK(dif_otbn_write_cmd(&otbn, kDifOtbnCmdSecWipeDmem));
-  otbn_testutils_wait_for_done(&otbn, kDifOtbnErrBitsNoError);
+  CHECK_STATUS_OK(otbn_testutils_wait_for_done(&otbn, kDifOtbnErrBitsNoError));
+
+  // The following integrity errors in OTBN's memory causes a fatal alert in
+  // Ibex which cannot be acknowledge/dismissed, so we must ignore it instead.
+  CHECK_STATUS_OK(ottf_alerts_ignore_alert(dt_rv_core_ibex_alert_to_alert_id(
+      kTestRvCoreIbex, kDtRvCoreIbexAlertFatalHwErr)));
 
   // Read back and check random address offsets. We don't care about the values.
   // "Most" reads should trigger integrity errors.
@@ -239,12 +252,12 @@ bool test_main(void) {
                        &num_matches_imem, &num_intg_errors_imem);
   CHECK(num_intg_errors_imem >= kNumIntgErrorsThreshold,
         "Expecting at least %i IMEM integrity errors, got %i",
-        kNumIntgErrorsThreshold, num_matches_imem);
+        kNumIntgErrorsThreshold, num_intg_errors_imem);
   otbn_check_mem_words(&otbn, kNumAddrs, dmem_offsets, dif_otbn_dmem_read,
                        &num_matches_dmem, &num_intg_errors_dmem);
   CHECK(num_intg_errors_dmem >= kNumIntgErrorsThreshold,
         "Expecting at least %i DMEM integrity errors, got %i",
-        kNumIntgErrorsThreshold, num_matches_dmem);
+        kNumIntgErrorsThreshold, num_intg_errors_dmem);
 
   return true;
 }

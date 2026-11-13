@@ -1,4 +1,4 @@
-// Copyright lowRISC contributors.
+// Copyright lowRISC contributors (OpenTitan project).
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 
 /**
  * @file
- * @brief <a href="/hw/ip/entropy_src/doc/">Entropy Source</a> Device Interface
+ * @brief <a href="/book/hw/ip/entropy_src/">Entropy Source</a> Device Interface
  * Functions
  */
 
@@ -66,14 +66,12 @@ typedef enum dif_entropy_src_main_fsm {
   kDifEntropySrcMainFsmStateFWInsertStart = 0x0c3,
   kDifEntropySrcMainFsmStateFWInsertMsg = 0x059,
   kDifEntropySrcMainFsmStateSha3MsgDone = 0x10f,
-  kDifEntropySrcMainFsmStateSha3Prep = 0x0f8,
-  kDifEntropySrcMainFsmStateSha3Process = 0x0bf,
-  kDifEntropySrcMainFsmStateSha3Valid = 0x171,
+  kDifEntropySrcMainFsmStateSha3Process = 0x0f8,
+  kDifEntropySrcMainFsmStateSha3Valid = 0x0bf,
   kDifEntropySrcMainFsmStateSha3Done = 0x198,
-  kDifEntropySrcMainFsmStateSha3Quiesce = 0x1cd,
-  kDifEntropySrcMainFsmStateAlertState = 0x1fb,
-  kDifEntropySrcMainFsmStateAlertHang = 0x15c,
-  kDifEntropySrcMainFsmStateError = 0x13d
+  kDifEntropySrcMainFsmStateAlertState = 0x1cd,
+  kDifEntropySrcMainFsmStateAlertHang = 0x1fb,
+  kDifEntropySrcMainFsmStateError = 0x73
 } dif_entropy_src_main_fsm_t;
 
 /**
@@ -81,10 +79,10 @@ typedef enum dif_entropy_src_main_fsm {
  */
 typedef struct dif_entropy_src_fw_override_config {
   /**
-   * Enables firmware to insert entropy bits back into the pre-conditioner block
-   * via `dif_entropy_fifo_write()` calls. This feature is useful when the
-   * firmware is required to implement additional health checks, and to perform
-   * known answer tests of the preconditioner function.
+   * Enables firmware to insert entropy bits back into the pre-conditioner FIFO
+   * via `dif_entropy_src_fw_ov_data_write()` calls. This feature is useful when
+   * the firmware is required to implement additional health checks, and to
+   * perform known answer tests of the conditioner.
    *
    * To take effect, this requires the firmware override feature to be enabled.
    */
@@ -113,6 +111,15 @@ typedef struct dif_entropy_src_config {
    */
   bool fips_enable;
   /**
+   * If set, the produced output entropy is marked as FIPS compliant
+   * through the FIPS bit being set to high.
+   */
+  bool fips_flag;
+  /**
+   * If set, the noise source is instructed to produce high quality entropy.
+   */
+  bool rng_fips;
+  /**
    * If set, entropy will be routed to a firmware-visible register instead of
    * being distributed to other hardware IPs.
    */
@@ -121,19 +128,30 @@ typedef struct dif_entropy_src_config {
    * If set, raw entropy will be sent to CSRNG, bypassing the conditioner block
    * and disabling the FIPS flag. Note that the FIPS flag is different from
    * running the block in FIPS mode. FIPS mode refers to running the entropy_src
-   * in continuous mode.
+   * in continuous mode. Also note that if `fips_enable` is set to `True`, then
+   * at most one of either `route_to_firmware` or `bypass_conditioner` may be
+   * set, but will result in disabling the FIPS mode of operation from a
+   * hardware perspective.
    */
   bool bypass_conditioner;
   /**
-   * Specifies which single-bit-mode to use, if any at all.
+   * If set, the esfinal FIFO holding previously produced entropy seeds is
+   * cleared upon disabling the module. Otherwise, previously produced entropy
+   * seeds get served to CSRNG upon request or can alternatively get read out
+   * via ENTROPY_DATA CSR even after disabling the module.
+   */
+  bool clear_esfinal_fifo_while_disabled;
+  /**
+   * Specifies which single-bit-mode to use, if any at all. FIPS mode of
+   * operation is disabled in single-bit-mode of operation is selected.
    */
   dif_entropy_src_single_bit_mode_t single_bit_mode;
   /**
    * Controls the scope (either by-line or by-sum) of the health tests.
    *
-   * If true, the Adaptive Proportion and Markov Tests will accumulate all RNG
-   * input lines into a single score, and thresholds will be applied to the sum
-   * of all the entropy input lines.
+   * If true, the Adaptive Proportion (non-Symbol variant) and Markov Tests will
+   * accumulate all RNG input lines into a single score, and thresholds will be
+   * applied to the sum of all the entropy input lines.
    *
    * If false, the RNG input lines are all scored individually. A statistical
    * deviation in any one input line, be it due to coincidence or failure, will
@@ -180,27 +198,34 @@ typedef enum dif_entropy_src_test {
    */
   kDifEntropySrcTestAdaptiveProportion = 2,
   /**
+   * An SP 800-90B adaptive proportion symbol test.
+   *
+   * This is similar to the above, test but is performed on a symbol, instead of
+   * bit, basis.
+   */
+  kDifEntropySrcTestAdaptiveProportionSymbol = 3,
+  /**
    * A bucket test.
    *
    * This test looks for correlations between individual noise channels.
    */
-  kDifEntropySrcTestBucket = 3,
+  kDifEntropySrcTestBucket = 4,
   /**
    * A "Markov" test.
    *
    * This test looks for unexpected first-order temporal correlations
    * between individual noise channels.
    */
-  kDifEntropySrcTestMarkov = 4,
+  kDifEntropySrcTestMarkov = 5,
   /**
    * A firmware-driven "mailbox" test.
    *
    * This test allows firmware to inspect 2kbit blocks of entropy, and signal
    * potential concerns to the hardware.
    */
-  kDifEntropySrcTestMailbox = 5,
+  kDifEntropySrcTestMailbox = 6,
   /** \internal */
-  kDifEntropySrcTestNumVariants = 6,
+  kDifEntropySrcTestNumVariants = 7,
 } dif_entropy_src_test_t;
 
 /**
@@ -215,15 +240,32 @@ typedef struct dif_entropy_src_health_test_config {
   /**
    * The high threshold for the health test.
    */
-  uint32_t high_threshold;
+  uint16_t high_threshold;
   /**
    * The low threshold for the health test.
    *
    * If the corresponding health test has no low threshold, set to 0, otherwise
    * `dif_entropy_src_health_test_configure()` will return `kDifBadArg`.
    */
-  uint32_t low_threshold;
+  uint16_t low_threshold;
 } dif_entropy_src_health_test_config_t;
+
+/**
+ * Values of the health test watermark number register to record the high or low
+ * watermarks of the corresponding health tests.
+ */
+typedef enum dif_entropy_src_watermark_num {
+  kDifEntropySrcWatermarkNumRepcntHi = 0,
+  kDifEntropySrcWatermarkNumRepcntsHi = 1,
+  kDifEntropySrcWatermarkNumAdaptpHi = 2,
+  kDifEntropySrcWatermarkNumAdaptpLo = 3,
+  kDifEntropySrcWatermarkNumAdaptpsHi = 4,
+  kDifEntropySrcWatermarkNumBucketHi = 5,
+  kDifEntropySrcWatermarkNumMarkovHi = 6,
+  kDifEntropySrcWatermarkNumMarkovLo = 7,
+  kDifEntropySrcWatermarkNumExthtHi = 8,
+  kDifEntropySrcWatermarkNumExthtLo = 9,
+} dif_entropy_src_watermark_num_t;
 
 /**
  * Revision information for an entropy source.
@@ -241,18 +283,19 @@ typedef struct dif_entropy_src_revision {
  */
 typedef struct dif_entropy_src_health_test_stats {
   /**
-   * High watermark indicating the highest value emitted by a particular test.
+   * Identifier defining test and the watermark (high or low) the recorded
+   * number belongs to.
    */
-  uint16_t high_watermark[kDifEntropySrcTestNumVariants];
+  dif_entropy_src_watermark_num_t watermark_num;
   /**
-   * Low watermark indicating the lowest value emitted by a particular test.
-   *
-   * Note, some health tests do not emit a low watermark as there is no low
-   * threshold. For these tests, this value will always be UINT16_MAX.
+   * The recorded watermark. For low or high watermarks, this indicates the
+   * lowest or highest values emitted by the corresponding health test,
+   * respectively.
    */
-  uint16_t low_watermark[kDifEntropySrcTestNumVariants];
+  uint16_t watermark;
   /**
-   * The number of times a particular test has failed above the high threshold.
+   * The number of times a particular test has failed above the high threshold
+   * (contains both failures when using the FIPS or the bypass thresholds).
    */
   uint32_t high_fails[kDifEntropySrcTestNumVariants];
   /**
@@ -369,6 +412,11 @@ typedef enum dif_entropy_src_alert_cause {
    */
   kDifEntropySrcAlertThresholdScopeField = 1U << 3,
   /**
+   * Triggered when the THRESHOLD_ONEWAY field in the CONF register is set to an
+   * unsupported value.
+   */
+  kDifEntropySrcAlertThresholdOnewayField = 1U << 4,
+  /**
    * Triggered when the RNG_BIT_ENABLE field in the CONF register is set to an
    * unsupported value.
    */
@@ -413,11 +461,31 @@ typedef enum dif_entropy_src_alert_cause {
    */
   kDifEntropySrcAlertThresholdConfig = 1U << 14,
   /**
+   * Triggered when the packer FIFO has been written but was full at the time
+   * and we are in FW_OV_MODE and FW_OV_ENTROPY_INSERT modes.
+   */
+  kDifEntropySrcAlertFirmwareOverrideWrite = 1U << 15,
+  /**
+   * Triggered when FW_OV_SHA3_START has been set to kMultiBitBool4False,
+   * without waiting for the bypass packer FIFO to clear.
+   */
+  kDifEntropySrcAlertFirmwareOverrideDisable = 1U << 16,
+  /**
+   * Triggered when the FIPS_FLAG field in the CONF register is set to an
+   * unsupported value.
+   */
+  kDifEntropySrcAlertFipsFlagField = 1U << 17,
+  /**
+   * Triggered when the RNG_FIPS field in the CONF register is set to an
+   * unsupported value.
+   */
+  kDifEntropySrcAlertRngFipsField = 1U << 18,
+  /**
    * All alert reasons.
    *
    * This is useful when clearing all recoverable alerts at once.
    */
-  kDifEntropySrcAlertAllAlerts = (1U << 15) - 1,
+  kDifEntropySrcAlertAllAlerts = (1U << 19) - 1,
 } dif_entropy_src_alert_cause_t;
 
 /**
@@ -517,6 +585,21 @@ dif_result_t dif_entropy_src_fw_override_configure(
     dif_entropy_src_fw_override_config_t config, dif_toggle_t enabled);
 
 /**
+ * Configures whether to start the entropy source's SHA3 process and be ready to
+ * accept entropy data.
+ *
+ * This is used in firmware override mode and should be enabled before writing
+ * to the override FIFO. Disable this after writing has finished to ensure the
+ * SHA3 block finishes processing and pushes the results to the `esfinal` FIFO.
+ *
+ * @param entropy_src An entropy source handle.
+ * @param enabled Whether to start the SHA3 process.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_entropy_src_fw_override_sha3_start_insert(
+    const dif_entropy_src_t *entropy_src, dif_toggle_t enabled);
+
+/**
  * Configures an entropy source health test feature with runtime information.
  *
  * This function should only need to be called once for each health test that
@@ -530,6 +613,36 @@ OT_WARN_UNUSED_RESULT
 dif_result_t dif_entropy_src_health_test_configure(
     const dif_entropy_src_t *entropy_src,
     dif_entropy_src_health_test_config_t config);
+
+/**
+ * Enables the one-way behavior of all entropy source health test threshold
+ * registers.
+ *
+ * This function is reentrant: calling it while the one-way behavior is enabled
+ * will have no effect and return `kDifOk`.
+ *
+ * @param entropy_src An entropy source handle.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_entropy_src_health_test_threshold_oneway_enable(
+    const dif_entropy_src_t *entropy_src);
+
+/**
+ * Configures the health test watermark number register to record the high or
+ * low watermark of a specific health test.
+ *
+ * This function is primarily required for the initial validation during chip
+ * bring-up.
+ *
+ * @param entropy_src An entropy source handle.
+ * @param config Specific health test and high or low watermark to be recorded.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_entropy_src_watermark_configure(
+    const dif_entropy_src_t *entropy_src,
+    dif_entropy_src_watermark_num_t config);
 
 /**
  * Enables/Disables the entropy source.
@@ -546,7 +659,7 @@ dif_result_t dif_entropy_src_set_enabled(const dif_entropy_src_t *entropy_src,
  * Locks out entropy source functionality.
  *
  * This function is reentrant: calling it while functionality is locked will
- * have no effect and return `kDifEntropySrcOk`.
+ * have no effect and return `kDifOk`.
  *
  * @param entropy_src An entropy source handle.
  * @return The result of the operation.
@@ -623,7 +736,7 @@ dif_result_t dif_entropy_src_non_blocking_read(
 
 /**
  * Performs a blocking read from the entropy pipeline through the observe FIFO,
- * which contains post-test, unconditioned entropy.
+ * which contains post health-test, unconditioned entropy.
  *
  * The entropy source must be configured with firmware override mode enabled,
  * and the `len` parameter must be less than or equal to the FIFO threshold set
@@ -641,7 +754,27 @@ dif_result_t dif_entropy_src_observe_fifo_blocking_read(
     const dif_entropy_src_t *entropy_src, uint32_t *buf, size_t len);
 
 /**
- * Performs a write to the entropy pipeline through the observe FIFO.
+ * Performs a nonblocking read from the entropy pipeline through the observe
+ * FIFO, which contains  post health-test, unconditioned entropy.
+ *
+ * The entropy source must be configured with firmware override mode enabled.
+ * This function will read at most `*len` words from the observe FIFO and store
+ * them in `buf` if it is not `NULL`. If `buf` is `NULL` then the reads will be
+ * discarded instead. This function never blocks and returns as soon as the FIFO
+ * is empty. It updates `*len` to store the number of actually read words.
+ *
+ * @param entropy_src An entropy source handle.
+ * @param[out] buf A buffer to fill with words from the pipeline.
+ * @param[inout] len A pointer to the maximum number of words to reads. This
+ * value is updated to contain the number of words acually read.
+ * @return The result of the operation.
+ */
+OT_WARN_UNUSED_RESULT
+dif_result_t dif_entropy_src_observe_fifo_nonblocking_read(
+    const dif_entropy_src_t *entropy_src, uint32_t *buf, size_t *len);
+
+/**
+ * Performs a write to the entropy pipeline through the firmware override FIFO.
  *
  * Entropy source must be configured with firmware override and insert mode
  * enabled, otherwise the function will return `kDifError`.
@@ -653,14 +786,14 @@ dif_result_t dif_entropy_src_observe_fifo_blocking_read(
  * @return The result of the operation.
  */
 OT_WARN_UNUSED_RESULT
-dif_result_t dif_entropy_src_observe_fifo_write(
+dif_result_t dif_entropy_src_fw_ov_data_write(
     const dif_entropy_src_t *entropy_src, const uint32_t *buf, size_t len,
     size_t *written);
 
 /**
  * Starts conditioner operation.
  *
- * Initializes the conditioner. Use the `dif_entropy_src_observe_fifo_write()`
+ * Initializes the conditioner. Use the `dif_entropy_src_fw_ov_data_write()`
  * function to send data to the conditioner, and
  * `dif_entropy_src_conditioner_stop()` once ready to stop the conditioner
  * operation.
@@ -711,16 +844,6 @@ dif_result_t dif_entropy_src_is_fifo_full(const dif_entropy_src_t *entropy_src,
 OT_WARN_UNUSED_RESULT
 dif_result_t dif_entropy_src_has_fifo_overflowed(
     const dif_entropy_src_t *entropy_src, bool *has_overflowed);
-
-/**
- * Clears the firmware override read FIFO overflow status.
- *
- * @param entropy_src An entropy source handle.
- * @return The result of the operation.
- */
-OT_WARN_UNUSED_RESULT
-dif_result_t dif_entropy_src_clear_fifo_overflow(
-    const dif_entropy_src_t *entropy_src);
 
 /**
  * Read the firmware override FIFO depth.
